@@ -1,4 +1,5 @@
 using System;
+using Nexus.Service.Lighting;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1133,10 +1134,8 @@ public sealed class Slv3Hub : IDisposable
             // With the AIO's USB cable connected and Nexus widgets on, the streamed panel owns the
             // glass and the panel record's own setting is the only one that applies; this byte
             // stays at the user's value then, the same condition the web uses to hide this toggle.
-            if (_lockSleep is not null && _lockSleep.IsSleeping(key, () => shown.SleepWhenLocked) && !UsbPanelOwnsGlass(key, shown.NexusWidgets))
-            {
-                shown = shown with { Brightness = 0 };
-            }
+            var sleeping = _lockSleep is not null && _lockSleep.IsSleeping(key, () => shown.SleepWhenLocked) && !UsbPanelOwnsGlass(key, shown.NexusWidgets);
+            shown = shown with { Brightness = AioLockBrightness(key, shown.Brightness, sleeping) };
             var block = Slv3Protocol.BuildAioParamBlock(
                 sensors, Slv3Protocol.HydroShiftPumpTimer(rpm, record.DevType),
                 shown,
@@ -1161,6 +1160,49 @@ public sealed class Slv3Hub : IDisposable
             }
             _anyAioControlled = _aioControl.Count > 0;
         }
+    }
+
+    // The lock fade for the screen's brightness byte. It rides the param block that already goes out
+    // every drive tick, so the ramp has exactly as many steps as ticks land inside it and adds no
+    // send. Guarded by _lock, like the rest of SyncAioLocked.
+    private readonly Dictionary<string, bool> _aioLockSlept = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LcdFade> _aioFades = new(StringComparer.Ordinal);
+
+    private byte AioLockBrightness(string key, byte user, bool sleeping)
+    {
+        var now = _nowMs();
+        if (!_aioLockSlept.TryGetValue(key, out var was))
+        {
+            // First sight of this screen (it came up mid-lock): go straight to the state, no ramp.
+            _aioLockSlept[key] = sleeping;
+            return sleeping ? (byte)0 : user;
+        }
+        if (sleeping != was)
+        {
+            _aioLockSlept[key] = sleeping;
+            // From the level the screen shows now, or the step a ramp in flight is on, to the other
+            // end. The level it comes back to is the user's setting, which nothing here changes.
+            var from = _aioFades.TryGetValue(key, out var running) ? running.LevelAt(now) : was ? 0 : user;
+            var to = sleeping ? 0 : user;
+            if (from == to)
+            {
+                _aioFades.Remove(key);
+            }
+            else
+            {
+                _aioFades[key] = new LcdFade(from, to, sleeping ? SleepBlackoutCoordinator.LockFadeDuration : SleepBlackoutCoordinator.UnlockFadeDuration, now);
+            }
+        }
+        if (_aioFades.TryGetValue(key, out var fade))
+        {
+            var level = fade.LevelAt(now);
+            if (fade.IsDoneAt(now))
+            {
+                _aioFades.Remove(key);
+            }
+            return (byte)level;
+        }
+        return sleeping ? (byte)0 : user;
     }
 
     private bool UsbPanelOwnsGlass(string key, bool nexusWidgets) =>

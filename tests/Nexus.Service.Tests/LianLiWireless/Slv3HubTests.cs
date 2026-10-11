@@ -2532,10 +2532,11 @@ public class Slv3HubTests
 
     // ---- Sleep when locked (HydroShift II wireless screen) ----------------
 
-    private static (Slv3Hub Hub, FakeTxTransport Tx, Nexus.Service.Lighting.LcdLockState Lock, Func<bool> Setting) LockedAioHub(bool sleepWhenLocked = true, bool nexusWidgets = true, bool usbConnected = false)
+    private static (Slv3Hub Hub, FakeTxTransport Tx, Nexus.Service.Lighting.LcdLockState Lock, ManualClock Clock) LockedAioHub(bool sleepWhenLocked = true, bool nexusWidgets = true, bool usbConnected = false)
     {
         var state = new Nexus.Service.Lighting.LcdLockState();
-        var (hub, net, tx, _) = CreateConnectedHub(null, state);
+        var clock = new ManualClock();
+        var (hub, net, tx, _) = CreateConnectedHub(clock.NowMs, state);
         net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1, DevType = 10, FanCount = 0 });
         hub.AioSensors = () => new Slv3AioSensors(55f, 12f, null, null);
         var sleep = sleepWhenLocked;
@@ -2549,36 +2550,103 @@ public class Slv3HubTests
         }
         Assert.True(hub.DriveTick());
         Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
-        return (hub, tx, state, () => sleep);
+        // The screen has been seen once before any lock, as it is on a running service.
+        Assert.True(hub.DriveTick());
+        return (hub, tx, state, clock);
     }
 
     private static int LastAioBrightness(FakeTxTransport tx) => RfFrames(tx, Slv3Protocol.RfAioParams)[^1][47];
 
-    [Fact]
-    public void Lock_zeroes_the_brightness_byte_in_the_param_block_and_unlock_restores_the_saved_one()
+    // The first tick after a lock starts the ramp (still the user's level); a later one past its
+    // end shows the settled state.
+    private static void LockAndSettle(Slv3Hub hub, Nexus.Service.Lighting.LcdLockState state, ManualClock clock)
     {
-        var (hub, tx, state, _) = LockedAioHub();
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+        clock.AdvanceMs(5000);
+        Assert.True(hub.DriveTick());
+    }
+
+    private static void UnlockAndSettle(Slv3Hub hub, Nexus.Service.Lighting.LcdLockState state, ManualClock clock)
+    {
+        state.Set(false);
+        Assert.True(hub.DriveTick());
+        clock.AdvanceMs(5000);
+        Assert.True(hub.DriveTick());
+    }
+
+    [Fact]
+    public void Lock_fades_the_brightness_byte_to_zero_and_unlock_restores_the_saved_one()
+    {
+        var (hub, tx, state, clock) = LockedAioHub();
         Assert.True(hub.DriveTick());
         Assert.Equal(30, LastAioBrightness(tx));
 
         state.Set(true);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(30, LastAioBrightness(tx));
+        clock.AdvanceMs(750);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+        clock.AdvanceMs(2000);
         Assert.True(hub.DriveTick());
         Assert.Equal(0, LastAioBrightness(tx));
 
         state.Set(false);
         Assert.True(hub.DriveTick());
+        Assert.Equal(0, LastAioBrightness(tx));
+        clock.AdvanceMs(450);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+        clock.AdvanceMs(2000);
+        Assert.True(hub.DriveTick());
         Assert.Equal(30, LastAioBrightness(tx));
     }
 
     [Fact]
-    public void The_lock_adds_no_frames_and_leaves_every_other_block_byte_alone()
+    public void An_unlock_mid_fade_down_reverses_to_the_saved_level_not_the_step_it_caught()
     {
-        var (hub, tx, state, _) = LockedAioHub();
+        var (hub, tx, state, clock) = LockedAioHub();
+        state.Set(true);
         Assert.True(hub.DriveTick());
-        var before = RfFrames(tx, Slv3Protocol.RfAioParams).Count;
+        clock.AdvanceMs(750);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+
+        UnlockAndSettle(hub, state, clock);
+
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void A_lock_mid_fade_up_reverses_down_and_the_next_unlock_still_restores_the_saved_level()
+    {
+        var (hub, tx, state, clock) = LockedAioHub();
+        LockAndSettle(hub, state, clock);
+        state.Set(false);
+        Assert.True(hub.DriveTick());
+        clock.AdvanceMs(450);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+
+        LockAndSettle(hub, state, clock);
+        Assert.Equal(0, LastAioBrightness(tx));
+
+        UnlockAndSettle(hub, state, clock);
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void The_fade_adds_no_frames_and_leaves_every_other_block_byte_alone()
+    {
+        var (hub, tx, state, clock) = LockedAioHub();
+        Assert.True(hub.DriveTick());
         var lit = RfFrames(tx, Slv3Protocol.RfAioParams)[^1].ToArray();
 
         state.Set(true);
+        Assert.True(hub.DriveTick());
+        var before = RfFrames(tx, Slv3Protocol.RfAioParams).Count;
+        clock.AdvanceMs(5000);
         Assert.True(hub.DriveTick());
 
         var frames = RfFrames(tx, Slv3Protocol.RfAioParams);
@@ -2592,10 +2660,9 @@ public class Slv3HubTests
     [Fact]
     public void A_screen_with_the_setting_off_stays_lit()
     {
-        var (hub, tx, state, _) = LockedAioHub(sleepWhenLocked: false);
+        var (hub, tx, state, clock) = LockedAioHub(sleepWhenLocked: false);
 
-        state.Set(true);
-        Assert.True(hub.DriveTick());
+        LockAndSettle(hub, state, clock);
 
         Assert.Equal(30, LastAioBrightness(tx));
     }
@@ -2603,10 +2670,9 @@ public class Slv3HubTests
     [Fact]
     public void A_usb_connected_aio_with_nexus_widgets_keeps_its_brightness_byte_on_lock()
     {
-        var (hub, tx, state, _) = LockedAioHub(usbConnected: true, nexusWidgets: true);
+        var (hub, tx, state, clock) = LockedAioHub(usbConnected: true, nexusWidgets: true);
 
-        state.Set(true);
-        Assert.True(hub.DriveTick());
+        LockAndSettle(hub, state, clock);
 
         Assert.Equal(30, LastAioBrightness(tx));
     }
@@ -2614,10 +2680,9 @@ public class Slv3HubTests
     [Fact]
     public void A_usb_connected_aio_showing_its_own_screen_still_goes_dark_on_lock()
     {
-        var (hub, tx, state, _) = LockedAioHub(usbConnected: true, nexusWidgets: false);
+        var (hub, tx, state, clock) = LockedAioHub(usbConnected: true, nexusWidgets: false);
 
-        state.Set(true);
-        Assert.True(hub.DriveTick());
+        LockAndSettle(hub, state, clock);
 
         Assert.Equal(0, LastAioBrightness(tx));
     }
@@ -2625,10 +2690,9 @@ public class Slv3HubTests
     [Fact]
     public void An_aio_with_no_usb_cable_goes_dark_even_with_nexus_widgets_on()
     {
-        var (hub, tx, state, _) = LockedAioHub(usbConnected: false, nexusWidgets: true);
+        var (hub, tx, state, clock) = LockedAioHub(usbConnected: false, nexusWidgets: true);
 
-        state.Set(true);
-        Assert.True(hub.DriveTick());
+        LockAndSettle(hub, state, clock);
 
         Assert.Equal(0, LastAioBrightness(tx));
     }
