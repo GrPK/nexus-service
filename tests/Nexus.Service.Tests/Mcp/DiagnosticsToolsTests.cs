@@ -35,7 +35,9 @@ namespace Nexus.Service.Tests.Mcp;
 /// in production DI - the same construction recipe DiagnosticsAlertServiceTests
 /// and UpdateServiceDownloadTierTests use - fed no data, so every "Supported"
 /// flag and platform-gated field is a genuine off-Windows fact for this host,
-/// not a stubbed value.
+/// not a stubbed value. The one exception is SMART: StubSmartHealthSource
+/// stands in for SmartHealthMonitor, whose Windows constructor needs a live
+/// LhmComputer.
 /// </summary>
 public sealed class DiagnosticsToolsTests : IDisposable
 {
@@ -72,7 +74,11 @@ public sealed class DiagnosticsToolsTests : IDisposable
         new UpdateDownloader(new NullHttpClientFactory()),
         store,
         TestFirmwareFlasher.Create(),
-        new MultiplexHub());
+        new MultiplexHub()
+#if WINDOWS
+        , new Nexus.Service.Helper.HelperRegistry()
+#endif
+        );
 
     private static DeviceManager BuildEmptyDeviceManager(IConfigStore store) => new(
         Array.Empty<IDeviceHandler>(),
@@ -81,7 +87,7 @@ public sealed class DiagnosticsToolsTests : IDisposable
         new DeviceControlGate(store));
 
     private static DiagnosticsHealthModel BuildHealthModel(IConfigStore store) => new(
-        new SmartHealthMonitor(),
+        new StubSmartHealthSource(),
         new CoolingStallDetector(),
         new GpuHealthMonitor(),
         new EventLogMonitor(),
@@ -100,7 +106,7 @@ public sealed class DiagnosticsToolsTests : IDisposable
         return new IMcpTool[]
         {
             new GetHealthTool(BuildHealthModel(store), new FeatureGates(store)),
-            new GetStorageHealthTool(new SmartHealthMonitor()),
+            new GetStorageHealthTool(new StubSmartHealthSource()),
             new GetGpuHealthTool(new GpuHealthMonitor(), new EventLogMonitor()),
             new GetSystemSpecsTool(new SystemSpecsCollector(sensors)),
             new GetConflictsTool(new ConflictWatcher(new MultiplexHub())),
@@ -132,7 +138,7 @@ public sealed class DiagnosticsToolsTests : IDisposable
     [Fact]
     public async Task GetStorageHealth_HappyPath_ReturnsShape()
     {
-        var tool = new GetStorageHealthTool(new SmartHealthMonitor());
+        var tool = new GetStorageHealthTool(new StubSmartHealthSource());
 
         var result = await tool.ExecuteAsync(null, CancellationToken.None);
 
@@ -146,7 +152,7 @@ public sealed class DiagnosticsToolsTests : IDisposable
     [Fact]
     public async Task GetStorageHealth_UnknownDrive_IsErrorListingKnownDrives()
     {
-        var tool = new GetStorageHealthTool(new SmartHealthMonitor());
+        var tool = new GetStorageHealthTool(new StubSmartHealthSource());
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new { drive = "does-not-exist" }), CancellationToken.None);

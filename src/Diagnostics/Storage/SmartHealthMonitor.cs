@@ -70,12 +70,14 @@ public sealed record SmartNvmeWire
     public ulong DataUnitsWrittenBytes { get; init; }
 }
 
-/// <summary>What SystemMetricsSource consumes from a SMART health source -
-/// narrow enough to substitute a stub in tests instead of constructing the
-/// real LhmComputer-backed monitor.</summary>
+/// <summary>What SystemMetricsSource, DiagnosticsHealthModel and
+/// get_storage_health consume from a SMART health source - narrow enough to
+/// substitute a stub in tests instead of constructing the real
+/// LhmComputer-backed monitor.</summary>
 public interface ISmartHealthSource
 {
     SmartSnapshot Snapshot();
+    void ForceRefresh();
 }
 
 #if WINDOWS

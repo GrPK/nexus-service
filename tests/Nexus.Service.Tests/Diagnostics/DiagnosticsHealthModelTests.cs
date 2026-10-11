@@ -184,7 +184,7 @@ public class DiagnosticsHealthModelTests
     {
         var store = new InMemoryConfigStore();
         var model = new DiagnosticsHealthModel(
-            new SmartHealthMonitor(), new CoolingStallDetector(), new GpuHealthMonitor(), new EventLogMonitor(),
+            new StubSmartHealthSource(), new CoolingStallDetector(), new GpuHealthMonitor(), new EventLogMonitor(),
             new MemoryDiagnosticOrchestrator(), new PnpProblemScanner(), new Mcp.McpTestHarness.StubSensorProvider(),
             new InMemoryMetricsHistoryStore(), store);
 

@@ -394,10 +394,11 @@ public static class NexusServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Diagnostics.Cooling.CoolingStallFeeder>());
 
         // SmartHealthMonitor stays registered under its concrete type too
-        // (DiagnosticsHealthRoutes/DiagnosticsHealthModel take it directly);
-        // this interface registration resolves to the same singleton instance
-        // so SystemMetricsSource (AddNexusMonitoringHistory) shares state
-        // rather than getting a second SMART monitor. Temperature history
+        // (DiagnosticsHealthRoutes take it directly); this interface
+        // registration resolves to the same singleton instance so
+        // SystemMetricsSource (AddNexusMonitoringHistory),
+        // DiagnosticsHealthModel and GetStorageHealthTool share state rather
+        // than getting a second SMART monitor. Temperature history
         // itself lives on IMetricsHistoryStore now (AddNexusMonitoringHistory) -
         // DiagnosticsHealthModel below takes that directly.
         services.AddSingleton<Nexus.Service.Diagnostics.Storage.ISmartHealthSource>(

@@ -67,12 +67,6 @@ public class SystemMetricsSourceTests
         public Task ReadyAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class StubSmartHealthSource : ISmartHealthSource
-    {
-        public SmartSnapshot Result { get; set; } = new() { Supported = false, Drives = Array.Empty<SmartDriveInfo>() };
-        public SmartSnapshot Snapshot() => Result;
-    }
-
     private static HardwareSensor Sensor(string name, string type, float value) => new()
     {
         Id = $"test/{name}",

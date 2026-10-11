@@ -29,7 +29,11 @@ public sealed class UpdateServiceDownloadTierTests
             new UpdateDownloader(new ThrowingHttpClientFactory()),
             store,
             TestFirmwareFlasher.Create(),
-            new MultiplexHub());
+            new MultiplexHub()
+#if WINDOWS
+            , new Nexus.Service.Helper.HelperRegistry()
+#endif
+            );
 
     [Fact]
     public async Task Status_ReportsDownloadTier_WhenNewerReleaseExists()
