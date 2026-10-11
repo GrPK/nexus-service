@@ -581,11 +581,8 @@ public static class FanProfiles
     }
 
     /// <summary>Live fan-to-curve mapping, in <see cref="CoolingSettings.CustomFanCurveAssignments"/> format. Preset curves are excluded, so a machine sitting on Silent/Balanced/Turbo/Max captures an empty map.</summary>
-    public static Dictionary<string, string> CaptureFanCurveMapping(IConfigStore store, IFanControlProvider fans)
-    {
-        var fanIds = fans.GetFanChannels().Select(c => c.Id).ToHashSet();
-        return SnapshotMapping(store.Load().Cooling.Curves, fanIds);
-    }
+    public static Dictionary<string, string> CaptureFanCurveMapping(CoolingSettings cooling, HashSet<string> fanIds)
+        => SnapshotMapping(cooling.Curves, fanIds);
 
     private static CurveDocument EnsurePresetCurve(List<CurveDocument> curves, string presetName, TemperatureSource? inputSensor)
     {

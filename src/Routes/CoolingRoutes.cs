@@ -481,13 +481,14 @@ public static class CoolingRoutes
             {
                 return Results.NotFound(new ApiResponse { Error = true, Msg = "Preset not found" });
             }
+            var fanIds = body.SaveCurrent ? CoolingPresets.FanIds(f) : null;
             store.Update(s =>
             {
                 var preset = s.Cooling.Presets.Find(p => p.Id == id);
                 if (preset is null) return;
                 var name = (body.Name ?? "").Trim();
                 if (name.Length > 0) preset.Name = name;
-                if (body.SaveCurrent) CoolingPresets.CaptureInto(preset, store, f);
+                if (fanIds is not null) CoolingPresets.CaptureInto(preset, s.Cooling, fanIds);
             });
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
