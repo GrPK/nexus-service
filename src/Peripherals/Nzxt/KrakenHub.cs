@@ -95,7 +95,7 @@ public sealed class KrakenHub : IDisposable
     /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
     internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
 
-    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade);
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: () => { lock (_lock) { _fade = null; } });
     private KrakenDisplayMode? _lockPendingMode;
 
     /// <summary>True while the lock holds the backlight at zero. Streamed frames are dropped meanwhile.</summary>
@@ -699,7 +699,13 @@ public sealed class KrakenHub : IDisposable
             }
             else
             {
-                // An explicit level after the unlock wins over a fade up still in flight.
+                // An explicit level after the unlock wins over a fade up still in flight, and with
+                // the fade gone nothing else would clear the marker it was returning to.
+                if (_fade is { Down: false })
+                {
+                    _saveRestore?.Invoke(null);
+                    _lockRestorePending = false;
+                }
                 _fade = null;
             }
             if (_device == null || !WriteLocked(report))

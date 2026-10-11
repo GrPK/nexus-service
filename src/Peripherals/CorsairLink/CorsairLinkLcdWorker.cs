@@ -133,7 +133,7 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
     /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
     internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
 
-    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade);
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: () => { lock (_fadeGate) { _fade = null; } });
 
     internal void SyncGeneration()
     {

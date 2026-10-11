@@ -234,12 +234,15 @@ public sealed class LcdFadeRunner
 {
     private readonly Func<bool> _step;
     private readonly TimeSpan _interval;
+    private readonly Action? _onFault;
     private int _running;
 
-    public LcdFadeRunner(Func<bool> step, TimeSpan? interval = null)
+    /// <param name="onFault">Drops the ramp when a step throws, so it does not sit half done until the next start.</param>
+    public LcdFadeRunner(Func<bool> step, TimeSpan? interval = null, Action? onFault = null)
     {
         _step = step;
         _interval = interval ?? LcdFade.SampleInterval;
+        _onFault = onFault;
     }
 
     /// <summary>False in tests, which step by hand.</summary>
@@ -265,6 +268,7 @@ public sealed class LcdFadeRunner
                 catch (Exception ex)
                 {
                     ServiceLog.Info($"[lcd-lock] fade step failed: {ex.GetType().Name}: {ex.Message}");
+                    try { _onFault?.Invoke(); } catch { }
                 }
                 Volatile.Write(ref _running, 0);
                 // Work that arrived between the last sample and the flag reset.

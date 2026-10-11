@@ -1454,7 +1454,7 @@ public class TryxPanoramaHubTests
         hub.StepFade();
     }
 
-    // Samples the way the runner loop does, every 40 ms.
+    // Samples the way the runner loop does, once per sample interval.
     private static void Run(TryxPanoramaHub hub, FadeTime time, int totalMs)
     {
         for (var elapsed = 0; elapsed <= totalMs; elapsed += 40)
@@ -1736,5 +1736,89 @@ public class TryxPanoramaHubTests
         var frames = ConfigFrames(recording);
         Assert.NotEmpty(frames);
         Assert.Equal(70, frames[^1]);
+    }
+
+    [Fact]
+    public void A_screen_switched_off_during_the_unlock_ramp_is_not_relit_by_it()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Step(hub, time, 5000);
+        state.Set(false);
+        Run(hub, time, 450);
+
+        Assert.True(hub.SetEnabled(false));
+        recording.Writes.Clear();
+        Run(hub, time, 1500);
+
+        Assert.Empty(recording.Writes);
+        Assert.False(hub.State.ScreenEnabled);
+    }
+
+    [Fact]
+    public void A_step_that_lands_after_a_reconnect_does_not_leave_the_screen_lit_while_locked()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        hub.TestHookBeforeStepSend = () =>
+        {
+            hub.TestHookBeforeStepSend = null;
+            // The reconnect settles the screen off, then the stale step goes out.
+            hub.Disconnect();
+            hub.EnsureConnected();
+        };
+
+        hub.StepFade();
+
+        Assert.True(hub.LockDimmed);
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+    }
+
+    [Fact]
+    public void The_slideshow_holds_still_through_the_unlock_ramp()
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => { s.Tryx.Brightness = 70; s.Tryx.OverlayItems = []; });
+        var recording = new RecordingTransport { MediaListVersion = 1, AvailableCustomMediaFilenames = ["a.mp4", "b.mp4"] };
+        var hub = BuildHub(discovery: new StubDiscovery(), transportFactory: _ => recording, configStore: store);
+        var time = new FadeTime();
+        hub.FadeClock = () => time.Now;
+        hub.FadeRunner.AutoRun = false;
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        hub.BindLockSleep(state);
+        hub.EnsureConnected();
+        hub.SetPreset(TryxRkProtocol.PresetMediaFile(1));
+        hub.SetSlideshow(new TryxSlideshowConfig { Enabled = true, IntervalSec = 10 });
+        state.Set(true);
+        Step(hub, time, 5000);
+        state.Set(false);
+        recording.Writes.Clear();
+
+        // The heartbeat lands inside the ramp; a due slideshow must not select a clip at full brightness.
+        hub.SendHeartbeatTick();
+
+        Assert.DoesNotContain(recording.Writes, w => w.AsSpan().SequenceEqual(TryxRkProtocol.BuildPreset("a.mp4", true, 70)));
+        Assert.True(hub.FadeActive);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task An_unlock_that_lands_inside_the_initial_config_decision_is_not_undone_by_it()
+    {
+        var (hub, recording, state, _, _) = LockRig(connect: false);
+        state.Set(true);
+        System.Threading.Tasks.Task? unlock = null;
+        hub.TestHookInInitialConfigDecision = () =>
+        {
+            hub.TestHookInInitialConfigDecision = null;
+            // The unlock arrives between the decision and the flag it sets. With the gate it waits
+            // behind it; without, it completes here and the flag then goes back on.
+            unlock = System.Threading.Tasks.Task.Run(() => state.Set(false));
+            unlock.Wait(300);
+        };
+
+        hub.EnsureConnected();
+        await unlock!.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.False(hub.LockDimmed);
     }
 }

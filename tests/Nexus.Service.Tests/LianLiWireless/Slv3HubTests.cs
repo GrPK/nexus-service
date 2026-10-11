@@ -2697,6 +2697,38 @@ public class Slv3HubTests
         Assert.Equal(0, LastAioBrightness(tx));
     }
 
+    [Fact]
+    public void A_screen_that_comes_back_mid_lock_goes_dark_at_once_instead_of_fading_from_the_saved_level()
+    {
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        var clock = new ManualClock();
+        var (hub, net, tx, _) = CreateConnectedHub(clock.NowMs, state);
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1, DevType = 10, FanCount = 0 };
+        net.Fans.Add(fan);
+        hub.AioSensors = () => new Slv3AioSensors(55f, 12f, null, null);
+        hub.AioScreens = () => new Dictionary<string, Slv3AioScreen>
+        {
+            [Convert.ToHexString(FanMac)] = Slv3Protocol.AioScreenFrom(30, 4, "#FF0000", "#00FF00", "#0000FF", true, true, true, true, false),
+        };
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
+        Assert.True(hub.DriveTick());
+        LockAndSettle(hub, state, clock);
+        Assert.Equal(0, LastAioBrightness(tx));
+
+        // The AIO drops off the controller's list long enough to expire, then returns.
+        net.Fans.Clear();
+        clock.AdvanceMs(40_000);
+        Assert.True(hub.DriveTick());
+        Assert.Empty(hub.State.Fans);
+        net.Fans.Add(fan);
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
+        Assert.True(hub.DriveTick());
+
+        Assert.Equal(0, LastAioBrightness(tx));
+    }
+
     private static (Slv3Hub Hub, FakeSlv3Network Net, FakeTxTransport Tx, FakeRxTransport Rx) CreateConnectedHub(Func<long>? nowMs = null, Nexus.Service.Lighting.LcdLockState? lockState = null)
     {
         var net = new FakeSlv3Network();

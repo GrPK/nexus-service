@@ -273,7 +273,7 @@ public class KrakenLockSleepTests
         using var entered = new System.Threading.ManualResetEventSlim();
         using var release = new System.Threading.ManualResetEventSlim();
         // The handler has been told "locked" and waits for the device locks (a bucket upload
-        // holds them for ~450 ms) while the unlock arrives.
+        // holds them for a long moment) while the unlock arrives.
         rig.Hub.TestHookBeforeLockEnter = () => { entered.Set(); release.Wait(TimeSpan.FromSeconds(10)); };
         var handler = System.Threading.Tasks.Task.Run(() => rig.Lock.Set(true));
         Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
@@ -390,6 +390,22 @@ public class KrakenLockSleepTests
         rig.Lock.Set(false);
         Assert.Contains(rig.Hid.Writes, w => w[0] != KrakenProtocol.EncodeSetBacklight(0, 0)[0]);
         Assert.Equal(KrakenProtocol.EncodeSetBacklight(60, 1)[3], rig.Hid.Writes[^1][3]);
+    }
+
+    [Fact]
+    public void An_explicit_level_during_the_unlock_ramp_clears_the_restore_marker_it_was_returning_to()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        rig.Advance(5000);
+        rig.Lock.Set(false);
+        rig.Advance(200);
+        Assert.Equal(60, rig.PersistedRestore);
+
+        Assert.True(rig.Hub.SetLcdBacklight(25, 0));
+
+        Assert.Null(rig.PersistedRestore);
+        Assert.Equal(25, rig.Hub.Snapshot.LcdBrightness);
     }
 
     private sealed class Recorder : IHidDevice

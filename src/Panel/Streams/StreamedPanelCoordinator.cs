@@ -82,7 +82,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         _notifyOverlay = notifyOverlay;
         _notifyPanelChanged = notifyPanelChanged;
         _nowMs = nowMs ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        FadeRunner = new LcdFadeRunner(StepFades);
+        FadeRunner = new LcdFadeRunner(StepFades, onFault: () => { lock (_fadeGate) { _fades.Clear(); } });
         if (lockState is not null)
         {
             _lockState = lockState;
@@ -332,7 +332,8 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                     SetMarker(id, level);
                 }
             }
-            foreach (var id in panels)
+            // Only panels this lock slept come back; one it left alone is not touched.
+            foreach (var id in woken)
             {
                 var record = _registry.Get(id);
                 var target = record?.LcdBrightness ?? record?.LockRestoreBrightness;
@@ -850,7 +851,9 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                 else if (_registry.Get(panelId)?.LockRestoreBrightness is not null)
                 {
                     // Left over from a lock that ended while this panel was away, or from a restart.
-                    if (lockDimmable.ApplyBrightness())
+                    // While a fade up is still running the getter answers with its current step, which
+                    // is not the level to keep: the fade clears the marker itself when it lands.
+                    if (lockDimmable.ApplyBrightness() && ActiveFade(panelId) is null)
                     {
                         SetMarker(panelId, null);
                     }

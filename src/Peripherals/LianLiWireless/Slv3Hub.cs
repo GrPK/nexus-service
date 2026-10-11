@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Nexus.Service.Lighting;
 using System.Collections.Generic;
 using System.Threading;
@@ -1142,6 +1143,16 @@ public sealed class Slv3Hub : IDisposable
                 RadiatorFanRpm(record));
             var payload = Slv3Protocol.BuildAioParams(record.Mac, _masterMac, record.RxType, record.Channel, BindOrdinalLocked(record.Mac), block);
             SendRfPayloadLocked(record.Channel, record.RxType, payload);
+        }
+        // A screen that left (unbound, unplugged, expired) forgets its lock state, so the next sight of
+        // it counts as a first sight and goes straight to the state, not along a stale ramp.
+        if (_aioLockSlept.Count > 0)
+        {
+            foreach (var gone in _aioLockSlept.Keys.Where(k => bound is null || !bound.Contains(k)).ToList())
+            {
+                _aioLockSlept.Remove(gone);
+                _aioFades.Remove(gone);
+            }
         }
         // A released pump on an AIO that is no longer bound here has nothing left to hold.
         List<string>? released = null;

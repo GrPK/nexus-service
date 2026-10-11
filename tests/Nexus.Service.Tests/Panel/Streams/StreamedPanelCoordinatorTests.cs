@@ -870,6 +870,48 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public void A_reconnect_during_the_unlock_ramp_does_not_leave_the_panel_on_the_step_it_caught()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        _lock.Set(false);
+        Advance(coordinator, 450);
+
+        transport.Dispose();
+        coordinator.TickOnce();
+        var reopened = _discovery.BrightnessTransports.Last();
+        Advance(coordinator, 5000);
+
+        Assert.Equal(42, reopened.Applied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void A_panel_the_lock_never_slept_is_not_faded_from_zero_on_unlock()
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(serial: "a", dimmable: true));
+        _discovery.Devices.Add(Device(serial: "b", dimmable: true));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var records = _store.Load();
+        var slept = records["a"].PanelDeviceId;
+        var spared = records["b"].PanelDeviceId;
+        _registry.Patch(slept, new PanelDevicePatch { LcdBrightness = 60 });
+        _registry.Patch(spared, new PanelDevicePatch { LcdBrightness = 50, SleepWhenLocked = false });
+        var sparedTransport = _discovery.BrightnessTransports.First(t => t.Serial == "b");
+
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        _lock.Set(false);
+        Advance(coordinator, 40);
+
+        Assert.Null(sparedTransport.Applied);
+    }
+
+    [Fact]
     public void A_restore_marker_left_by_a_restart_mid_lock_is_applied_and_cleared_on_connect()
     {
         _discovery.UseBrightnessTransport = true;

@@ -117,8 +117,8 @@ public sealed class TryxPanoramaHub : IDisposable
 
     /// <summary>
     /// Brightness steps a lock fade takes. Every step is a full config frame through the same
-    /// serialized write path as any other command, and the panel re-enumerates on its own about
-    /// once a minute, so this stays well under the other devices' step count.
+    /// serialized write path as any other command, and the panel re-enumerates on its own every
+    /// so often, so this stays well under the other devices' step count.
     /// </summary>
     internal const int FadeSteps = 8;
 
@@ -135,7 +135,19 @@ public sealed class TryxPanoramaHub : IDisposable
     /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
     internal Func<long> FadeClock { get; set; } = () => Environment.TickCount64;
 
-    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade);
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: CancelFade);
+
+    /// <summary>True while a lock fade is in flight; the slideshow holds still meanwhile.</summary>
+    internal bool FadeActive
+    {
+        get { lock (_fadeGate) { return _fade is not null; } }
+    }
+
+    /// <summary>Test seam: runs in a fade step between reading the ramp and writing the frame.</summary>
+    internal Action? TestHookBeforeStepSend { get; set; }
+
+    /// <summary>Test seam: runs in ApplyInitialConfig between the lock decision and the flag it sets.</summary>
+    internal Action? TestHookInInitialConfigDecision { get; set; }
 
     // Caller holds _lockGate. Only records the ramp and wakes the loop; nothing is sent here.
     private void BeginFadeLocked(int from, int to, TimeSpan duration)
@@ -181,14 +193,19 @@ public sealed class TryxPanoramaHub : IDisposable
         }
         var now = FadeClock();
         var level = fade.LevelAt(now);
+        TestHookBeforeStepSend?.Invoke();
+        // The frames carry the user's own enabled choice, so a screen switched off during the ramp
+        // is never relit by it.
+        var screenOn = State.ScreenEnabled;
         if (!fade.IsDoneAt(now))
         {
-            if (level != lastSent && IsConnected && SendOnly(TryxRkProtocol.BuildConfig(true, level)))
+            if (level != lastSent && IsConnected && SendOnly(TryxRkProtocol.BuildConfig(screenOn, level)))
             {
                 lock (_fadeGate)
                 {
                     if (ReferenceEquals(_fade, fade)) { _fadeLastSent = level; }
                 }
+                ResendSettledIfCancelled(fade);
             }
             return true;
         }
@@ -196,25 +213,52 @@ public sealed class TryxPanoramaHub : IDisposable
         // because this is the state the panel keeps.
         var sent = IsConnected && SendReliable(fade.Down
             ? TryxRkProtocol.BuildConfig(false, State.Brightness)
-            : TryxRkProtocol.BuildConfig(true, State.Brightness));
+            : TryxRkProtocol.BuildConfig(screenOn, State.Brightness));
         lock (_fadeGate)
         {
             if (!ReferenceEquals(_fade, fade))
             {
                 // Reversed while that write was in flight; the new ramp owns the screen.
+                ResendSettledIfCancelledLocked();
                 return true;
             }
             _fade = null;
             if (sent)
             {
-                _offOnWire = fade.Down;
+                _offOnWire = fade.Down || !screenOn;
             }
         }
-        if (sent && !fade.Down)
-        {
-            _slideshow.Rearm(State.CurrentMedia, NowMs());
-        }
         return false;
+    }
+
+    // A reconnect's initial config writes without the send gate, so a step already in flight can
+    // land after it. When the ramp was cancelled under a step, the settled state goes out again.
+    private void ResendSettledIfCancelled(LcdFade fade)
+    {
+        lock (_fadeGate)
+        {
+            if (ReferenceEquals(_fade, fade))
+            {
+                return;
+            }
+        }
+        ResendSettled();
+    }
+
+    private void ResendSettledIfCancelledLocked()
+    {
+        if (_fade is null)
+        {
+            ResendSettled();
+        }
+    }
+
+    private void ResendSettled()
+    {
+        if (IsConnected)
+        {
+            SendOnly(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), State.Brightness));
+        }
     }
 
     internal void OnLockChanged(bool locked)
@@ -261,6 +305,9 @@ public sealed class TryxPanoramaHub : IDisposable
             // Screen on at brightness 0, then up to the user's level: from 0 when the panel is off,
             // or from the step a fade down was caught on.
             BeginFadeLocked(CurrentWireLevel(), State.Brightness, SleepBlackoutCoordinator.UnlockFadeDuration);
+            // The clip that comes back with the screen gets a full hold from the start of the ramp,
+            // so the heartbeat inside it cannot select a clip at full brightness.
+            _slideshow.Rearm(State.CurrentMedia, NowMs());
         }
     }
 
@@ -649,7 +696,9 @@ public sealed class TryxPanoramaHub : IDisposable
             // first write, so the remembered enabled state never reaches the wire.
             lock (_lockGate)
             {
-                if (_lockSleep?.IsSleeping(LockKey, LockSetting) == true)
+                var sleeping = _lockSleep?.IsSleeping(LockKey, LockSetting) == true;
+                TestHookInInitialConfigDecision?.Invoke();
+                if (sleeping)
                 {
                     _lockDimmed = true;
                 }
@@ -742,7 +791,7 @@ public sealed class TryxPanoramaHub : IDisposable
     // the screen on, so a screen the user switched off is left alone.
     private void AdvanceSlideshowIfDue()
     {
-        if (!State.ScreenEnabled || _lockDimmed) return;
+        if (!State.ScreenEnabled || _lockDimmed || FadeActive) return;
         var next = _slideshow.Tick(ListCustomMedia, NowMs());
         if (next is null) return;
         if (!SelectCustomMedia(next))
@@ -766,6 +815,8 @@ public sealed class TryxPanoramaHub : IDisposable
     {
         // Screen on/off rides the same f200.f5 config as brightness (f5.f1 = enable);
         // carry the current brightness so turning the screen back on restores it.
+        // An explicit choice ends any lock ramp: its next step must not undo it.
+        CancelFade();
         var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(enable), State.Brightness));
         if (ok)
         {

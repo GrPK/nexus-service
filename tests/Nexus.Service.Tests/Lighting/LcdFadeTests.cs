@@ -78,4 +78,15 @@ public class LcdFadeTests
         Assert.Equal(9, levels.Distinct().Count());
         Assert.Equal(0, levels[^1]);
     }
+
+    [Fact]
+    public async System.Threading.Tasks.Task A_step_that_throws_drops_the_ramp_instead_of_leaving_it_half_done()
+    {
+        var faulted = new System.Threading.ManualResetEventSlim();
+        var runner = new LcdFadeRunner(() => throw new InvalidOperationException("boom"), onFault: faulted.Set);
+
+        runner.Kick();
+
+        Assert.True(await System.Threading.Tasks.Task.Run(() => faulted.Wait(TimeSpan.FromSeconds(10))));
+    }
 }
