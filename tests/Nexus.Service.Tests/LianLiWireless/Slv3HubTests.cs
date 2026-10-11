@@ -2530,12 +2530,78 @@ public class Slv3HubTests
         return count;
     }
 
-    private static (Slv3Hub Hub, FakeSlv3Network Net, FakeTxTransport Tx, FakeRxTransport Rx) CreateConnectedHub(Func<long>? nowMs = null)
+    // ---- Sleep when locked (HydroShift II wireless screen) ----------------
+
+    private static (Slv3Hub Hub, FakeTxTransport Tx, Nexus.Service.Lighting.LcdLockState Lock, Func<bool> Setting) LockedAioHub(bool sleepWhenLocked = true)
+    {
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        var (hub, net, tx, _) = CreateConnectedHub(null, state);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1, DevType = 10, FanCount = 0 });
+        hub.AioSensors = () => new Slv3AioSensors(55f, 12f, null, null);
+        var sleep = sleepWhenLocked;
+        hub.AioScreens = () => new Dictionary<string, Slv3AioScreen>
+        {
+            [Convert.ToHexString(FanMac)] = Slv3Protocol.AioScreenFrom(30, 4, "#FF0000", "#00FF00", "#0000FF", true, true, true, true, false, sleepWhenLocked: sleep),
+        };
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
+        return (hub, tx, state, () => sleep);
+    }
+
+    private static int LastAioBrightness(FakeTxTransport tx) => RfFrames(tx, Slv3Protocol.RfAioParams)[^1][47];
+
+    [Fact]
+    public void Lock_zeroes_the_brightness_byte_in_the_param_block_and_unlock_restores_the_saved_one()
+    {
+        var (hub, tx, state, _) = LockedAioHub();
+        Assert.True(hub.DriveTick());
+        Assert.Equal(30, LastAioBrightness(tx));
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(0, LastAioBrightness(tx));
+
+        state.Set(false);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void The_lock_adds_no_frames_and_leaves_every_other_block_byte_alone()
+    {
+        var (hub, tx, state, _) = LockedAioHub();
+        Assert.True(hub.DriveTick());
+        var before = RfFrames(tx, Slv3Protocol.RfAioParams).Count;
+        var lit = RfFrames(tx, Slv3Protocol.RfAioParams)[^1].ToArray();
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+
+        var frames = RfFrames(tx, Slv3Protocol.RfAioParams);
+        Assert.Equal(before + 1, frames.Count);
+        var dark = frames[^1].ToArray();
+        Assert.Equal(0, dark[47]);
+        dark[47] = lit[47];
+        Assert.Equal(lit, dark);
+    }
+
+    [Fact]
+    public void A_screen_with_the_setting_off_stays_lit()
+    {
+        var (hub, tx, state, _) = LockedAioHub(sleepWhenLocked: false);
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    private static (Slv3Hub Hub, FakeSlv3Network Net, FakeTxTransport Tx, FakeRxTransport Rx) CreateConnectedHub(Func<long>? nowMs = null, Nexus.Service.Lighting.LcdLockState? lockState = null)
     {
         var net = new FakeSlv3Network();
         var tx = new FakeTxTransport(net);
         var rx = new FakeRxTransport(net);
-        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? tx : rx, nowMs) { ConfirmNewChains = false };
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? tx : rx, nowMs, lockState) { ConfirmNewChains = false };
         Assert.True(hub.EnsureConnected());
         return (hub, net, tx, rx);
     }

@@ -233,12 +233,25 @@ public sealed class Slv3Hub : IDisposable
     private const int MaxDeviceListPages = 3;
     private int _lastRecordCount;
 
-    public Slv3Hub(ISlv3Discovery discovery, Func<Slv3PortInfo, ISlv3Transport> transportFactory, Func<long>? nowMs = null)
+    public Slv3Hub(
+        ISlv3Discovery discovery,
+        Func<Slv3PortInfo, ISlv3Transport> transportFactory,
+        Func<long>? nowMs = null,
+        Nexus.Service.Lighting.LcdLockState? lockState = null)
     {
         _discovery = discovery;
         _transportFactory = transportFactory;
         _nowMs = nowMs ?? (() => Environment.TickCount64);
+        if (lockState is not null)
+        {
+            _lockSleep = new Nexus.Service.Lighting.LcdLockSleepSet(lockState);
+        }
     }
+
+    // Session lock. The HydroShift II screen's backlight rides in the param block that goes
+    // out every drive tick, so the dark value is written into that block and nothing else is
+    // sent: no extra frames, no timing or link change. Decided once per lock per AIO.
+    private readonly Nexus.Service.Lighting.LcdLockSleepSet? _lockSleep;
 
     // Monotonic ms clock; injectable so tests drive chain expiry deterministically.
     private readonly Func<long> _nowMs;
@@ -1116,9 +1129,14 @@ public sealed class Slv3Hub : IDisposable
             var rpm = control.Percent is int percent
                 ? Slv3Protocol.HydroShiftPumpRpm(percent, record.DevType)
                 : Slv3Protocol.HydroShiftDefaultPumpRpm;
+            var shown = screenSet ? screen : Slv3AioScreen.Default;
+            if (_lockSleep is not null && _lockSleep.IsSleeping(key, () => shown.SleepWhenLocked))
+            {
+                shown = shown with { Brightness = 0 };
+            }
             var block = Slv3Protocol.BuildAioParamBlock(
                 sensors, Slv3Protocol.HydroShiftPumpTimer(rpm, record.DevType),
-                screenSet ? screen : Slv3AioScreen.Default,
+                shown,
                 RadiatorFanRpm(record));
             var payload = Slv3Protocol.BuildAioParams(record.Mac, _masterMac, record.RxType, record.Channel, BindOrdinalLocked(record.Mac), block);
             SendRfPayloadLocked(record.Channel, record.RxType, payload);

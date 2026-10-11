@@ -1630,6 +1630,8 @@ public sealed class LianLiAioScreenSettings
 {
     /// <summary>Backlight, percent.</summary>
     public int Brightness { get; set; } = Nexus.Service.Peripherals.LianLiWireless.Slv3Protocol.AioLcdBrightness;
+    /// <summary>Put the screen dark while the PC is locked and restore <see cref="Brightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     /// <summary>Index of one of the AIO's built-in screen themes.</summary>
     public int Theme { get; set; }
     public string LabelColor { get; set; } = "#FFFFFF";

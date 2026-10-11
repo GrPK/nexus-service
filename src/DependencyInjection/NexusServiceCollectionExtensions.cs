@@ -1018,10 +1018,11 @@ public static class NexusServiceCollectionExtensions
             new Nexus.Service.Peripherals.LianLiWireless.Slv3Hub(
                 sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.ISlv3Discovery>(),
 #if LINUX
-                port => new Nexus.Service.Peripherals.LianLiWireless.LinuxSlv3Transport(port.PortName, port.Role)));
+                port => new Nexus.Service.Peripherals.LianLiWireless.LinuxSlv3Transport(port.PortName, port.Role),
 #else
-                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3Transport(port.PortName, port.Role)));
+                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3Transport(port.PortName, port.Role),
 #endif
+                lockState: sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>()));
         services.AddSingleton<Nexus.Service.Cooling.Slv3CoolingProvider>(sp =>
         {
             var hub = sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.Slv3Hub>();
@@ -1043,7 +1044,8 @@ public static class NexusServiceCollectionExtensions
                 {
                     screens[mac] = Nexus.Service.Peripherals.LianLiWireless.Slv3Protocol.AioScreenFrom(
                         s.Brightness, s.Theme, s.LabelColor, s.ValueColor, s.UnitColor,
-                        s.ShowCpuTemp, s.ShowCpuLoad, s.ShowGpuTemp, s.ShowGpuLoad, s.ShowFanSpeed, s.LoopInterval);
+                        s.ShowCpuTemp, s.ShowCpuLoad, s.ShowGpuTemp, s.ShowGpuLoad, s.ShowFanSpeed, s.LoopInterval,
+                        s.SleepWhenLocked);
                 }
                 return screens;
             };
