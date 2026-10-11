@@ -136,7 +136,7 @@ public sealed class CorsairLinkLcdStreamTransport : IStreamedPanelTransport, IOr
         else if (!_dropLogged)
         {
             _dropLogged = true;
-            ServiceLog.Warn("[corsair-lcd] frame rejected; retrying on the next frame");
+            ServiceLog.Warn("[corsair-lcd] frame rejected; the next frame retries and a run of failures reopens the screen");
         }
     }
 
@@ -159,8 +159,14 @@ public sealed class CorsairLinkLcdStreamTransport : IStreamedPanelTransport, IOr
         {
             if (Volatile.Read(ref _sendsInFlight) > 0
                 || Environment.TickCount64 - Volatile.Read(ref _lastSentMs) < KeepaliveIdleMs
-                || _lastFrameLength == 0
-                || Environment.TickCount64 - _lastRealFrameMs > KeepaliveGraceMs)
+                || _lastFrameLength == 0)
+            {
+                return;
+            }
+            // A screen select shows the stored screen until a frame lands; a static
+            // widget may not render again for seconds, so the last frame goes now.
+            var repaint = _lcd.TakeRepaintRequest(this);
+            if (Environment.TickCount64 - _lastRealFrameMs > KeepaliveGraceMs && !repaint)
             {
                 return;
             }

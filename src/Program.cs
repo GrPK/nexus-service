@@ -898,6 +898,7 @@ static void FastServiceShutdown(WebApplication app)
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.Nollie.NollieConnectionWorker>()?.ReleaseAllForShutdown(); } catch { } }),
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurvePlayer>()?.ReleaseForShutdown(); } catch { } }),
         Task.Run(() => { try { ReleaseUniversalScreen88(sp); } catch { } }),
+        Task.Run(() => { try { ReleaseCorsairLinkLcd(sp); } catch { } }),
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveBoard>()?.ReleaseForShutdown(TimeSpan.FromSeconds(1)); } catch { } }),
         Task.Run(() => { try { sp.GetService<Nexus.Service.Common.ExternalTools.ExternalToolManager>()?.TerminateAll(); } catch { } }),
 #if DEV_TOOLS
@@ -922,6 +923,14 @@ static void ReleaseUniversalScreen88(IServiceProvider sp)
             hub.Detach();
         }
     }
+}
+
+// Hands the iCUE LINK LCD back to its stored screen; not while another program drives the hub.
+static void ReleaseCorsairLinkLcd(IServiceProvider sp)
+{
+    var hubs = sp.GetService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkHubs>();
+    sp.GetService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkLcd>()?
+        .ReleaseForShutdown(handBack: hubs?.LcdHub is not { ForeignHostSeen: true });
 }
 
 // The overlay host and tray helper run in the user session (spawned cross-session

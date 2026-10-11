@@ -23,6 +23,7 @@ public sealed class CorsairLinkConnectionWorker : BackgroundService
 {
     private const int ConnectPollMs = 5000;
     private const int PollMs = 2000;
+    private const int LcdRetryMs = 5000;
     private const int MaxConsecutiveFailures = 3;
     // Each failed init flips the hub to software mode and back; repeated failures back off to this.
     private const int MaxInitRetryMs = 60_000;
@@ -212,6 +213,22 @@ public sealed class CorsairLinkConnectionWorker : BackgroundService
     private async Task RunHubAsync(CorsairLinkHub hub, string path, AutoRedetect redetect, CancellationToken stoppingToken)
     {
         var ownsLcd = false;
+        long lcdMissedAtMs = 0;
+        // The LCD has its own USB link and re-enumerates on its own (a chain re-detect
+        // re-powers it), so it is looked for again while missing, not just at connect. A
+        // cap whose USB lead is unplugged stays missing, so a miss waits before the next
+        // HID enumeration.
+        void EnsureLcd()
+        {
+            if (!hub.State.HasLcd || Environment.TickCount64 - lcdMissedAtMs < LcdRetryMs) return;
+            lock (_lcdLock)
+            {
+                if (_lcd.HasDevice) return;
+                _lcd.DiscoverAndAttach(hub.State.Devices, _hid);
+                ownsLcd |= _lcd.HasDevice;
+                lcdMissedAtMs = _lcd.HasDevice ? 0 : Environment.TickCount64;
+            }
+        }
         try
         {
             var initRetryMs = ConnectPollMs;
@@ -282,22 +299,12 @@ public sealed class CorsairLinkConnectionWorker : BackgroundService
                 otherHostHeardMs = null;
 
                 ServiceLog.Info($"{Tag(hub)} connected fw={hub.State.Firmware} devices={hub.State.Devices.Count}");
-                if (hub.State.HasLcd)
-                {
-                    lock (_lcdLock)
-                    {
-                        if (!_lcd.HasDevice)
-                        {
-                            _lcd.DiscoverAndAttach(hub.State.Devices, _hid);
-                            ownsLcd = _lcd.HasDevice;
-                        }
-                    }
-                }
+                EnsureLcd();
                 _lighting.OnHubStateUpdated();
                 _cooling.ReassertControl(hub);
                 try
                 {
-                    await PollConnectedAsync(hub, redetect, stoppingToken).ConfigureAwait(false);
+                    await PollConnectedAsync(hub, redetect, EnsureLcd, stoppingToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -357,7 +364,7 @@ public sealed class CorsairLinkConnectionWorker : BackgroundService
     private static string BrokenSignature(CorsairLinkHub hub) =>
         hub.State.Devices.Count == 0 ? "empty" : string.Join(',', hub.State.UnmappedChannels);
 
-    private async Task PollConnectedAsync(CorsairLinkHub hub, AutoRedetect redetect, CancellationToken stoppingToken)
+    private async Task PollConnectedAsync(CorsairLinkHub hub, AutoRedetect redetect, Action ensureLcd, CancellationToken stoppingToken)
     {
         var failures = 0;
         while (!stoppingToken.IsCancellationRequested && _gate.IsEnabled("corsair") && !hub.ForeignHostSeen)
@@ -394,6 +401,7 @@ public sealed class CorsairLinkConnectionWorker : BackgroundService
                 failures++;
                 if (failures >= MaxConsecutiveFailures) break;
             }
+            ensureLcd();
             _lighting.OnHubStateUpdated();
             await Task.Delay(PollMs, stoppingToken).ConfigureAwait(false);
         }
