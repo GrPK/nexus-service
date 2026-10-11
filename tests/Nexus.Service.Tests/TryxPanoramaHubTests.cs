@@ -1403,4 +1403,116 @@ public class TryxPanoramaHubTests
         File.WriteAllBytes(path, new byte[lengthBytes]);
         return path;
     }
+
+    // ---- Sleep when locked -------------------------------------------------
+
+    private static (TryxPanoramaHub Hub, RecordingTransport Transport, Nexus.Service.Lighting.LcdLockState Lock, InMemoryConfigStore Store) LockRig(bool connect = true)
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => { s.Tryx.Brightness = 70; s.Tryx.OverlayItems = []; });
+        var recording = new RecordingTransport();
+        var hub = BuildHub(discovery: new StubDiscovery(), transportFactory: _ => recording, configStore: store);
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        hub.BindLockSleep(state);
+        if (connect)
+        {
+            hub.EnsureConnected();
+            recording.Writes.Clear();
+        }
+        return (hub, recording, state, store);
+    }
+
+    [Fact]
+    public void Lock_turns_the_screen_off_and_unlock_restores_it_at_the_stored_brightness()
+    {
+        var (hub, recording, state, store) = LockRig();
+
+        state.Set(true);
+        Assert.Equal(TryxRkProtocol.BuildConfig(false, 70), Assert.Single(recording.Writes));
+        Assert.True(hub.State.ScreenEnabled);
+        Assert.Equal(70, store.Load().Tryx.Brightness);
+
+        recording.Writes.Clear();
+        state.Set(false);
+        Assert.Equal(TryxRkProtocol.BuildConfig(true, 70), Assert.Single(recording.Writes));
+    }
+
+    [Fact]
+    public void A_screen_the_user_turned_off_is_not_woken_by_unlock()
+    {
+        var (hub, recording, state, _) = LockRig();
+        Assert.True(hub.SetEnabled(false));
+        recording.Writes.Clear();
+
+        state.Set(true);
+        state.Set(false);
+
+        Assert.Empty(recording.Writes);
+        Assert.False(hub.State.ScreenEnabled);
+    }
+
+    [Fact]
+    public void The_setting_off_leaves_the_screen_alone()
+    {
+        var (_, recording, state, store) = LockRig();
+        store.Update(s => s.Tryx.SleepWhenLocked = false);
+
+        state.Set(true);
+
+        Assert.Empty(recording.Writes);
+    }
+
+    [Fact]
+    public void Unlock_wakes_even_when_the_setting_was_turned_off_mid_lock()
+    {
+        var (_, recording, state, store) = LockRig();
+        state.Set(true);
+        store.Update(s => s.Tryx.SleepWhenLocked = false);
+        recording.Writes.Clear();
+
+        state.Set(false);
+
+        Assert.Equal(TryxRkProtocol.BuildConfig(true, 70), Assert.Single(recording.Writes));
+    }
+
+    [Fact]
+    public void A_reconnect_while_locked_does_not_resend_the_remembered_enabled_state()
+    {
+        var (hub, recording, state, _) = LockRig();
+        state.Set(true);
+        hub.Disconnect();
+        recording.Writes.Clear();
+
+        hub.EnsureConnected();
+
+        Assert.Equal(TryxRkProtocol.BuildConfig(false, 70), recording.Writes[0]);
+        Assert.DoesNotContain(recording.Writes, w => w.AsSpan().SequenceEqual(TryxRkProtocol.BuildConfig(true, 70)));
+    }
+
+    [Fact]
+    public void A_panel_that_connects_while_locked_joins_the_sleep_and_wakes_on_unlock()
+    {
+        var (hub, recording, state, _) = LockRig(connect: false);
+        state.Set(true);
+
+        hub.EnsureConnected();
+        Assert.Equal(TryxRkProtocol.BuildConfig(false, 70), recording.Writes[0]);
+
+        recording.Writes.Clear();
+        state.Set(false);
+        Assert.Equal(TryxRkProtocol.BuildConfig(true, 70), Assert.Single(recording.Writes));
+    }
+
+    [Fact]
+    public void A_preset_chosen_while_locked_keeps_the_screen_off_on_the_wire_and_on_in_state()
+    {
+        var (hub, recording, state, _) = LockRig();
+        state.Set(true);
+        recording.Writes.Clear();
+
+        hub.SetPreset("default_01.mp4");
+
+        Assert.All(recording.Writes, w => Assert.False(w.AsSpan().SequenceEqual(TryxRkProtocol.BuildPreset("default_01.mp4", true, 70))));
+        Assert.True(hub.State.ScreenEnabled);
+    }
 }

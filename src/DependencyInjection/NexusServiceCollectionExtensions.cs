@@ -651,6 +651,12 @@ public static class NexusServiceCollectionExtensions
         return services;
     }
 
+    private static Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub BindTryxLock(IServiceProvider sp, Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub hub)
+    {
+        hub.BindLockSleep(sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>());
+        return hub;
+    }
+
     private static Nexus.Service.Peripherals.Nzxt.KrakenHub BindKrakenLock(IServiceProvider sp, Nexus.Service.Peripherals.Nzxt.KrakenHub hub)
     {
         var store = sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>();
@@ -1536,7 +1542,7 @@ public static class NexusServiceCollectionExtensions
                               Nexus.Service.Peripherals.Tryx.Panorama.StubTryxPanoramaPortDiscovery>();
 #endif
         services.AddSingleton<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub>(sp =>
-            new Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub(
+            BindTryxLock(sp, new Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub(
                 sp.GetRequiredService<Nexus.Service.Peripherals.Tryx.Panorama.ITryxPanoramaPanelDiscovery>(),
 #if WINDOWS
                 port => new Nexus.Service.Peripherals.Tryx.Panorama.WindowsTryxRkTransport(port.PortName, port.Serial),
@@ -1545,7 +1551,7 @@ public static class NexusServiceCollectionExtensions
 #endif
                 sp.GetRequiredService<Nexus.Service.Sensors.ISensorProvider>(),
                 sp.GetRequiredService<Nexus.Service.Fps.IFpsProvider>(),
-                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>()));
+                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>())));
         services.AddSingleton<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHeartbeatWorker>();
         services.AddHostedService(sp =>
             sp.GetRequiredService<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHeartbeatWorker>());

@@ -1285,6 +1285,8 @@ public sealed class TryxSettings
     public int SlideshowIntervalSec { get; set; } = Nexus.Service.Peripherals.Tryx.Panorama.TryxSlideshowConfig.DefaultIntervalSec;
     public bool SlideshowShuffle { get; set; }
     public bool SlideshowFinishVideos { get; set; } = true;
+    /// <summary>Turn the Panorama screen off while the PC is locked and restore its prior state on unlock.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
 }
 
 /// <summary>One NZXT Kraken channel's firmware animation. <see cref="Colors"/> holds

@@ -57,6 +57,7 @@ public sealed class TryxStatusResponse
     public long MediaCapacityBytes { get; set; }
     public TryxOverlaySnapshot? Overlay { get; set; }
     public TryxSlideshowSnapshot? Slideshow { get; set; }
+    public bool SleepWhenLocked { get; set; }
 }
 
 public sealed class TryxMediaImportResponse
@@ -197,6 +198,7 @@ public static class TryxRoutes
                     Docked = ov.Docked,
                 },
                 Slideshow = BuildSlideshowSnapshot(hub.Slideshow),
+                SleepWhenLocked = hub.SleepWhenLocked,
             };
             return Results.Json(resp, AppJsonContext.Default.TryxStatusResponse);
         });
@@ -217,6 +219,12 @@ public static class TryxRoutes
         {
             var ok = hub.SetEnabled(body.Enable);
             return Results.Json(new TryxAckResponse { Ok = ok }, AppJsonContext.Default.TryxAckResponse);
+        });
+
+        app.MapPost("/tryx/sleep-when-locked", (TryxEnableRequest body, Nexus.Service.Persistence.IConfigStore store) =>
+        {
+            store.Update(s => s.Tryx.SleepWhenLocked = body.Enable);
+            return Results.Json(new TryxAckResponse { Ok = true }, AppJsonContext.Default.TryxAckResponse);
         });
 
         app.MapPost("/tryx/brightness", (TryxBrightnessRequest body, TryxPanoramaHub hub) =>

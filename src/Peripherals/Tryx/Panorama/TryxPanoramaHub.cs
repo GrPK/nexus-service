@@ -1,4 +1,5 @@
 using System;
+using Nexus.Service.Lighting;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -84,6 +85,60 @@ public sealed class TryxPanoramaHub : IDisposable
     }
 
     private static long NowMs() => Environment.TickCount64;
+
+    // Session lock. State.ScreenEnabled stays the user's choice; only what goes on the wire
+    // is forced off while the lock holds the panel, so unlock puts back exactly that choice.
+    private const string LockKey = "screen";
+    private LcdLockSleepSet? _lockSleep;
+    private volatile bool _lockDimmed;
+
+    private bool LockSetting() => _configStore.Load().Tryx.SleepWhenLocked;
+
+    private bool Wire(bool screenOn) => screenOn && !_lockDimmed;
+
+    /// <summary>The persisted Sleep-when-locked choice.</summary>
+    public bool SleepWhenLocked => LockSetting();
+
+    /// <summary>Wires the session lock; the setting is read once per lock.</summary>
+    public void BindLockSleep(LcdLockState state)
+    {
+        _lockSleep = new LcdLockSleepSet(state);
+        state.Changed += OnLockChanged;
+    }
+
+    private void OnLockChanged(bool locked)
+    {
+        if (_lockSleep is null)
+        {
+            return;
+        }
+        if (locked)
+        {
+            if (!_lockSleep.IsSleeping(LockKey, LockSetting) || _lockDimmed)
+            {
+                return;
+            }
+            _lockDimmed = true;
+            if (IsConnected && State.ScreenEnabled)
+            {
+                ServiceLog.Info("[lcd-lock] tryx screen sleeping");
+                SendReliable(TryxRkProtocol.BuildConfig(false, State.Brightness));
+            }
+            return;
+        }
+        _lockSleep.Drain();
+        if (!_lockDimmed)
+        {
+            return;
+        }
+        _lockDimmed = false;
+        if (IsConnected && State.ScreenEnabled)
+        {
+            ServiceLog.Info("[lcd-lock] tryx screen waking");
+            SendReliable(TryxRkProtocol.BuildConfig(true, State.Brightness));
+            _slideshow.Rearm(State.CurrentMedia, NowMs());
+        }
+    }
 
     public TryxPanoramaState State { get; } = new();
 
@@ -463,7 +518,13 @@ public sealed class TryxPanoramaHub : IDisposable
     {
         try
         {
-            transport.Write(TryxRkProtocol.BuildConfig(State.ScreenEnabled, State.Brightness));
+            // A panel that attaches or re-enumerates while locked joins the sleep before its
+            // first write, so the remembered enabled state never reaches the wire.
+            if (_lockSleep?.IsSleeping(LockKey, LockSetting) == true)
+            {
+                _lockDimmed = true;
+            }
+            transport.Write(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), State.Brightness));
             // Bootstrap the device serial: get_file_list needs the panel's serial_number (locked),
             // which we only learn from device_info. Request it here; once the drain parses the
             // reply, the heartbeat sends get_file_list so the media list + used-bytes populate
@@ -476,7 +537,7 @@ public sealed class TryxPanoramaHub : IDisposable
             // not re-pushed here - only built-in presets, which are one cheap selection.
             if (!string.IsNullOrEmpty(State.CurrentMedia) && !State.CurrentMediaIsCustom)
             {
-                transport.Write(TryxRkProtocol.BuildPreset(State.CurrentMedia, State.ScreenEnabled, State.Brightness));
+                transport.Write(TryxRkProtocol.BuildPreset(State.CurrentMedia, Wire(State.ScreenEnabled), State.Brightness));
             }
             if (_overlay.Items.Count > 0)
             {
@@ -548,7 +609,7 @@ public sealed class TryxPanoramaHub : IDisposable
     // the screen on, so a screen the user switched off is left alone.
     private void AdvanceSlideshowIfDue()
     {
-        if (!State.ScreenEnabled) return;
+        if (!State.ScreenEnabled || _lockDimmed) return;
         var next = _slideshow.Tick(ListCustomMedia, NowMs());
         if (next is null) return;
         if (!SelectCustomMedia(next))
@@ -572,7 +633,7 @@ public sealed class TryxPanoramaHub : IDisposable
     {
         // Screen on/off rides the same f200.f5 config as brightness (f5.f1 = enable);
         // carry the current brightness so turning the screen back on restores it.
-        var ok = SendReliable(TryxRkProtocol.BuildConfig(enable, State.Brightness));
+        var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(enable), State.Brightness));
         if (ok)
         {
             State.ScreenEnabled = enable;
@@ -585,7 +646,7 @@ public sealed class TryxPanoramaHub : IDisposable
     public bool SetBrightness(int brightness)
     {
         var clamped = Math.Clamp(brightness, 0, 100);
-        var ok = SendReliable(TryxRkProtocol.BuildConfig(State.ScreenEnabled, clamped));
+        var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), clamped));
         if (ok)
         {
             State.Brightness = clamped;
@@ -603,7 +664,7 @@ public sealed class TryxPanoramaHub : IDisposable
         // cannot land between them and leave State pointing at a clip the panel left.
         lock (_txGate)
         {
-            var ok = SendReliable(TryxRkProtocol.BuildPreset(wallpaperMedia, State.ScreenEnabled, State.Brightness));
+            var ok = SendReliable(TryxRkProtocol.BuildPreset(wallpaperMedia, Wire(State.ScreenEnabled), State.Brightness));
             if (ok)
             {
                 State.CurrentMedia = wallpaperMedia;
@@ -740,7 +801,7 @@ public sealed class TryxPanoramaHub : IDisposable
             // file joins it (and the slideshow) without waiting for a media poll.
             RefreshMediaList(waitForGate: true);
             // Same f200 config that selects a built-in preset; wallpaper = the pushed file.
-            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, State.ScreenEnabled, State.Brightness)))
+            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, Wire(State.ScreenEnabled), State.Brightness)))
             {
                 return (false, "");
             }
@@ -912,7 +973,7 @@ public sealed class TryxPanoramaHub : IDisposable
         RefreshMediaList(waitForGate: true);
         lock (_txGate)
         {
-            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, State.ScreenEnabled, State.Brightness))) return false;
+            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, Wire(State.ScreenEnabled), State.Brightness))) return false;
             State.CurrentMedia = deviceFileName;
             State.CurrentMediaIsCustom = false;
             _configStore.Update(s => { s.Tryx.CurrentMedia = deviceFileName; s.Tryx.CurrentMediaIsCustom = false; });
@@ -1098,7 +1159,7 @@ public sealed class TryxPanoramaHub : IDisposable
         if (!TryxThumbnailCache.IsSafeDeviceName(deviceFileName)) return false;
         lock (_txGate)
         {
-            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, screenOn: true, State.Brightness))) return false;
+            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, screenOn: Wire(true), State.Brightness))) return false;
             State.CurrentMedia = deviceFileName;
             State.CurrentMediaIsCustom = true;
             State.ScreenEnabled = true;
