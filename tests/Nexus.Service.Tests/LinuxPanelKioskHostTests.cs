@@ -80,7 +80,7 @@ public class LinuxPanelKioskHostTests
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         Assert.False(string.IsNullOrEmpty(home), "test needs a resolvable home");
 
-        var dir = LinuxPanelKioskHost.ProfileDir("dev1");
+        var dir = LinuxPanelKioskHost.ProfileDir("dev1", flatpakApp: null);
 
         Assert.True(Path.IsPathRooted(dir));
         Assert.StartsWith(home + Path.DirectorySeparatorChar, dir);
@@ -101,7 +101,7 @@ public class LinuxPanelKioskHostTests
         try
         {
             Environment.SetEnvironmentVariable("HOME", adopted);
-            Assert.StartsWith(adopted + Path.DirectorySeparatorChar, LinuxPanelKioskHost.ProfileDir("dev1"));
+            Assert.StartsWith(adopted + Path.DirectorySeparatorChar, LinuxPanelKioskHost.ProfileDir("dev1", flatpakApp: null));
         }
         finally
         {
@@ -110,10 +110,21 @@ public class LinuxPanelKioskHostTests
         }
     }
 
+    // Flathub's Brave and Chrome get no --filesystem=home; a profile under ~/nexus-kiosk does not persist there.
+    [Fact]
+    public void ProfileDir_FlatpakChromiumLivesInTheAppsOwnDataDir()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var appDir = Path.Combine(home, ".var", "app", "com.brave.Browser");
+
+        Assert.StartsWith(appDir + Path.DirectorySeparatorChar,
+            LinuxPanelKioskHost.ProfileDir("y70", "com.brave.Browser"));
+    }
+
     [Fact]
     public void ProfileDir_IsPerDevice()
     {
-        Assert.NotEqual(LinuxPanelKioskHost.ProfileDir("dev1"), LinuxPanelKioskHost.ProfileDir("dev2"));
+        Assert.NotEqual(LinuxPanelKioskHost.ProfileDir("dev1", flatpakApp: null), LinuxPanelKioskHost.ProfileDir("dev2", flatpakApp: null));
     }
 
     // Ubuntu ships Chromium only as a snap with no /usr/bin symlink, so the
@@ -136,12 +147,12 @@ public class LinuxPanelKioskHostTests
         }
     }
 
-    /// <summary>The Y70 slot self-registers: no device id in the URL, so the
-    /// kiosk allocates a y70 record from its own (compositor-shaped) viewport.</summary>
+    /// <summary>The Y70 slot self-registers: no device id in the URL, and the
+    /// surface named, since the window first maps on the primary monitor.</summary>
     [Fact]
     public void KioskUrl_Y70SlotLoadsPanelRootAndMonitorsLoadTheirRecord()
     {
-        Assert.Equal("http://localhost:9400/panel?token=t%20k",
+        Assert.Equal("http://localhost:9400/panel?surface=y70&token=t%20k",
             LinuxPanelKioskHost.KioskUrl(9400, LinuxPanelKioskHost.Y70Slot, "t k"));
         Assert.Equal("http://localhost:9400/panel/abc%2F1?token=tok",
             LinuxPanelKioskHost.KioskUrl(9400, "abc/1", "tok"));
@@ -171,7 +182,7 @@ public class LinuxPanelKioskHostTests
 
         Assert.StartsWith(home + Path.DirectorySeparatorChar, dir);
         Assert.DoesNotContain(dir[(home.Length + 1)..].Split(Path.DirectorySeparatorChar), s => s.StartsWith('.'));
-        Assert.NotEqual(LinuxPanelKioskHost.ProfileDir("dev1"), dir);
+        Assert.NotEqual(LinuxPanelKioskHost.ProfileDir("dev1", flatpakApp: null), dir);
     }
 
     // Flathub's Firefox gets no --filesystem=home; only its own ~/.var/app dir is visible inside the sandbox.
