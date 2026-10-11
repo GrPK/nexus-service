@@ -125,6 +125,16 @@ public static class TryxMediaList
         return Encoding.UTF8.GetString(serial);
     }
 
+    /// <summary>Panel firmware_version from the same device_info reply: DeviceInfo.firmware_version =
+    /// field 3. Null if the buffer is not a device_info frame or the panel sent no version.</summary>
+    public static string? ParseFirmwareVersion(ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty) return null;
+        if (!TryGetLenField(data, fieldNumber: 500, out var deviceInfo)) return null;
+        if (!TryGetLenField(deviceInfo, fieldNumber: 3, out var version)) return null;
+        return Encoding.UTF8.GetString(version);
+    }
+
     /// <summary>One file_pull_response chunk; <paramref name="Data"/> is still masked.</summary>
     public readonly record struct FilePullChunk(bool Ok, ulong SessionId, long Offset, long FileSize, byte[] Data);
 
