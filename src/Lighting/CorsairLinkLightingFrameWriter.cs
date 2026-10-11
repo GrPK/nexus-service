@@ -44,6 +44,7 @@ public sealed class CorsairLinkLightingFrameWriter : IHostedService, IDisposable
     // device instead of resolving zones twice.
     private readonly List<DeviceStructure> _tickStructures = new();
     private readonly List<IReadOnlyList<ResolvedZone>> _tickZones = new();
+    private readonly List<CorsairLinkDevice> _wireOrder = new();
 
     private readonly FeatureGates _gates;
 
@@ -119,7 +120,7 @@ public sealed class CorsairLinkLightingFrameWriter : IHostedService, IDisposable
         var prefs = settings.Devices.LightingDevicePrefs;
         var globalBrightness = MasterBrightness.Effective(settings.Lighting);
 
-        var hubDevices = hub.State.Devices;
+        var hubDevices = WireOrder(hub.State.Devices, _wireOrder);
         var hubHasLcd = hub.State.HasLcd;
         var portCap = ComputePortCapFactor(hubDevices);
         var effectiveBrightness = Math.Min(globalBrightness, portCap);
@@ -178,6 +179,38 @@ public sealed class CorsairLinkLightingFrameWriter : IHostedService, IDisposable
         }
 
         hub.SendColors(new ReadOnlySpan<byte>(_wireBuf, 0, wireOffset));
+    }
+
+    /// <summary>
+    /// Devices in colour-stream order: channel order, except that a pump LCD cap (type 6)
+    /// streams its LEDs right after the AIO's, whatever its channel. Camera-mapped on a
+    /// TITAN RX LCD; OpenLinkHub likewise appends the cap's LEDs to the AIO.
+    /// Only the first cap moves: one pump LCD per hub is supported (CorsairLinkConnectionWorker).
+    /// </summary>
+    internal static IReadOnlyList<CorsairLinkDevice> WireOrder(IReadOnlyList<CorsairLinkDevice> devices, List<CorsairLinkDevice> buffer)
+    {
+        CorsairLinkDevice? cap = null;
+        var hasAio = false;
+        foreach (var d in devices)
+        {
+            if (d.Type == 6) cap ??= d;
+            else if (d.Class == CorsairLinkClass.Aio) hasAio = true;
+        }
+        if (cap is null || !hasAio) return devices;
+
+        buffer.Clear();
+        var placed = false;
+        foreach (var d in devices)
+        {
+            if (ReferenceEquals(d, cap)) continue;
+            buffer.Add(d);
+            if (!placed && d.Class == CorsairLinkClass.Aio)
+            {
+                buffer.Add(cap);
+                placed = true;
+            }
+        }
+        return buffer;
     }
 
     /// <summary>

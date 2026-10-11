@@ -43,6 +43,23 @@ public sealed class CorsairLinkHubs
         }
     }
 
+    /// <summary>The LCD named for its cooler, as iCUE names it ("iCUE LINK TITAN 240 LCD").</summary>
+    public string LcdProductName
+    {
+        get
+        {
+            var hub = LcdHub;
+            if (hub is not null)
+            {
+                foreach (var d in hub.State.Devices)
+                {
+                    if (d.Class == CorsairLinkClass.Aio) return d.Name + " LCD";
+                }
+            }
+            return "iCUE LINK LCD";
+        }
+    }
+
     public CorsairLinkHub? Find(string hubId)
     {
         foreach (var h in _hubs) if (h.HubId == hubId) return h;

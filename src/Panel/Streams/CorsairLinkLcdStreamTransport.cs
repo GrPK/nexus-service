@@ -31,17 +31,19 @@ public sealed class CorsairLinkLcdStreamTransport : IStreamedPanelTransport, IOr
     private bool _dropLogged;
     private readonly PanelOrientationFilter _orientation = new();
 
-    // This firmware clears the panel when frames stop arriving - OpenLinkHub re-sends a
-    // still every 10 ms for exactly that reason (lsh.go:5071) - and the render side only
-    // produces 30. So the last frame is kept and re-pushed between real ones. It expires
-    // shortly after the renderer goes quiet, so a stalled overlay hands the glass back to
-    // the media worker instead of being propped up forever.
-    private const int KeepaliveMs = 10;
+    // The firmware falls back to its own screen when frames stop (30-40 s on a TITAN RX LCD),
+    // so the last frame is re-pushed while the renderer is quiet. Only into an idle pipe:
+    // frames sent back to back fill the LCD's buffer and one chunk then blocks 250-700 ms,
+    // while a 25 ms gap between frames measured zero stalls. It expires shortly after the
+    // renderer goes quiet, so a stalled overlay hands the glass back to the media worker.
+    private const int KeepaliveIdleMs = 100;
     private const long KeepaliveGraceMs = 1000;
     private readonly object _lastFrameLock = new();
     private byte[] _lastFrame = Array.Empty<byte>();
     private int _lastFrameLength;
     private long _lastRealFrameMs;
+    private long _lastSentMs;
+    private int _sendsInFlight;
     private Timer? _keepalive;
 
     public CorsairLinkLcdStreamTransport(CorsairLinkLcd lcd, string serial)
@@ -67,7 +69,7 @@ public sealed class CorsairLinkLcdStreamTransport : IStreamedPanelTransport, IOr
         _filled = 0;
         _owned = true;
         _lcd.ClaimStream(this);
-        _keepalive = new Timer(_ => Keepalive(), null, KeepaliveMs, KeepaliveMs);
+        _keepalive = new Timer(_ => Keepalive(), null, KeepaliveIdleMs, KeepaliveIdleMs);
     }
 
     /// <summary>The panel has no player to start; the first pushed frame is the start.</summary>
@@ -123,17 +125,18 @@ public sealed class CorsairLinkLcdStreamTransport : IStreamedPanelTransport, IOr
             jpeg.CopyTo(_lastFrame);
             _lastFrameLength = jpeg.Length;
             _lastRealFrameMs = Environment.TickCount64;
+            Interlocked.Increment(ref _sendsInFlight);
         }
         _lcd.NoteStreamFrame(this);
 
-        if (_lcd.SendFrame(jpeg))
+        if (SendCounted(jpeg))
         {
             _dropLogged = false;
         }
         else if (!_dropLogged)
         {
             _dropLogged = true;
-            ServiceLog.Warn("[corsair-lcd] frame rejected; retrying on the next frame");
+            ServiceLog.Warn("[corsair-lcd] frame rejected; the next frame retries and a run of failures reopens the screen");
         }
     }
 
@@ -147,14 +150,47 @@ public sealed class CorsairLinkLcdStreamTransport : IStreamedPanelTransport, IOr
         {
             return;
         }
-        lock (_lastFrameLock)
+        // Timer callbacks overlap when a send outlasts the period; a busy lock means one is in flight.
+        if (!Monitor.TryEnter(_lastFrameLock))
         {
-            if (_lastFrameLength == 0
-                || Environment.TickCount64 - _lastRealFrameMs > KeepaliveGraceMs)
+            return;
+        }
+        try
+        {
+            if (Volatile.Read(ref _sendsInFlight) > 0
+                || Environment.TickCount64 - Volatile.Read(ref _lastSentMs) < KeepaliveIdleMs
+                || _lastFrameLength == 0)
             {
                 return;
             }
-            _lcd.SendFrame(_lastFrame.AsSpan(0, _lastFrameLength));
+            // A screen select shows the stored screen until a frame lands; a static
+            // widget may not render again for seconds, so the last frame goes now.
+            var repaint = _lcd.TakeRepaintRequest(this);
+            if (Environment.TickCount64 - _lastRealFrameMs > KeepaliveGraceMs && !repaint)
+            {
+                return;
+            }
+            Interlocked.Increment(ref _sendsInFlight);
+            SendCounted(_lastFrame.AsSpan(0, _lastFrameLength));
+        }
+        finally
+        {
+            Monitor.Exit(_lastFrameLock);
+        }
+    }
+
+    // Callers count the send under _lastFrameLock first, so a keepalive that takes the lock
+    // next sees a real frame in flight (stalls included); idle time runs from when it finished.
+    private bool SendCounted(ReadOnlySpan<byte> jpeg)
+    {
+        try
+        {
+            return _lcd.SendFrame(jpeg);
+        }
+        finally
+        {
+            Volatile.Write(ref _lastSentMs, Environment.TickCount64);
+            Interlocked.Decrement(ref _sendsInFlight);
         }
     }
 

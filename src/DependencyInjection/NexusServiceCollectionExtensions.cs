@@ -1237,7 +1237,8 @@ public static class NexusServiceCollectionExtensions
         // switch the hub's fans and RGB do not carry with them.
         services.AddSingleton<IDeviceHandler>(sp =>
             new Nexus.Service.Devices.Handlers.CorsairLinkLcdHandler(
-                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkLcd>()));
+                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkLcd>(),
+                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkHubs>()));
         // The cooler's LCD is a panel like the Kraken's: widgets stream to it, and the
         // still/GIF worker above takes it back whenever no panel session holds it.
         services.AddSingleton<Nexus.Service.Panel.Streams.IStreamedPanelDiscovery>(sp =>

@@ -1263,6 +1263,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Routes.LcdUploadResponse))]
 [JsonSerializable(typeof(Nexus.Service.Routes.LcdSettingsRequest))]
 [JsonSerializable(typeof(Nexus.Service.Routes.LcdStateResponse))]
+[JsonSerializable(typeof(Nexus.Service.Routes.LcdDeviceScreenRequest))]
 [JsonSerializable(typeof(int[]))]
 [JsonSerializable(typeof(bool[]))]
 // Lian Li Strimer Plus.

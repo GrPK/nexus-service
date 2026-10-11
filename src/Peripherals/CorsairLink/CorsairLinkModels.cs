@@ -67,6 +67,10 @@ public static class CorsairLinkModels
             (10, 65), (10, 54), (10, 43), (10, 32), (10, 21), (10, 10), (20, 10), (30, 10),
         });
 
+    // Camera-mapped on a TITAN RX LCD with the screen upright: one ring around the glass,
+    // clockwise, LED 0 a little past 6 o'clock.
+    private static readonly (float[] U, float[] V) PumpLcdCapLayout = ClockLayout(Ring(0.45f, 6.7f, 0.5f, 24));
+
     // Mapped LED by LED on camera on mounted fans seen from the front. Front rim 1-12
     // clockwise from 1:30; back rim 13-24 on the same circle counter-clockwise from
     // 3:30; front hub 25-30 clockwise from 3:30; back hub 31-34 a cross
@@ -92,7 +96,8 @@ public static class CorsairLinkModels
         [(5, 0)] = new() { Name = "iCUE LINK Adapter", LedCount = 0, Class = CorsairLinkClass.Adapter },
         [(5, 1)] = new() { Name = "iCUE LINK 9000D Airflow", LedCount = 22, Class = CorsairLinkClass.Case },
         [(5, 2)] = new() { Name = "iCUE LINK 5000T", LedCount = 160, Class = CorsairLinkClass.Case },
-        [(6, 0)] = new() { Name = "iCUE LINK Cooler Pump LCD", LedCount = 24, Class = CorsairLinkClass.Pump, HasSpeed = true, HasTemperature = true },
+        // The LCD cap has no rpm slot or temperature even after a re-detect (TITAN RX LCD, fw 4.1.656).
+        [(6, 0)] = new() { Name = "iCUE LINK LCD Cap", LedCount = 24, Class = CorsairLinkClass.Pump, LedU = PumpLcdCapLayout.U, LedV = PumpLcdCapLayout.V },
         [(7, 0)] = new() { Name = "iCUE LINK H100i", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
         [(7, 1)] = new() { Name = "iCUE LINK H115i", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
         [(7, 2)] = new() { Name = "iCUE LINK H150i", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
@@ -105,12 +110,13 @@ public static class CorsairLinkModels
         [(14, 0)] = new() { Name = "iCUE LINK XD5 Elite LCD", LedCount = 22, Class = CorsairLinkClass.Pump, HasSpeed = true, HasTemperature = true },
         [(15, 0)] = new() { Name = "iCUE LINK RX RGB", LedCount = 8, Class = CorsairLinkClass.Fan, HasSpeed = true },
         [(16, 0)] = new() { Name = "VRM Cooler Module", LedCount = 0, Class = CorsairLinkClass.Fan, HasSpeed = true },
-        [(17, 0)] = new() { Name = "iCUE LINK Titan 240", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
-        [(17, 1)] = new() { Name = "iCUE LINK Titan 280", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
-        [(17, 2)] = new() { Name = "iCUE LINK Titan 360", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
-        [(17, 3)] = new() { Name = "iCUE LINK Titan 420", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
-        [(17, 4)] = new() { Name = "iCUE LINK Titan 240", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
-        [(17, 5)] = new() { Name = "iCUE LINK Titan 360", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true },
+        // TITAN pumps share the TITAN II's 16-LED clockwise ring + 4 inner; ring order camera-checked on a TITAN RX LCD.
+        [(17, 0)] = new() { Name = "iCUE LINK TITAN 240", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true, LedU = TitanIiLayout.U, LedV = TitanIiLayout.V },
+        [(17, 1)] = new() { Name = "iCUE LINK TITAN 280", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true, LedU = TitanIiLayout.U, LedV = TitanIiLayout.V },
+        [(17, 2)] = new() { Name = "iCUE LINK TITAN 360", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true, LedU = TitanIiLayout.U, LedV = TitanIiLayout.V },
+        [(17, 3)] = new() { Name = "iCUE LINK TITAN 420", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true, LedU = TitanIiLayout.U, LedV = TitanIiLayout.V },
+        [(17, 4)] = new() { Name = "iCUE LINK TITAN 240", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true, LedU = TitanIiLayout.U, LedV = TitanIiLayout.V },
+        [(17, 5)] = new() { Name = "iCUE LINK TITAN 360", LedCount = 20, Class = CorsairLinkClass.Aio, HasSpeed = true, HasTemperature = true, LedU = TitanIiLayout.U, LedV = TitanIiLayout.V },
         [(19, 0)] = new() { Name = "iCUE LINK RX", LedCount = 0, Class = CorsairLinkClass.Fan, HasSpeed = true },
         [(25, 0)] = new() { Name = "iCUE LINK XD6 Elite", LedCount = 22, Class = CorsairLinkClass.Pump, HasSpeed = true, HasTemperature = true },
         [(26, 0)] = new() { Name = "iCUE LINK RX360 II RGB", LedCount = 24, Class = CorsairLinkClass.Fan, HasSpeed = true, HasTemperature = true, LedU = Rx360IiLayout.U, LedV = Rx360IiLayout.V },
