@@ -59,13 +59,27 @@ public class AnimateDeviceLockTrackerTests
         var tracker = new AnimateDeviceLockTracker(store);
         tracker.Set("dev-a", "plasma");
         var v = tracker.Version;
-        var stamp = tracker.ChangeStamp;
 
         store.Update(s => s.Lighting.Sync = "animate");
 
         Assert.Equal(v, tracker.Version);
-        Assert.True(tracker.ChangeStamp > stamp);
         Assert.True(tracker.IsLocked("dev-a"));
+    }
+
+    [Fact]
+    public void A_restored_conflict_keeps_the_animation_lock_and_unlocks_the_static_look()
+    {
+        var store = new InMemoryConfigStore();
+        var tracker = new AnimateDeviceLockTracker(store);
+        tracker.Set("dev-a", "plasma");
+
+        // A preset activate can restore a locked static look onto an animation-locked device.
+        store.Update(s => s.Lighting.StaticDeviceLooks["dev-a"] =
+            new Nexus.Service.Persistence.StaticDeviceLook { Effect = "simplered", Locked = true });
+
+        Assert.True(tracker.IsLocked("dev-a"));
+        Assert.False(store.Load().Lighting.StaticDeviceLooks["dev-a"].Locked);
+        Assert.Equal("simplered", store.Load().Lighting.StaticDeviceLooks["dev-a"].Effect);
     }
 
     [Theory]
@@ -220,6 +234,21 @@ public class AnimateDeviceLockEngineTests
         Assert.Equal(200, leds[2]);
         Assert.Equal(1, builds);
         Assert.NotNull(built);
+    }
+
+    [Fact]
+    public async Task A_lock_for_an_absent_device_builds_nothing()
+    {
+        var locks = new AnimateDeviceLockTracker();
+        locks.Set("not-here", "red");
+        var dev = Device();
+        var builds = 0;
+        using var engine = Engine(locks, dev, (_, _) => { builds++; return new Fill("red", 255, 0, 0); });
+        engine.SetEffect(new Fill("green", 0, 255, 0));
+
+        await WaitFor(dev, l => l[1] == 255);
+        await Task.Delay(100);
+        Assert.Equal(0, builds);
     }
 
     [Fact]

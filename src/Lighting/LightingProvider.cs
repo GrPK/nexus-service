@@ -95,7 +95,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _engine.StaticEffectFactory = a => BuildAnimateEffect(
             a.Effect, 0f, a.Intensity, a.Hue, a.Colorize, a.Saturation, a.Contrast,
             a.Params is null ? null : new System.Collections.Generic.Dictionary<string, float>(a.Params));
-        _engine.AnimateLockLookTag = key => ResolveLockedLook(key) is { } look ? HashSlot(look) : null;
+        _engine.AnimateLockLookTag = key => _lockedLooks.TryGetValue(key, out var l) ? l.Tag : null;
         _engine.AnimateLockEffectFactory = BuildLockedEffect;
         _hub = hub;
         _rgb = rgb;
@@ -112,6 +112,10 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
         _engine.OnFrame += frame => _ = _hub.BroadcastBinaryAsync(frame);
         _engine.OnEffectChanged += ReconcileAudioCapture;
+        // Any settings write can move a locked effect's look (template save,
+        // preset activate, profile switch) or the lock set itself.
+        _store.OnChanged += RefreshLockedLooks;
+        RefreshLockedLooks();
         _scanner?.OnScanComplete = OnGameScanComplete;
     }
 
@@ -165,7 +169,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
         lock (_audioCaptureLock)
         {
-            var forLeds = _store.Load().Lighting.MusicReactive && ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName);
+            var music = _store.Load().Lighting.MusicReactive;
+            var forLeds = music && (ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName) || _lockedAudio);
             if (forLeds || Volatile.Read(ref _audioCaptureDemand) > 0)
             {
                 _beats.Start();
@@ -705,19 +710,76 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
+    // Immutable look per locked effect, resolved off the engine thread and
+    // published by reference swap; the engine only ever reads this.
+    private sealed record LockedLook(Nexus.Service.Persistence.AnimateEffectState State, string Tag);
+    private volatile System.Collections.Generic.Dictionary<string, LockedLook> _lockedLooks = new();
+    private volatile bool _lockedAudio;
+    [System.ThreadStatic] private static bool _refreshingLooks;
+
     /// <summary>
-    /// The look an animation-locked device shows for an effect: the stored
-    /// per-effect state, else its resolved selected preset slot. Same resolution
-    /// the effect would use if it were the active one.
+    /// Re-resolves every locked effect's look the way the active effect does
+    /// (<see cref="ActiveLookTag"/>: the selected preset slot) from a copy taken
+    /// under the store lock, then re-evaluates audio capture. Runs on whichever
+    /// thread wrote settings, never the engine thread.
     /// </summary>
-    private Nexus.Service.Persistence.AnimateEffectState? ResolveLockedLook(string effect)
+    private void RefreshLockedLooks()
     {
-        var a = _store.Load().Lighting.Animate;
-        if (a.States.TryGetValue(effect, out var state) && state is not null)
+        // The snapshot goes through Update to get the store lock, which raises
+        // OnChanged again; that re-entry has nothing new to read.
+        if (_refreshingLooks)
         {
-            return state;
+            return;
         }
-        return AnimateTemplateDefaults.ResolveSelected(a.Templates, effect);
+        _refreshingLooks = true;
+        try
+        {
+            if (_store.Load().Lighting.AnimateDeviceLocks.Count == 0 && _lockedLooks.Count == 0 && !_lockedAudio)
+            {
+                return;
+            }
+            var next = new System.Collections.Generic.Dictionary<string, LockedLook>(System.StringComparer.Ordinal);
+            _store.Update(s =>
+            {
+                foreach (var key in s.Lighting.AnimateDeviceLocks.Values)
+                {
+                    if (string.IsNullOrEmpty(key) || next.ContainsKey(key))
+                    {
+                        continue;
+                    }
+                    var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, key);
+                    if (slot is null)
+                    {
+                        continue;
+                    }
+                    var copy = new Nexus.Service.Persistence.AnimateEffectState
+                    {
+                        Speed = slot.Speed,
+                        Intensity = slot.Intensity,
+                        Hue = slot.Hue,
+                        Colorize = slot.Colorize,
+                        Saturation = slot.Saturation,
+                        Contrast = slot.Contrast,
+                        Params = slot.Params is null
+                            ? new()
+                            : new System.Collections.Generic.Dictionary<string, float>(slot.Params),
+                    };
+                    next[key] = new LockedLook(copy, HashSlot(copy));
+                }
+            });
+            var audio = false;
+            foreach (var key in next.Keys)
+            {
+                audio |= ShaderLibrary.IsAudioEffect(key);
+            }
+            _lockedLooks = next;
+            _lockedAudio = audio;
+            ReconcileAudioCapture();
+        }
+        finally
+        {
+            _refreshingLooks = false;
+        }
     }
 
     /// <summary>
@@ -727,11 +789,11 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     /// </summary>
     private IEffect? BuildLockedEffect(string effect, IEffect? existing)
     {
-        var look = ResolveLockedLook(effect);
-        if (look is null)
+        if (!_lockedLooks.TryGetValue(effect, out var locked))
         {
             return null;
         }
+        var look = locked.State;
         var speed = (float)(look.Speed / 50.0);
         var intensity = look.Intensity > 0 ? look.Intensity : 1f;
         var extras = look.Params is { Count: > 0 }

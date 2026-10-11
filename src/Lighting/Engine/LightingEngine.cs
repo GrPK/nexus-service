@@ -196,14 +196,14 @@ public sealed class LightingEngine : IDisposable
         public CanvasBuffer Canvas = null!;
         public string? Tag;
         public bool Failed;
-        public long RenderedTick = -1;
+        public bool Rendered;
+        public long UsedTick = -1;
+        public long RetryAtMs;
     }
     private readonly Dictionary<string, LockedRender> _lockRenders = new(StringComparer.Ordinal);
     // Device id to the canvas it samples this tick; a null canvas means the
     // main one. Absent means no animation lock (or its effect failed to render).
     private readonly Dictionary<string, CanvasBuffer?> _lockedDevices = new(StringComparer.Ordinal);
-    private int _lockStampSeen = -1;
-    private int _lockVersionSeen = -1;
     private long _lockTick;
     private bool[] _gameSkip = Array.Empty<bool>();
 
@@ -681,7 +681,7 @@ public sealed class LightingEngine : IDisposable
                         // publish: UpdateDevices swaps the array lock-free,
                         // and the skip mask below is indexed against it.
                         var devices = _devices;
-                        RenderAnimateLocks(effect);
+                        RenderAnimateLocks(effect, devices);
                         SampleDevicesFromCanvas(devices);
                         ApplyLedColorLocks(devices);
                         if (effect is GameSyncEffect gs)
@@ -784,16 +784,15 @@ public sealed class LightingEngine : IDisposable
         }
         _lockRenders.Clear();
         _lockedDevices.Clear();
-        _lockStampSeen = -1;
-        _lockVersionSeen = -1;
     }
 
     /// <summary>
     /// Renders each distinct locked effect that is not the active one onto its
     /// own canvas and records which canvas every locked device samples. The
-    /// active effect's devices simply keep the main canvas. Engine thread.
+    /// active effect's devices simply keep the main canvas. Only locks whose
+    /// device is present render. Engine thread.
     /// </summary>
-    private void RenderAnimateLocks(IEffect active)
+    private void RenderAnimateLocks(IEffect active, DeviceFrame[] devices)
     {
         var tracker = AnimateLocks;
         _lockedDevices.Clear();
@@ -813,21 +812,63 @@ public sealed class LightingEngine : IDisposable
         var locks = tracker.Snapshot();
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var tick = ++_lockTick;
-        var stamp = tracker.ChangeStamp;
-        var version = tracker.Version;
-        var recheck = stamp != _lockStampSeen || version != _lockVersionSeen;
-        if (version != _lockVersionSeen)
+        var used = 0;
+        var activeName = active.Name;
+        foreach (var dev in devices)
         {
-            // Drop instances no lock references any more.
-            List<string>? stale = null;
-            foreach (var key in _lockRenders.Keys)
+            if (!locks.TryGetValue(dev.Id, out var key))
             {
-                var used = false;
-                foreach (var v in locks.Values)
+                continue;
+            }
+            if (string.Equals(activeName, key, StringComparison.Ordinal))
+            {
+                _lockedDevices[dev.Id] = null;
+                continue;
+            }
+            if (!_lockRenders.TryGetValue(key, out var render))
+            {
+                render = new LockedRender { Canvas = new CanvasBuffer(_canvas.Width, _canvas.Height) };
+                _lockRenders[key] = render;
+            }
+            if (render.UsedTick != tick)
+            {
+                render.UsedTick = tick;
+                used++;
+                UpdateLockRender(key, render, factory, nowMs);
+                if (!render.Failed && render.Effect is not null)
                 {
-                    if (string.Equals(v, key, StringComparison.Ordinal)) { used = true; break; }
+                    try
+                    {
+                        render.Effect.RenderFrame(render.Canvas, nowMs);
+                        render.Rendered = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        // A locked effect that cannot render must not take the
+                        // frame down; its devices fall through to the canvas.
+                        render.Failed = true;
+                        render.Rendered = false;
+                        render.RetryAtMs = nowMs + LockRetryMs;
+                        Gpu.GpuContext.Log($"[animate-lock] render failed for {key}: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
-                if (!used) (stale ??= new List<string>()).Add(key);
+                else
+                {
+                    render.Rendered = false;
+                }
+            }
+            if (render.Rendered)
+            {
+                _lockedDevices[dev.Id] = render.Canvas;
+            }
+        }
+        if (used < _lockRenders.Count)
+        {
+            // Drop instances nothing present references any more.
+            List<string>? stale = null;
+            foreach (var (key, r) in _lockRenders)
+            {
+                if (r.UsedTick != tick) (stale ??= new List<string>()).Add(key);
             }
             if (stale is not null)
             {
@@ -838,61 +879,24 @@ public sealed class LightingEngine : IDisposable
                 }
             }
         }
-        _lockStampSeen = stamp;
-        _lockVersionSeen = version;
-
-        var activeName = active.Name;
-        foreach (var (deviceId, key) in locks)
-        {
-            if (string.Equals(activeName, key, StringComparison.Ordinal))
-            {
-                _lockedDevices[deviceId] = null;
-                continue;
-            }
-            if (!_lockRenders.TryGetValue(key, out var render))
-            {
-                render = new LockedRender { Canvas = new CanvasBuffer(_canvas.Width, _canvas.Height) };
-                _lockRenders[key] = render;
-                recheck = true;
-            }
-            if (recheck)
-            {
-                UpdateLockRender(key, render, factory);
-            }
-            if (render.Failed || render.Effect is null)
-            {
-                continue;
-            }
-            if (render.RenderedTick != tick)
-            {
-                try
-                {
-                    render.Effect.RenderFrame(render.Canvas, nowMs);
-                    render.RenderedTick = tick;
-                }
-                catch (Exception ex)
-                {
-                    // A locked effect that cannot render must not take the
-                    // frame down; its devices fall through to the canvas.
-                    render.Failed = true;
-                    Gpu.GpuContext.Log($"[animate-lock] render failed for {key}: {ex.GetType().Name}: {ex.Message}");
-                    continue;
-                }
-            }
-            _lockedDevices[deviceId] = render.Canvas;
-        }
     }
 
-    private void UpdateLockRender(string key, LockedRender render, Func<string, IEffect?, IEffect?> factory)
+    private const long LockRetryMs = 1000;
+
+    private void UpdateLockRender(string key, LockedRender render, Func<string, IEffect?, IEffect?> factory, long nowMs)
     {
-        var tagFn = AnimateLockLookTag;
-        var tag = tagFn?.Invoke(key);
-        if (render.Effect is not null && !render.Failed && tag is not null && tag == render.Tag)
-        {
-            return;
-        }
         try
         {
+            var tag = AnimateLockLookTag?.Invoke(key);
+            if (render.Effect is not null && !render.Failed && tag is not null && tag == render.Tag)
+            {
+                return;
+            }
+            // A failed build or render retries on a changed look, or after a pause.
+            if (render.Failed && tag is not null && tag == render.Tag && nowMs < render.RetryAtMs)
+            {
+                return;
+            }
             var previous = render.Failed ? null : render.Effect;
             var built = factory(key, previous);
             if (!ReferenceEquals(built, render.Effect))
@@ -902,13 +906,14 @@ public sealed class LightingEngine : IDisposable
             render.Effect = built;
             render.Tag = tag;
             render.Failed = built is null;
+            render.RetryAtMs = nowMs + LockRetryMs;
         }
         catch (Exception ex)
         {
             try { render.Effect?.Dispose(); } catch { /* best-effort */ }
             render.Effect = null;
-            render.Tag = tag;
             render.Failed = true;
+            render.RetryAtMs = nowMs + LockRetryMs;
             Gpu.GpuContext.Log($"[animate-lock] build failed for {key}: {ex.GetType().Name}: {ex.Message}");
         }
     }

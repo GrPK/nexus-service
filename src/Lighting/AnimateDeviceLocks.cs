@@ -22,22 +22,17 @@ public sealed class AnimateDeviceLockTracker
     // Replaced wholesale, never mutated: the engine and routes read it lock-free.
     private volatile Dictionary<string, string> _locks = new(StringComparer.Ordinal);
     private int _version;
-    private int _changeStamp;
 
     public AnimateDeviceLockTracker(IConfigStore? store = null)
     {
         _store = store;
         if (store is null) return;
         Hydrate();
-        store.OnChanged += OnStoreChanged;
+        store.OnChanged += Hydrate;
     }
 
     /// <summary>Bumped when the set of locks changes.</summary>
     public int Version => Volatile.Read(ref _version);
-
-    /// <summary>Bumped on every store change, locks or not: a locked effect's look
-    /// lives in the animate settings, so the engine re-resolves it on this.</summary>
-    public int ChangeStamp => Volatile.Read(ref _changeStamp);
 
     /// <summary>True for an Animate shader key: one with a template bundle that is
     /// not a Static fill or pattern. Keys are lower case, as StartAnimate stores them.</summary>
@@ -49,7 +44,7 @@ public sealed class AnimateDeviceLockTracker
     public bool Any => _locks.Count > 0;
 
     /// <summary>Current device id to effect key map. Treat as read-only.</summary>
-    public IReadOnlyDictionary<string, string> Snapshot() => _locks;
+    public Dictionary<string, string> Snapshot() => _locks;
 
     public bool TryGet(string id, out string effect)
     {
@@ -95,10 +90,35 @@ public sealed class AnimateDeviceLockTracker
         _store?.Update(s => s.Lighting.AnimateDeviceLocks.Remove(id));
     }
 
-    private void OnStoreChanged()
+    /// <summary>
+    /// One lock kind per device. A preset activate or profile switch can leave a
+    /// device both animation-locked and static-locked; the animation lock wins
+    /// (it outranks the static look in the engine), so the static look is kept
+    /// but unlocked.
+    /// </summary>
+    private static void NormalizeAgainstStaticLocks(IConfigStore store, Dictionary<string, string> locks)
     {
-        Interlocked.Increment(ref _changeStamp);
-        Hydrate();
+        if (locks.Count == 0) return;
+        var conflict = false;
+        foreach (var id in locks.Keys)
+        {
+            if (store.Load().Lighting.StaticDeviceLooks.TryGetValue(id, out var look) && look is { Locked: true })
+            {
+                conflict = true;
+                break;
+            }
+        }
+        if (!conflict) return;
+        store.Update(s =>
+        {
+            foreach (var id in locks.Keys)
+            {
+                if (s.Lighting.StaticDeviceLooks.TryGetValue(id, out var look) && look is { Locked: true })
+                {
+                    look.Locked = false;
+                }
+            }
+        });
     }
 
     /// <summary>Rebuild from the store, only when the content differs: Set/Clear
@@ -116,6 +136,7 @@ public sealed class AnimateDeviceLockTracker
                 if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(effect)) rebuilt[id] = effect;
             }
         }
+        NormalizeAgainstStaticLocks(store, rebuilt);
         lock (_lock)
         {
             var mine = _locks;
