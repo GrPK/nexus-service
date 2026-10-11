@@ -1516,25 +1516,41 @@ public class TryxPanoramaHubTests
         Assert.True(hub.State.ScreenEnabled);
     }
 
-    [Fact]
-    public void A_lock_handler_that_runs_after_the_unlock_does_not_turn_the_screen_off()
+    private static byte? LastConfigState(RecordingTransport recording)
     {
-        var (hub, recording, _, _) = LockRig();
-
-        // The handler of a lock whose unlock already happened; the state says unlocked.
-        hub.OnLockChanged(true);
-
-        Assert.False(hub.LockDimmed);
-        Assert.Empty(recording.Writes);
+        for (var i = recording.Writes.Count - 1; i >= 0; i--)
+        {
+            if (recording.Writes[i].AsSpan().SequenceEqual(TryxRkProtocol.BuildConfig(true, 70))) return 1;
+            if (recording.Writes[i].AsSpan().SequenceEqual(TryxRkProtocol.BuildConfig(false, 70))) return 0;
+        }
+        return null;
     }
 
     [Fact]
-    public async System.Threading.Tasks.Task Reconnects_racing_lock_and_unlock_never_leave_the_screen_held_off()
+    public void An_unlock_that_runs_between_the_lock_decision_and_its_off_frame_leaves_the_screen_on()
     {
-        var (hub, _, state, _) = LockRig();
+        var (hub, recording, state, _) = LockRig();
+        hub.TestHookAfterLockDecision = () =>
+        {
+            hub.TestHookAfterLockDecision = null;
+            state.Set(false);
+        };
+
+        state.Set(true);
+
+        Assert.False(hub.LockDimmed);
+        Assert.Equal((byte)1, LastConfigState(recording));
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task Reconnects_racing_lock_and_unlock_end_with_the_screen_on_the_wire()
+    {
+        var (hub, recording, state, _) = LockRig();
+        using var barrier = new System.Threading.Barrier(2);
         var toggles = System.Threading.Tasks.Task.Run(() =>
         {
-            for (var i = 0; i < 300; i++)
+            barrier.SignalAndWait();
+            for (var i = 0; i < 400; i++)
             {
                 state.Set(true);
                 state.Set(false);
@@ -1542,7 +1558,8 @@ public class TryxPanoramaHubTests
         });
         var reconnects = System.Threading.Tasks.Task.Run(() =>
         {
-            for (var i = 0; i < 300; i++)
+            barrier.SignalAndWait();
+            for (var i = 0; i < 400; i++)
             {
                 hub.Disconnect();
                 hub.EnsureConnected();
@@ -1551,8 +1568,8 @@ public class TryxPanoramaHubTests
 
         await System.Threading.Tasks.Task.WhenAll(toggles, reconnects).WaitAsync(TimeSpan.FromSeconds(60));
 
-        // Every lock ended, so nothing may still hold the screen off.
         Assert.False(state.IsLocked);
         Assert.False(hub.LockDimmed);
+        Assert.Equal((byte)1, LastConfigState(recording));
     }
 }

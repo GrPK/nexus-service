@@ -109,6 +109,9 @@ public sealed class TryxPanoramaHub : IDisposable
     // Taken only briefly and never across a send, so it cannot invert with _lock or _txGate.
     private readonly object _lockGate = new();
 
+    /// <summary>Test seam: runs between the lock's decision and its off frame.</summary>
+    internal Action? TestHookAfterLockDecision { get; set; }
+
     /// <summary>True while the lock holds the screen off on the wire.</summary>
     internal bool LockDimmed => _lockDimmed;
 
@@ -129,6 +132,7 @@ public sealed class TryxPanoramaHub : IDisposable
                 }
                 _lockDimmed = true;
             }
+            TestHookAfterLockDecision?.Invoke();
             if (IsConnected && State.ScreenEnabled)
             {
                 ServiceLog.Info("[lcd-lock] tryx screen sleeping");
