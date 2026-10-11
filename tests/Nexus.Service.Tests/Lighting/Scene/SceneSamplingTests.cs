@@ -28,10 +28,9 @@ public class SceneSamplingTests
         }
     }
 
-    private static async Task<byte[]> RenderOnce(DeviceFrame device, SceneProjection? scene, bool footprint = false, bool fullFrame = false)
+    private static async Task<byte[]> RenderOnce(DeviceFrame device, SceneProjection? scene, bool fullFrame = false)
     {
         using var engine = new LightingEngine();
-        engine.FootprintSamplingEnabled = footprint;
         engine.FullFrameSampling = fullFrame;
         engine.UpdateDevices(new[] { device });
         engine.SetScene(scene);
@@ -43,6 +42,9 @@ public class SceneSamplingTests
         Assert.Same(tcs.Task, done);
         return await tcs.Task;
     }
+
+    // The spot is a 3x3 mean of the ramp, which differs from the centre pixel by rounding.
+    private static void Near(byte expected, byte actual) => Assert.InRange(actual, expected - 3, expected + 3);
 
     private static byte Red(byte[] leds, int i) => leds[i * 3];
     private static byte Green(byte[] leds, int i) => leds[i * 3 + 1];
@@ -70,8 +72,8 @@ public class SceneSamplingTests
             Assert.True(cam.Project(quad.At(i / 9f, 0.5f), out var cx, out var cy));
             var px = (int)(cx * 160 / 1000f);
             var py = (int)(cy * 90 / 600f);
-            Assert.Equal((byte)(px * 255 / 159), Red(leds, i));
-            Assert.Equal((byte)(py * 255 / 89), Green(leds, i));
+            Near((byte)(px * 255 / 159), Red(leds, i));
+            Near((byte)(py * 255 / 89), Green(leds, i));
         }
         Assert.True(Red(leds, 0) < Red(leds, 9));
     }
@@ -126,8 +128,8 @@ public class SceneSamplingTests
 
         Assert.True(cam.Project(left.At(0, 0.5f), out var l0, out _));
         Assert.True(cam.Project(right.At(1, 0.5f), out var r1, out _));
-        Assert.Equal((byte)((int)(l0 * 160 / 1000f) * 255 / 159), Red(leds, 0));
-        Assert.Equal((byte)((int)(r1 * 160 / 1000f) * 255 / 159), Red(leds, 3));
+        Near((byte)((int)(l0 * 160 / 1000f) * 255 / 159), Red(leds, 0));
+        Near((byte)((int)(r1 * 160 / 1000f) * 255 / 159), Red(leds, 3));
     }
 
     [Fact]
@@ -148,7 +150,7 @@ public class SceneSamplingTests
         for (var i = 0; i < 5; i++)
         {
             Assert.True(cam.Project(quad.At(i / 4f, 0.5f), out var cx, out _));
-            Assert.Equal((byte)((int)(cx * 160 / 1000f) * 255 / 159), Red(placed, i));
+            Near((byte)((int)(cx * 160 / 1000f) * 255 / 159), Red(placed, i));
         }
 
         // An unplaced device keeps full-frame sampling.
@@ -172,14 +174,14 @@ public class SceneSamplingTests
         var leds = await RenderOnce(frame, Placed("pair", left, Strip(250)));
 
         Assert.True(cam.Project(left.At(0, 0.5f), out var l0, out _));
-        Assert.Equal((byte)((int)(l0 * 160 / 1000f) * 255 / 159), Red(leds, 0));
+        Near((byte)((int)(l0 * 160 / 1000f) * 255 / 159), Red(leds, 0));
         Assert.Equal(0, Red(leds, 2));
     }
 
     [Fact]
-    public async Task Footprint_sampling_reads_a_cell_around_each_projected_led()
+    public async Task Spot_sampling_keeps_the_ramp_ordered_along_the_strip()
     {
-        var leds = await RenderOnce(new DeviceFrame(0, "s", 10), Placed("s", Strip()), footprint: true);
+        var leds = await RenderOnce(new DeviceFrame(0, "s", 10), Placed("s", Strip()));
         for (var i = 1; i < 10; i++)
         {
             Assert.True(Red(leds, i) >= Red(leds, i - 1));

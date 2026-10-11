@@ -78,17 +78,13 @@ public sealed class LightingEngine : IDisposable
     public int FrameIntervalMs { get; set; } = 33;
 
     /// <summary>
-    /// Selects the canvas-to-LED sampling technique. True = LED FOOTPRINT
-    /// SAMPLING: each LED integrates its cell of the device frame (see
-    /// <see cref="SampleLedFootprint"/>), so sparse content - music-reactive
-    /// bars, isolated lit pixels - registers anywhere inside the frame.
-    /// False = POINT SAMPLING: each LED reads the single canvas pixel under
-    /// its mapped point; content that misses those exact pixels leaves the
-    /// device dark. Flip to false to revert to the pre-footprint behaviour.
-    /// Ignored under <see cref="FullFrameSampling"/>, which always takes the
-    /// plain cell mean (<see cref="SampleLedBox"/>).
+    /// Side of the sampling spot at an LED, as a fraction of the canvas width
+    /// (3 pixels at the 160 pixel canvas). An LED reads the plain mean of a spot
+    /// this size centred on its sample position, clamped at the canvas edges and
+    /// never larger than the LED's own cell.
     /// </summary>
-    public bool FootprintSamplingEnabled { get; set; } = true;
+    private const float SpotSideOfCanvasWidth = 3f / 160f;
+
 
     /// <summary>
     /// Every device samples the WHOLE canvas instead of the rect its layout
@@ -1122,10 +1118,8 @@ public sealed class LightingEngine : IDisposable
             // then scaled onto the pixel grid. A stack slot is cut from the
             // unturned rect and turns with the whole frame.
             var fullFrame = FullFrameSampling;
-            // A full-frame device's cell is a slice of the whole canvas, which
-            // SampleLedFootprint's lit-pixel weighting reads wrong; it takes the
-            // plain mean instead. See SampleLedBox for why.
-            var footprint = FootprintSamplingEnabled && !fullFrame;
+            // A full-frame device's cell is a slice of the whole canvas, so it
+            // takes the plain cell mean instead of the spot. See SampleLedBox.
             var rectX = fullFrame ? 0f : dev.X;
             var rectY = fullFrame ? 0f : dev.Y;
             var rectW = fullFrame ? CW : dev.W;
@@ -1193,7 +1187,7 @@ public sealed class LightingEngine : IDisposable
 
             if (scene is not null && scene.Placements.TryGetValue(dev.Id, out var quads))
             {
-                SampleSceneDevice(dev, ledCount, devLedU, devLedV, devLedDisabled, quads, scene.Camera, FootprintSamplingEnabled, kx, ky);
+                SampleSceneDevice(dev, ledCount, devLedU, devLedV, devLedDisabled, quads, scene.Camera, kx, ky);
                 continue;
             }
 
@@ -1244,11 +1238,9 @@ public sealed class LightingEngine : IDisposable
                     var ly = rectY + devLedV[i] * rectH - frameCy;
                     var sx = (frameCx + lx * cos - ly * sin) * kx;
                     var sy = (frameCy + lx * sin + ly * cos) * ky;
-                    var (r, g, b) = footprint
-                        ? SampleLedFootprint(sx - uvHalfW, sy - uvHalfH, sx + uvHalfW, sy + uvHalfH)
-                        : fullFrame
-                            ? SampleLedBox(sx - uvHalfW, sy - uvHalfH, sx + uvHalfW, sy + uvHalfH)
-                            : _sampleCanvas.GetPixel((int)sx, (int)sy);
+                    var (r, g, b) = fullFrame
+                        ? SampleLedBox(sx - uvHalfW, sy - uvHalfH, sx + uvHalfW, sy + uvHalfH)
+                        : SampleLedSpot(sx, sy, uvHalfW, uvHalfH);
                     dev.SetLed(i, r, g, b);
                 }
                 continue;
@@ -1281,11 +1273,9 @@ public sealed class LightingEngine : IDisposable
                 var lx = rectX + rectW * 0.5f + t * rectW - frameCx;
                 var sx = (frameCx + lx * cos - midY * sin) * kx;
                 var sy = (frameCy + lx * sin + midY * cos) * ky;
-                var (r, g, b) = footprint
-                    ? SampleLedFootprint(sx - linHalfW, sy - linHalfH, sx + linHalfW, sy + linHalfH)
-                    : fullFrame
-                        ? SampleLedBox(sx - linHalfW, sy - linHalfH, sx + linHalfW, sy + linHalfH)
-                        : _sampleCanvas.GetPixel((int)sx, (int)sy);
+                var (r, g, b) = fullFrame
+                    ? SampleLedBox(sx - linHalfW, sy - linHalfH, sx + linHalfW, sy + linHalfH)
+                    : SampleLedSpot(sx, sy, linHalfW, linHalfH);
                 dev.SetLed(i, r, g, b);
             }
         }
@@ -1300,7 +1290,7 @@ public sealed class LightingEngine : IDisposable
     private void SampleSceneDevice(
         DeviceFrame dev, int ledCount, float[]? ledU, float[]? ledV, bool[]? disabled,
         Nexus.Service.Lighting.Scene.SceneQuad[] quads, in Nexus.Service.Lighting.Scene.SceneCameraBasis cam,
-        bool footprint, float kx, float ky)
+        float kx, float ky)
     {
         var hasUv = ledU is not null && ledV is not null && ledU.Length == ledCount && ledV.Length == ledCount;
         var runs = quads.Length;
@@ -1381,54 +1371,46 @@ public sealed class LightingEngine : IDisposable
                 }
                 var sx = cx * kx;
                 var sy = cy * ky;
-                var (r, g, b) = footprint
-                    ? SampleLedFootprint(sx - halfW, sy - halfH, sx + halfW, sy + halfH)
-                    : _sampleCanvas.GetPixel((int)sx, (int)sy);
+                var (r, g, b) = SampleLedSpot(sx, sy, halfW, halfH);
                 dev.SetLed(i, r, g, b);
             }
         }
     }
 
     /// <summary>
-    /// LED FOOTPRINT SAMPLING (gated by <see cref="FootprintSamplingEnabled"/>):
-    /// samples the LED's cell of the canvas instead of a single point, so sparse
-    /// content (music-reactive bars, isolated lit pixels) registers wherever it
-    /// lands inside the frame. Samples are weighted by max-channel luminance
-    /// squared: lit pixels dominate dark filler, an all-dark cell stays black,
-    /// and hue is preserved (a per-channel max would mix channels from different
-    /// pixels). Reads every canvas pixel in the cell; cells tile the frame
-    /// (linear) or partition it by LED density (UV), so per-device cost is
-    /// bounded by the frame's canvas-pixel area per rendered frame.
+    /// Colour of one LED: the plain mean, black included, of a small spot of
+    /// canvas pixels centred on the LED's sample position (<paramref name="sx"/>,
+    /// <paramref name="sy"/>, canvas pixels). The spot is
+    /// <see cref="SpotSideOfCanvasWidth"/> of the canvas width on a side, centred
+    /// on the pixel holding the position, and shrinks to the LED's own cell
+    /// (<paramref name="cellHalfW"/>, <paramref name="cellHalfH"/>, half extents
+    /// in canvas pixels) when that is smaller, so dense neighbours do not blur
+    /// together. Clamped at the canvas edges.
     /// </summary>
-    private (byte r, byte g, byte b) SampleLedFootprint(float x0, float y0, float x1, float y1)
+    private (byte r, byte g, byte b) SampleLedSpot(float sx, float sy, float cellHalfW, float cellHalfH)
     {
-        var ix0 = Math.Clamp((int)MathF.Floor(x0), 0, _sampleCanvas.Width - 1);
-        var iy0 = Math.Clamp((int)MathF.Floor(y0), 0, _sampleCanvas.Height - 1);
-        var ix1 = Math.Clamp((int)MathF.Ceiling(x1) - 1, ix0, _sampleCanvas.Width - 1);
-        var iy1 = Math.Clamp((int)MathF.Ceiling(y1) - 1, iy0, _sampleCanvas.Height - 1);
-        long wSum = 0, rSum = 0, gSum = 0, bSum = 0;
+        var spotHalf = Math.Max(0.5f, _sampleCanvas.Width * SpotSideOfCanvasWidth * 0.5f);
+        var hx = Math.Min(cellHalfW, spotHalf);
+        var hy = Math.Min(cellHalfH, spotHalf);
+        var cx = MathF.Floor(sx) + 0.5f;
+        var cy = MathF.Floor(sy) + 0.5f;
+        var ix0 = Math.Clamp((int)MathF.Floor(cx - hx), 0, _sampleCanvas.Width - 1);
+        var iy0 = Math.Clamp((int)MathF.Floor(cy - hy), 0, _sampleCanvas.Height - 1);
+        var ix1 = Math.Clamp((int)MathF.Ceiling(cx + hx) - 1, ix0, _sampleCanvas.Width - 1);
+        var iy1 = Math.Clamp((int)MathF.Ceiling(cy + hy) - 1, iy0, _sampleCanvas.Height - 1);
+        long n = 0, rSum = 0, gSum = 0, bSum = 0;
         for (int py = iy0; py <= iy1; py++)
         {
             for (int px = ix0; px <= ix1; px++)
             {
                 var (r, g, b) = _sampleCanvas.GetPixel(px, py);
-                int m = Math.Max(r, Math.Max(g, b));
-                if (m == 0)
-                {
-                    continue;
-                }
-                long w = m * m;
-                wSum += w;
-                rSum += w * r;
-                gSum += w * g;
-                bSum += w * b;
+                rSum += r;
+                gSum += g;
+                bSum += b;
+                n++;
             }
         }
-        if (wSum == 0)
-        {
-            return (0, 0, 0);
-        }
-        return ((byte)(rSum / wSum), (byte)(gSum / wSum), (byte)(bSum / wSum));
+        return ((byte)(rSum / n), (byte)(gSum / n), (byte)(bSum / n));
     }
 
     /// <summary>
@@ -1438,9 +1420,8 @@ public sealed class LightingEngine : IDisposable
     /// filter over the pattern: a device with LEDs to spare resolves the dark
     /// gaps, and one with too few settles on the pattern's average instead of
     /// aliasing (a 1-LED zone whose point sample would blink at the band rate
-    /// holds a steady mid tone). <see cref="SampleLedFootprint"/>'s lit-pixel
-    /// weighting is wrong here for the opposite reason: it exists to find sparse
-    /// content inside a frame, and a sweep fills the frame.
+    /// holds a steady mid tone). The per-LED spot read does not fit here: a
+    /// sweep fills the frame and the cell is the unit.
     /// </summary>
     private (byte r, byte g, byte b) SampleLedBox(float x0, float y0, float x1, float y1)
     {

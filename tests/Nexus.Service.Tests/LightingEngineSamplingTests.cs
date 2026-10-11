@@ -18,10 +18,9 @@ public class LightingEngineSamplingTests
         public void Dispose() { }
     }
 
-    private static async Task<byte[]> RenderOnce(DeviceFrame device, Action<CanvasBuffer> paint, bool footprintSampling = true, bool fullFrame = false)
+    private static async Task<byte[]> RenderOnce(DeviceFrame device, Action<CanvasBuffer> paint, bool fullFrame = false)
     {
         using var engine = new LightingEngine();
-        engine.FootprintSamplingEnabled = footprintSampling;
         engine.FullFrameSampling = fullFrame;
         engine.UpdateDevices(new[] { device });
         engine.FrameIntervalMs = 10;
@@ -36,69 +35,80 @@ public class LightingEngineSamplingTests
     private static (byte r, byte g, byte b) Led(byte[] leds, int i) => (leds[i * 3], leds[i * 3 + 1], leds[i * 3 + 2]);
 
     // A 250x40 strip turned a quarter clockwise about its centre: the same
-    // 40x250 upright footprint at x 300..340, first LED at the top.
+    // 40x250 upright rect at x 300..340, first LED at the top.
     private static DeviceFrame MakeRam() => new(0, "ram", 10, x: 195, y: 205, w: 250, h: 40, rotation: 90);
 
     [Fact]
-    public async Task LinearStrip_OffCenterContent_LightsAllLeds()
+    public async Task SingleLed_GoesBlackWhenABlackBandCoversItsCentre()
     {
-        // Column at canvas x=49: inside the frame, off the x=51 centerline the
-        // old point sampler read exclusively.
-        var leds = await RenderOnce(MakeRam(), c =>
+        // 1-LED frame maps to canvas rect x=96 y=30 w=16 h=15, centre (104,37).
+        var device = new DeviceFrame(0, "one", 1, x: 600, y: 200, w: 100, h: 100);
+        var leds = await RenderOnce(device, c =>
         {
-            c.Clear();
-            for (int y = 16; y <= 51; y++) { c.SetPixel(49, y, 255, 0, 180); }
+            c.Fill(200, 100, 50);
+            for (int y = 0; y < c.Height; y++)
+                for (int x = 102; x <= 106; x++) { c.SetPixel(x, y, 0, 0, 0); }
         });
-        for (int i = 0; i < 10; i++)
-        {
-            Assert.Equal(((byte)255, (byte)0, (byte)180), Led(leds, i));
-        }
+        Assert.Equal(((byte)0, (byte)0, (byte)0), Led(leds, 0));
     }
 
     [Fact]
-    public async Task LinearStrip_ThinBarBetweenSamplePoints_LightsAdjacentLeds()
+    public async Task SingleLed_LitCentreGivesTheLitColour_EvenWithTheRestOfTheBoxDark()
     {
-        // Rows 37-38 fall between the point-sample rows 35 and 40, so the old
-        // sampler saw nothing; the bar lands in LED 5's and LED 6's cells.
-        var leds = await RenderOnce(MakeRam(), c =>
+        var device = new DeviceFrame(0, "one", 1, x: 600, y: 200, w: 100, h: 100);
+        var leds = await RenderOnce(device, c =>
         {
             c.Clear();
-            for (int x = 0; x < 160; x++) { c.SetPixel(x, 37, 0, 255, 80); c.SetPixel(x, 38, 0, 255, 80); }
+            for (int y = 36; y <= 38; y++)
+                for (int x = 103; x <= 105; x++) { c.SetPixel(x, y, 255, 128, 0); }
         });
-        for (int i = 0; i < 10; i++)
-        {
-            var expected = i is 5 or 6 ? ((byte)0, (byte)255, (byte)80) : ((byte)0, (byte)0, (byte)0);
-            Assert.Equal(expected, Led(leds, i));
-        }
+        Assert.Equal(((byte)255, (byte)128, (byte)0), Led(leds, 0));
     }
 
     [Fact]
-    public async Task Sampling_PrioritizesBrightPixelOverDimFloor()
+    public async Task SingleLed_AveragesTheSpotBlackIncluded()
     {
-        var leds = await RenderOnce(MakeRam(), c =>
+        // Two of the spot's three columns lit at 150: the plain mean is 100.
+        var device = new DeviceFrame(0, "one", 1, x: 600, y: 200, w: 100, h: 100);
+        var leds = await RenderOnce(device, c =>
         {
-            c.Fill(30, 30, 30);
-            c.SetPixel(50, 31, 255, 0, 0);
+            c.Clear();
+            for (int y = 36; y <= 38; y++)
+                for (int x = 104; x <= 105; x++) { c.SetPixel(x, y, 150, 0, 0); }
         });
-        // LED 4's cell contains the red pixel: luminance-squared weighting makes
-        // it dominate the dim floor instead of averaging away.
-        var (r, g, b) = Led(leds, 4);
-        Assert.True(r >= 150, $"red channel dominates (r={r})");
-        Assert.True(g <= 30 && b <= 30, $"floor stays minor (g={g} b={b})");
-        Assert.Equal(((byte)30, (byte)30, (byte)30), Led(leds, 0));
+        Assert.Equal((byte)100, Led(leds, 0).r);
     }
 
     [Fact]
-    public async Task FootprintSamplingOff_RevertsToPointSampling()
+    public async Task DenseStrip_DoesNotBlurBetweenNeighbouringLeds()
     {
-        // Same off-center column that lights 10/10 with footprint sampling:
-        // point sampling reads only the x=51 centerline pixels and misses it.
-        var leds = await RenderOnce(MakeRam(), c =>
+        // 60 LEDs over 250 units (40 canvas px) sit under a pixel apart, so the
+        // cell, not the 3 px spot, bounds the read: a one pixel column lights
+        // its own LEDs at full strength and never a neighbour further away.
+        var strip = new DeviceFrame(0, "dense", 60, x: 300, y: 290, w: 250, h: 20, rotation: 0);
+        var leds = await RenderOnce(strip, c =>
         {
             c.Clear();
-            for (int y = 16; y <= 51; y++) { c.SetPixel(49, y, 255, 0, 180); }
-        }, footprintSampling: false);
-        Assert.All(leds, v => Assert.Equal(0, v));
+            for (int y = 0; y < c.Height; y++) { c.SetPixel(80, y, 255, 255, 255); }
+        });
+        var lit = new List<int>();
+        for (int i = 0; i < 60; i++) { if (Led(leds, i).r > 0) lit.Add(i); }
+        Assert.NotEmpty(lit);
+        Assert.True(lit.Count <= 2, $"lit LEDs: {string.Join(",", lit)}");
+        Assert.All(lit, i => Assert.Equal((byte)255, Led(leds, i).r));
+    }
+
+    [Fact]
+    public async Task Spot_ClampsAtTheCanvasEdge()
+    {
+        // A 1-LED frame in the top-left corner reads only in-canvas pixels.
+        var device = new DeviceFrame(0, "corner", 1, x: 0, y: 0, w: 4, h: 4);
+        var leds = await RenderOnce(device, c => c.Fill(90, 90, 90));
+        Assert.Equal(((byte)90, (byte)90, (byte)90), Led(leds, 0));
+
+        var far = new DeviceFrame(0, "far", 1, x: 996, y: 596, w: 4, h: 4);
+        var farLeds = await RenderOnce(far, c => c.Fill(90, 90, 90));
+        Assert.Equal(((byte)90, (byte)90, (byte)90), Led(farLeds, 0));
     }
 
     [Fact]
@@ -111,7 +121,8 @@ public class LightingEngineSamplingTests
         var leds = await RenderOnce(strip, c =>
         {
             c.Clear();
-            c.SetPixel(91, 55, 0, 200, 255);
+            for (int y = 54; y <= 56; y++)
+                for (int x = 90; x <= 92; x++) { c.SetPixel(x, y, 0, 200, 255); }
         });
         Assert.Equal(((byte)0, (byte)0, (byte)0), Led(leds, 0));
         Assert.Equal(((byte)0, (byte)200, (byte)255), Led(leds, 1));
@@ -133,7 +144,8 @@ public class LightingEngineSamplingTests
         var leds = await RenderOnce(device, c =>
         {
             c.Clear();
-            for (int y = 16; y <= 51; y++) { c.SetPixel(49, y, 255, 0, 180); }
+            for (int y = 16; y <= 51; y++)
+                for (int x = 49; x <= 53; x++) { c.SetPixel(x, y, 255, 0, 180); }
         });
         Assert.Equal(((byte)0, (byte)0, (byte)0), Led(leds, 3));
         Assert.Equal(((byte)255, (byte)0, (byte)180), Led(leds, 2));
@@ -157,12 +169,13 @@ public class LightingEngineSamplingTests
         device.LedU = u;
         device.LedV = v;
 
-        // Pixel at (37,52): 1px off LED 8's exact point (36,51), inside its
-        // cell and no other LED's.
+        // The 3x3 spot around LED 8's point (36,51), inside its cell and no
+        // other LED's.
         var leds = await RenderOnce(device, c =>
         {
             c.Clear();
-            c.SetPixel(37, 52, 0, 255, 0);
+            for (int y = 50; y <= 52; y++)
+                for (int x = 35; x <= 37; x++) { c.SetPixel(x, y, 0, 255, 0); }
         });
         Assert.Equal(((byte)0, (byte)255, (byte)0), Led(leds, 8));
         for (int i = 0; i < 24; i++)
@@ -204,8 +217,7 @@ public class LightingEngineSamplingTests
     {
         // Ten LEDs over the whole canvas width sit a pitch apart that is wider
         // than the unlit gap between these bands, so a cell always overlaps a
-        // band. SampleLedFootprint drops black pixels and weights the rest by
-        // max-channel squared, which would hand every LED a fully lit red; the
+        // band. a lit-pixel weighted read would hand every LED a fully lit red; the
         // plain cell mean keeps the ones sitting over mostly-gap dark.
         var device = new DeviceFrame(0, "strip", 10, x: 20, y: 20, w: 100, h: 20);
         void Bands(CanvasBuffer c)
@@ -225,7 +237,7 @@ public class LightingEngineSamplingTests
         // same every frame. The two end LEDs clamp against the canvas edge onto
         // a half cell - the first wholly over a band, the last wholly over a
         // gap - which is what pins the mapping: read over the device's own
-        // 100-unit rect instead, or through SampleLedFootprint, and none of
+        // 100-unit rect instead, or through a lit-weighted read, and none of
         // these numbers survive (the weighted read returns 255 throughout,
         // because every cell touches a band).
         var reds = new byte[10];
@@ -272,18 +284,4 @@ public class LightingEngineSamplingTests
         Assert.Contains(reds, r => r == 255);
     }
 
-    [Fact]
-    public async Task SingleLed_IntegratesWholeFrame()
-    {
-        // 1-LED frame maps to canvas rect x=96 y=30 w=16 h=15; a single lit
-        // pixel near the corner is far from the centre point the old sampler
-        // read, and full-coverage cell reads must still catch it.
-        var device = new DeviceFrame(0, "one", 1, x: 600, y: 200, w: 100, h: 100);
-        var leds = await RenderOnce(device, c =>
-        {
-            c.Clear();
-            c.SetPixel(97, 31, 255, 128, 0);
-        });
-        Assert.Equal(((byte)255, (byte)128, (byte)0), Led(leds, 0));
-    }
 }
