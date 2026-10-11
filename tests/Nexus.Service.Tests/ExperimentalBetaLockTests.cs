@@ -25,7 +25,7 @@ public class ExperimentalBetaLockTests : IDisposable
     [InlineData("lianli")]
     [InlineData("lianli2")]
     [InlineData("corsair")]
-    [InlineData("asus-ryujin-lcd")]
+    [InlineData("corsair-link-lcd")]
     public void RequiresBeta_ExperimentalHandlerOnStableBuild_IsTrue(string handlerId)
     {
         Assert.True(DeviceControlPolicy.RequiresBeta(handlerId));
@@ -36,6 +36,7 @@ public class ExperimentalBetaLockTests : IDisposable
     [InlineData("nollie")]
     [InlineData("nzxt-kraken")]
     [InlineData("smbus-dram")]
+    [InlineData("asus-ryujin-lcd")]
     public void RequiresBeta_FirstPartyOrStableHandler_IsFalse(string handlerId)
     {
         Assert.False(DeviceControlPolicy.RequiresBeta(handlerId));
