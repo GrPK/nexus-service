@@ -2117,6 +2117,88 @@ public class Slv3HubTests
     }
 
     [Fact]
+    public void A_busy_spell_past_the_expiry_keeps_the_device_list()
+    {
+        var clock = new ManualClock();
+        var (hub, net, _, rx) = CreateConnectedHub(clock.NowMs);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac });
+        Assert.True(hub.DriveTick());
+
+        rx.BusyReads = true;
+        for (var i = 0; i < 600; i++)
+        {
+            clock.AdvanceMs(500);
+            Assert.True(hub.PollTick());
+        }
+        Assert.True(Assert.Single(hub.State.Fans).Stale);
+
+        rx.BusyReads = false;
+        Assert.True(hub.PollTick());
+        Assert.False(Assert.Single(hub.State.Fans).Stale);
+    }
+
+    [Fact]
+    public void A_chain_absent_after_a_busy_spell_expires_on_answered_time_only()
+    {
+        var clock = new ManualClock();
+        var (hub, net, _, rx) = CreateConnectedHub(clock.NowMs);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac });
+        Assert.True(hub.DriveTick());
+
+        rx.BusyReads = true;
+        clock.AdvanceMs(500);
+        Assert.True(hub.PollTick());
+        clock.AdvanceMs(60_000);
+        Assert.True(hub.PollTick());
+        Assert.Single(hub.State.Fans);
+
+        rx.BusyReads = false;
+        net.Fans.Clear();
+        clock.AdvanceMs(500);
+        Assert.True(hub.PollTick());
+        clock.AdvanceMs(28_000);
+        Assert.True(hub.PollTick());
+        Assert.Single(hub.State.Fans);
+
+        clock.AdvanceMs(2_000);
+        Assert.True(hub.PollTick());
+        Assert.Empty(hub.State.Fans);
+    }
+
+    [Fact]
+    public void A_busy_spell_repeats_a_pwm_target_only_every_few_seconds()
+    {
+        var clock = new ManualClock();
+        var (hub, net, tx, rx) = CreateConnectedHub(clock.NowMs);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1 });
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.DriveTick());
+
+        rx.BusyReads = true;
+        Assert.True(hub.DriveTick());
+        tx.SentFrames.Clear();
+        Assert.True(hub.SetPortDuty(Convert.ToHexString(FanMac), 0, 50));
+        for (var i = 0; i < 4; i++)
+        {
+            clock.AdvanceMs(1_000);
+            Assert.True(hub.DriveTick());
+        }
+        Assert.Equal(1, CountBindFrames(tx));
+
+        clock.AdvanceMs(2_000);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(2, CountBindFrames(tx));
+
+        Assert.True(hub.SetPortDuty(Convert.ToHexString(FanMac), 0, 80));
+        Assert.True(hub.DriveTick());
+        Assert.Equal(3, CountBindFrames(tx));
+
+        rx.BusyReads = false;
+        Ticks(hub, 3);
+        Assert.Equal(3, CountBindFrames(tx));
+    }
+
+    [Fact]
     public void A_chain_unseen_through_a_busy_spell_is_reported_stale()
     {
         var clock = new ManualClock();
@@ -2509,6 +2591,58 @@ public class Slv3HubTests
         Assert.True(hub.DriveTick());
         Assert.True(CountBindFrames(tx) > settled);
     }
+
+    [Fact]
+    public void BindingChanged_tracks_master_slot_and_channel_only()
+    {
+        var master = Convert.FromHexString("AABBCCDDEEFF");
+        var bound = Record(master, rxType: 3, channel: 8);
+
+        Assert.False(Slv3Hub.BindingChanged(bound, Record(master, rxType: 3, channel: 8, fanCount: 1)));
+        Assert.True(Slv3Hub.BindingChanged(bound, Record(master, rxType: 1, channel: 8)));
+        Assert.True(Slv3Hub.BindingChanged(bound, Record(master, rxType: 3, channel: 0)));
+        Assert.True(Slv3Hub.BindingChanged(bound, Record(new byte[6], rxType: 3, channel: 8)));
+    }
+
+    [Fact]
+    public void DescribeBinding_reports_bound_only_for_our_master_on_a_valid_slot()
+    {
+        var master = Convert.FromHexString("AABBCCDDEEFF");
+
+        Assert.Equal("master AABBCCDDEEFF slot 3 ch 8 bound",
+            Slv3Hub.DescribeBinding(Record(master, rxType: 3, channel: 8), master));
+        Assert.Equal("master AABBCCDDEEFF slot 20 ch 8 unbound",
+            Slv3Hub.DescribeBinding(Record(master, rxType: 20, channel: 8), master));
+        Assert.Equal("master 000000000000 slot 0 ch 8 unbound",
+            Slv3Hub.DescribeBinding(Record(new byte[6], rxType: 0, channel: 8), master));
+    }
+
+    [Fact]
+    public void TraceBinding_rate_limits_a_flapping_chain_and_reports_its_current_state()
+    {
+        var (hub, _, _, _) = CreateConnectedHub();
+        var master = Convert.FromHexString("AABBCCDDEEFF");
+        var slot3 = Record(master, rxType: 3, channel: 8);
+        var slot1 = Record(master, rxType: 1, channel: 8);
+        var raw = new byte[Slv3Protocol.RecordLength];
+        const long Interval = Slv3Hub.BindingLogIntervalMs;
+
+        Assert.Null(hub.TraceBindingLocked("K", slot3, slot3, raw, 0, nowMs: 0));
+        Assert.Contains("slot 3 ch 8", hub.TraceBindingLocked("K", slot3, slot1, raw, 0, nowMs: 0));
+        Assert.Null(hub.TraceBindingLocked("K", slot1, slot3, raw, 0, nowMs: 500));
+        Assert.Null(hub.TraceBindingLocked("K", slot3, slot1, raw, 0, nowMs: 1000));
+        Assert.Null(hub.TraceBindingLocked("K", slot1, slot1, raw, 0, nowMs: Interval - 1));
+
+        var settled = hub.TraceBindingLocked("K", slot1, slot1, raw, 0, nowMs: Interval);
+        Assert.Contains("now at master AABBCCDDEEFF slot 1 ch 8", settled);
+        Assert.Contains("after 2 unlogged change(s)", settled);
+        Assert.Null(hub.TraceBindingLocked("K", slot1, slot1, raw, 0, nowMs: 2 * Interval));
+        Assert.NotNull(hub.TraceBindingLocked("K", slot1, slot3, raw, 0, nowMs: 2 * Interval));
+    }
+
+    private static Slv3DeviceRecord Record(byte[] masterMac, byte rxType, byte channel, int fanCount = 3) =>
+        new(FanMac, masterMac, channel, rxType, DevType: 0, fanCount, RightAttach: false,
+            new byte[4], new byte[4], new int[4], new int[4], CmdSeq: 0);
 
     // Bind/PWM frames on the wire: a chunkSeq-0 USB frame carrying RF_Bind.
     // First USB chunk of every RF payload with this command; payload byte k sits at frame [4 + k].

@@ -34,6 +34,11 @@ public static class TryxPanoramaProtocol
     public const int ProductIdPanoramaRkWb2 = 0x10A1;
     public const int ProductIdPanoramaRkV2 = 0x10B1;
 
+    /// <summary>True for the models whose pump head carries the software-driven small fan: the
+    /// ones Kanali gives a cooler service (PANO 1011/10B1, PAWB 1031/10A1). SE has none.</summary>
+    public static bool HasCoolerFan(int pid) =>
+        pid is ProductIdPanoramaRk or ProductIdPanoramaRkV2 or ProductIdPanoramaRkWb or ProductIdPanoramaRkWb2;
+
     public static readonly int[] KnownProductIds = { ProductIdPanorama };
 
     // Incremented atomically for every frame sent to the device.

@@ -38,6 +38,7 @@ public sealed class CompositeFanControlProvider : IFanControlProvider, ICoolingP
     private readonly PluginProviderRegistry _registry;
     private readonly IConfigStore? _store;
     private readonly ConditionalWeakTable<IFanControlProvider, SourceGate> _gates = new();
+    private readonly PumpHeaderMatcher _pumpHeader = new();
 
     /// <summary>How long a hub or USB cooler may take to answer before callers stop waiting on it.</summary>
     internal TimeSpan CallBudget { get; set; } = TimeSpan.FromSeconds(5);
@@ -99,10 +100,22 @@ public sealed class CompositeFanControlProvider : IFanControlProvider, ICoolingP
         var combined = new List<FanChannel>(_motherboard.GetFanChannels());
         foreach (var source in GatedSources())
             combined.AddRange(Call(source, "a fan read", source.GetFanChannels, Array.Empty<FanChannel>()));
+        _pumpHeader.Label(combined, PumpTachRpm());
         foreach (var ch in combined)
             InferPumpKind(ch);
         MarkAioDevices(combined);
         return combined;
+    }
+
+    // A cooler that reads its pump's tach over USB while a motherboard header drives the pump
+    // (Tryx): the header whose tach tracks it is labeled "/ Pump" before the inference below runs.
+    private int? PumpTachRpm()
+    {
+        foreach (var e in Extras())
+        {
+            if (e.Provider is IPumpTachSource tach && tach.PumpRpm is { } rpm) return rpm;
+        }
+        return null;
     }
 
     // A generic provider (motherboard) surfaces an AIO pump head as an ordinary

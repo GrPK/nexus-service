@@ -240,7 +240,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #elif MACOS
         services.AddSingleton<MacFanControlProvider>();
@@ -271,7 +273,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #elif LINUX
         // hwmon (motherboard + AMD GPU via amdgpu) + liquidctl USB coolers
@@ -310,7 +314,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #else
         services.AddSingleton<IFanControlProvider>(sp => new CompositeFanControlProvider(
@@ -340,7 +346,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #endif
         services.AddSingleton<Np50CoolingProvider>();
@@ -1563,6 +1571,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Sensors.ISensorProvider>(),
                 sp.GetRequiredService<Nexus.Service.Fps.IFpsProvider>(),
                 sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>())));
+        services.AddSingleton<Nexus.Service.Cooling.TryxCoolingProvider>();
         services.AddSingleton<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHeartbeatWorker>();
         services.AddHostedService(sp =>
             sp.GetRequiredService<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHeartbeatWorker>());

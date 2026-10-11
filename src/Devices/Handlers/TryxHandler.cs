@@ -5,10 +5,9 @@ using Nexus.Service.Peripherals.Tryx.Panorama;
 namespace Nexus.Service.Devices.Handlers;
 
 /// <summary>Tryx Panorama AIO screen. RK firmware enumerates under VID 391A
-/// across the Panorama family (base "RK PANO", SE "PASE", WaterBlock, v2);
-/// control over its raw-USB-bulk interface is not yet implemented, so this
-/// handler reports presence, plus the firmware version the connected panel
-/// sent in its device_info reply.</summary>
+/// across the Panorama family (base "RK PANO", SE "PASE", WaterBlock, v2).
+/// TryxPanoramaHub drives the panel; this handler reports its presence and
+/// the firmware version the connected panel sent in its device_info reply.</summary>
 public sealed class TryxHandler : IDeviceHandler
 {
     private readonly TryxPanoramaHub _hub;
