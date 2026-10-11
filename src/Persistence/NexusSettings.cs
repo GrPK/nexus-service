@@ -1318,6 +1318,8 @@ public sealed class DevicesSettings
     /// way to read it back, so the last write is remembered here to seed the settings UI.
     /// </summary>
     public Dictionary<string, KrakenFirmwareLighting> KrakenFirmwareLighting { get; set; } = new();
+    /// <summary>Put the NZXT Kraken LCD dark while the PC is locked and restore its backlight on unlock. The service drives one Kraken, so this is not keyed per device.</summary>
+    public bool KrakenLcdSleepWhenLocked { get; set; } = true;
     /// <summary>LEGACY (pre-v6, per-card key). Read only by the one-time schema migration that moves entries into <see cref="DeviceLedOverrides"/>; empty afterward. Do not write.</summary>
     public Dictionary<string, List<LedPositionOverride>> LedMapOverrides { get; set; } = new();
     /// <summary>LEGACY (pre-v6, per-card key). Migration source for <see cref="DeviceAspectRatios"/>; empty afterward. Do not write.</summary>

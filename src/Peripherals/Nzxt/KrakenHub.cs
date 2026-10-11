@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Nexus.Service.Lighting;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Peripherals.PixelFormats;
 using Nexus.Service.Platform;
@@ -69,6 +70,91 @@ public sealed class KrakenHub : IDisposable
     public KrakenHub(IKrakenLcdTransportFactory? lcdFactory = null)
     {
         _lcdFactory = lcdFactory;
+    }
+
+    // Session lock. The backlight lives on the cooler, so the user's value is held here
+    // while it is dark and never written into the snapshot or the settings. Guarded by _lock.
+    private const string LockKey = "lcd";
+    private LcdLockSleepSet? _lockSleep;
+    private Func<bool>? _lockSetting;
+    private bool _lockDimmed;
+    private bool _lockRestorePending;
+    private int _lockSavedBrightness;
+
+    /// <summary>True while the lock holds the backlight at zero. Streamed frames are dropped meanwhile.</summary>
+    public bool LockDimmed
+    {
+        get { lock (_lock) { return _lockDimmed; } }
+    }
+
+    /// <summary>Wires the session lock. <paramref name="sleepWhenLocked"/> is read once per lock.</summary>
+    public void BindLockSleep(LcdLockState state, Func<bool> sleepWhenLocked)
+    {
+        _lockSleep = new LcdLockSleepSet(state);
+        _lockSetting = sleepWhenLocked;
+        state.Changed += OnLockChanged;
+    }
+
+    private void OnLockChanged(bool locked)
+    {
+        if (_lockSleep is null || _lockSetting is null)
+        {
+            return;
+        }
+        if (locked)
+        {
+            if (_lockSleep.IsSleeping(LockKey, _lockSetting))
+            {
+                EnterLockSleep();
+            }
+        }
+        else
+        {
+            _lockSleep.Drain();
+            ExitLockSleep();
+        }
+    }
+
+    // Same lock order as SetLcdBacklight: transfer lock first, so a rotation re-upload in
+    // flight finishes before the backlight moves.
+    private void EnterLockSleep()
+    {
+        lock (_lcdTransferLock)
+        lock (_lock)
+        {
+            // Not connected yet: Connect applies the lock itself, from the same decision.
+            if (_lockDimmed || !_isConnected || _device == null || !_model.HasLcd)
+            {
+                return;
+            }
+            _lockSavedBrightness = _snapshot.LcdBrightness;
+            _lockDimmed = true;
+            WriteLocked(KrakenProtocol.EncodeSetBacklight(0, _snapshot.LcdOrientationQuarterTurns));
+            ServiceLog.Info($"[lcd-lock] kraken LCD sleeping (backlight {_lockSavedBrightness}% kept)");
+        }
+    }
+
+    private void ExitLockSleep()
+    {
+        lock (_lcdTransferLock)
+        lock (_lock)
+        {
+            if (!_lockDimmed)
+            {
+                return;
+            }
+            _lockDimmed = false;
+            if (_isConnected && _device != null)
+            {
+                WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns));
+                ServiceLog.Info($"[lcd-lock] kraken LCD waking to {_lockSavedBrightness}%");
+            }
+            else
+            {
+                // The cooler stays dark and its read-back will say zero; Connect restores the real value.
+                _lockRestorePending = true;
+            }
+        }
     }
 
     public const string DeviceId = "nzxt-kraken";
@@ -234,10 +320,33 @@ public sealed class KrakenHub : IDisposable
                     ?? KrakenDisplayMode.Liquid;
             }
 
+            // A cooler that stayed dark across a reconnect reads back zero, which is not the
+            // user's value; the one held here is.
+            var sleepNow = _model.HasLcd && _lockSleep is not null && _lockSetting is not null
+                && _lockSleep.IsSleeping(LockKey, _lockSetting);
+            var restore = _lockRestorePending || (_lockDimmed && !sleepNow);
+            if (_lockDimmed || restore)
+            {
+                brightness = _lockSavedBrightness;
+            }
+            else if (sleepNow)
+            {
+                _lockSavedBrightness = brightness;
+            }
+            _lockDimmed = sleepNow;
+
             _snapshot = new KrakenSnapshot(
                 0, 0, 0, 0, 0,
                 fw?.ToString() ?? "",
                 brightness, orientation, mode, channels);
+            if (_model.HasLcd && (sleepNow || restore))
+            {
+                WriteLocked(KrakenProtocol.EncodeSetBacklight(sleepNow ? 0 : brightness, orientation));
+                ServiceLog.Info(sleepNow
+                    ? "[lcd-lock] kraken LCD attached while locked; staying dark"
+                    : $"[lcd-lock] kraken LCD restored to {brightness}% after reconnect");
+            }
+            _lockRestorePending = false;
 
             if (_model.HasLcd)
             {
@@ -393,12 +502,20 @@ public sealed class KrakenHub : IDisposable
     /// </summary>
     public bool SetLcdBacklight(int brightnessPercent, int orientationQuarterTurns)
     {
+        // Taken before the transfer lock; the flag only flips under both, so a stale read at
+        // worst sends one command that the lock path then corrects.
         var report = KrakenProtocol.EncodeSetBacklight(brightnessPercent, orientationQuarterTurns);
         // A rotation re-uploads the stored frame, which is a full bulk transfer, so this
         // takes the transfer lock first - same order as PushStreamFrame, never the reverse.
         lock (_lcdTransferLock)
         lock (_lock)
         {
+            // While the lock holds the glass dark a new level is remembered, not shown.
+            if (_lockDimmed)
+            {
+                _lockSavedBrightness = Math.Clamp(brightnessPercent, 0, 100);
+                report = KrakenProtocol.EncodeSetBacklight(0, orientationQuarterTurns);
+            }
             if (_device == null || !WriteLocked(report))
             {
                 return false;
@@ -640,6 +757,12 @@ public sealed class KrakenHub : IDisposable
         }
         lock (_lcdTransferLock)
         {
+            // Every pushed frame re-activates bucket mode on the cooler, so frames stop while
+            // the lock holds the glass dark. Reported as taken: a dropped frame is not a fault.
+            if (LockDimmed)
+            {
+                return true;
+            }
             int target;
             int encoded;
             byte format;

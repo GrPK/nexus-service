@@ -651,6 +651,15 @@ public static class NexusServiceCollectionExtensions
         return services;
     }
 
+    private static Nexus.Service.Peripherals.Nzxt.KrakenHub BindKrakenLock(IServiceProvider sp, Nexus.Service.Peripherals.Nzxt.KrakenHub hub)
+    {
+        var store = sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>();
+        hub.BindLockSleep(
+            sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>(),
+            () => store.Load().Devices.KrakenLcdSleepWhenLocked);
+        return hub;
+    }
+
     public static IServiceCollection AddNexusWebcam(this IServiceCollection services)
     {
         // Linux writes MJPEG passthrough into v4l2loopback (optional env
@@ -1095,11 +1104,11 @@ public static class NexusServiceCollectionExtensions
 #if WINDOWS
         services.AddSingleton<Nexus.Service.Peripherals.Nzxt.IKrakenLcdTransportFactory,
                               Nexus.Service.Peripherals.Nzxt.WindowsKrakenLcdTransportFactory>();
-        services.AddSingleton(sp => new Nexus.Service.Peripherals.Nzxt.KrakenHub(
-            sp.GetRequiredService<Nexus.Service.Peripherals.Nzxt.IKrakenLcdTransportFactory>()));
+        services.AddSingleton(sp => BindKrakenLock(sp, new Nexus.Service.Peripherals.Nzxt.KrakenHub(
+            sp.GetRequiredService<Nexus.Service.Peripherals.Nzxt.IKrakenLcdTransportFactory>())));
 #else
         // No bulk pipe off Windows: HID control still works, LCD upload reports unavailable.
-        services.AddSingleton(_ => new Nexus.Service.Peripherals.Nzxt.KrakenHub(null));
+        services.AddSingleton(sp => BindKrakenLock(sp, new Nexus.Service.Peripherals.Nzxt.KrakenHub(null)));
 #endif
         services.AddSingleton<Nexus.Service.Cooling.KrakenCoolingProvider>();
         services.AddSingleton<Nexus.Service.Lighting.KrakenLightingDeviceProvider>();
