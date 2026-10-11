@@ -49,10 +49,18 @@ public sealed class LcdLockState
                 _epoch++;
             }
         }
-        try { Changed?.Invoke(locked); }
-        catch (Exception ex)
+        var handlers = Changed;
+        if (handlers is null)
         {
-            ServiceLog.Info($"[lcd-lock] subscriber failed on {(locked ? "lock" : "unlock")}: {ex.GetType().Name}: {ex.Message}");
+            return;
+        }
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try { ((Action<bool>)handler)(locked); }
+            catch (Exception ex)
+            {
+                ServiceLog.Info($"[lcd-lock] subscriber failed on {(locked ? "lock" : "unlock")}: {ex.GetType().Name}: {ex.Message}");
+            }
         }
     }
 }

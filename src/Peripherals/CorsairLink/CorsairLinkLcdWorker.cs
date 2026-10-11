@@ -28,6 +28,8 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
     private byte _appliedRotation = 255;
     private int _appliedGeneration = -1;
     private bool _lockSlept;
+    private long _lastDarkSentMs;
+    private const long DarkReassertMs = 2000;
 
     public CorsairLinkLcdWorker(
         CorsairLinkLcd lcd,
@@ -65,34 +67,14 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
 
                 // A reconnect re-opens the panel with firmware defaults, so the sentinels
                 // go back to "nothing applied yet" and the block below re-pushes.
-                var generation = _lcd.AttachGeneration;
-                if (generation != _appliedGeneration)
-                {
-                    _appliedGeneration = generation;
-                    _appliedBrightness = 255;
-                    _appliedRotation = 255;
-                }
+                SyncGeneration();
 
                 var s = _store.Load().Devices.Corsair;
                 _lcd.ShowsStoredImage = s.LcdDeviceMediaId is not null;
 
                 // Brightness and rotation are feature reports on their own channel, so they
                 // apply while a panel session streams.
-                // The lock override lives here, not in the stored setting: an attach or
-                // re-open resets the sentinels above, so the dark value wins over the stored
-                // one on every path, and unlock simply stops overriding.
-                var sleeping = _lcd.IsLockSleeping(() => s.SleepWhenLocked);
-                var brightness = sleeping ? (byte)0 : s.LcdBrightness;
-                if (sleeping != _lockSlept)
-                {
-                    _lockSlept = sleeping;
-                    ServiceLog.Info($"[lcd-lock] corsair LCD {(sleeping ? "sleeping" : "waking")}");
-                }
-                if (brightness != _appliedBrightness)
-                {
-                    _lcd.SetBrightness(brightness);
-                    _appliedBrightness = brightness;
-                }
+                SyncBrightness(s);
 
                 if (s.LcdRotation != _appliedRotation)
                 {
@@ -138,6 +120,42 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
                 ServiceLog.Error($"[corsair-lcd] worker error: {ex.Message}");
                 await Task.Delay(1000, ct).ConfigureAwait(false);
             }
+        }
+    }
+
+    internal void SyncGeneration()
+    {
+        var generation = _lcd.AttachGeneration;
+        if (generation != _appliedGeneration)
+        {
+            _appliedGeneration = generation;
+            _appliedBrightness = 255;
+            _appliedRotation = 255;
+        }
+    }
+
+    /// <summary>Pushes the brightness the glass should show now: dark while the lock holds it, else the stored value.</summary>
+    internal void SyncBrightness(CorsairSettings s)
+    {
+        // The lock override lives here, not in the stored setting: an attach or
+        // re-open resets the sentinels above, so the dark value wins over the stored
+        // one on every path, and unlock simply stops overriding.
+        var sleeping = _lcd.IsLockSleeping(() => s.SleepWhenLocked);
+        var brightness = sleeping ? (byte)0 : s.LcdBrightness;
+        if (sleeping != _lockSlept)
+        {
+            _lockSlept = sleeping;
+            ServiceLog.Info($"[lcd-lock] corsair LCD {(sleeping ? "sleeping" : "waking")}");
+        }
+        // Frames keep flowing while locked (the firmware drops to its own screen if
+        // they stop), and whether the first frame after a host-mode change moves the
+        // backlight is unmeasured, so the dark value is also re-sent at a slow cadence.
+        var reassert = sleeping && Environment.TickCount64 - _lastDarkSentMs >= DarkReassertMs;
+        if (brightness != _appliedBrightness || reassert)
+        {
+            _lcd.SetBrightness(brightness);
+            _appliedBrightness = brightness;
+            _lastDarkSentMs = Environment.TickCount64;
         }
     }
 
