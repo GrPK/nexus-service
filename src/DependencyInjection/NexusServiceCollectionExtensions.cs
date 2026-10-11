@@ -1071,7 +1071,8 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdHub>(sp =>
             new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdHub(
                 sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.ISlv3LcdDiscovery>(),
-                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdTransport(port.PortName)));
+                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdTransport(port.PortName),
+                sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>()));
         services.AddHostedService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdConnectionWorker>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdMediaLibrary>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdSensorReader>();

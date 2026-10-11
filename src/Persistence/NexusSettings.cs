@@ -1780,6 +1780,8 @@ public sealed class LianLiWirelessScreenSettings
     public string? MediaId { get; set; }
     /// <summary>0-100.</summary>
     public byte Brightness { get; set; } = 100;
+    /// <summary>Put the screen dark while the PC is locked and restore <see cref="Brightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     /// <summary>0 = 0 deg, 1 = 90 deg, 2 = 180 deg, 3 = 270 deg.</summary>
     public byte Rotation { get; set; }
     /// <summary>"cpuLoad" | "cpuTemp" | "gpuLoad" | "gpuTemp" | "memoryUsage" | "vramUsage" | "fanRpm". Used when ContentType is "sensor".</summary>

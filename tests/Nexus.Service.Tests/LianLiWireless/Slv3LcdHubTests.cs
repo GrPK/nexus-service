@@ -1,6 +1,9 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
+using Nexus.Service.Lighting;
 using Nexus.Service.Peripherals.LianLiWireless;
+using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Tests.LianLiWireless;
 
@@ -140,6 +143,93 @@ public class Slv3LcdHubTests
         hub.Dispose();
 
         Assert.True(factory.Opened["SER1"].Disposed);
+    }
+
+    // ---- Sleep when locked -------------------------------------------------
+
+    private static (Slv3LcdHub Hub, FakeTransportFactory Factory, LcdLockState Lock) LockHub()
+    {
+        var discovery = new FakeDiscovery();
+        discovery.Ports.Add(new Slv3LcdPortInfo { PortName = "path-1", Serial = "SER1" });
+        var factory = new FakeTransportFactory();
+        var state = new LcdLockState();
+        return (new Slv3LcdHub(discovery, factory.Create, state), factory, state);
+    }
+
+    private sealed class LoopState
+    {
+        public int Applied = -1;
+        public bool Slept;
+    }
+
+    private static void Pass(Slv3LcdHub hub, LianLiWirelessScreenSettings settings, LoopState loop) =>
+        hub.SyncBrightness("SER1", settings, ref loop.Applied, ref loop.Slept);
+
+    [Fact]
+    public void Lock_sets_brightness_zero_and_unlock_restores_the_stored_value()
+    {
+        var (hub, factory, state) = LockHub();
+        var settings = new LianLiWirelessScreenSettings { Brightness = 65 };
+        var loop = new LoopState();
+        Pass(hub, settings, loop);
+
+        state.Set(true);
+        Pass(hub, settings, loop);
+        state.Set(false);
+        Pass(hub, settings, loop);
+
+        Assert.Equal(new byte[] { 65, 0, 65 }, factory.Opened["SER1"].Brightness);
+        Assert.Equal(65, settings.Brightness);
+    }
+
+    [Fact]
+    public void A_screen_that_attaches_while_locked_gets_the_dark_value_first()
+    {
+        var (hub, factory, state) = LockHub();
+        state.Set(true);
+
+        Pass(hub, new LianLiWirelessScreenSettings { Brightness = 65 }, new LoopState());
+
+        Assert.Equal(new byte[] { 0 }, factory.Opened["SER1"].Brightness);
+    }
+
+    [Fact]
+    public void A_reattach_while_locked_applies_dark_not_the_stored_value()
+    {
+        var (hub, factory, state) = LockHub();
+        var settings = new LianLiWirelessScreenSettings { Brightness = 65 };
+        Pass(hub, settings, new LoopState());
+        state.Set(true);
+
+        // A new screen loop starts with the sentinel, as after a detach and attach.
+        Pass(hub, settings, new LoopState());
+
+        Assert.Equal(0, factory.Opened["SER1"].Brightness[^1]);
+        Assert.DoesNotContain(factory.Opened["SER1"].Brightness.Skip(1), b => b == 65);
+    }
+
+    [Fact]
+    public void The_setting_off_keeps_the_screen_lit_and_unlock_wakes_a_screen_whose_setting_was_turned_off_mid_lock()
+    {
+        var (hub, factory, state) = LockHub();
+        var off = new LianLiWirelessScreenSettings { Brightness = 65, SleepWhenLocked = false };
+        var offLoop = new LoopState();
+        state.Set(true);
+        Pass(hub, off, offLoop);
+        Assert.Equal(new byte[] { 65 }, factory.Opened["SER1"].Brightness);
+        state.Set(false);
+
+        var (hub2, factory2, state2) = LockHub();
+        var settings = new LianLiWirelessScreenSettings { Brightness = 65 };
+        var loop = new LoopState();
+        state2.Set(true);
+        Pass(hub2, settings, loop);
+        settings.SleepWhenLocked = false;
+        Pass(hub2, settings, loop);
+        state2.Set(false);
+        Pass(hub2, settings, loop);
+
+        Assert.Equal(new byte[] { 0, 65 }, factory2.Opened["SER1"].Brightness);
     }
 
     private static (Slv3LcdHub Hub, FakeTransportFactory Factory, FakeDiscovery Discovery) CreateHub()
