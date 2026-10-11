@@ -80,9 +80,18 @@ public class TryxPanoramaHubTests
             var tag = (field << 3) | 2;
             return [(byte)((tag & 0x7F) | 0x80), (byte)(tag >> 7), (byte)body.Length, .. body];
         }
+        // When set, a write signals WriteEntered and then waits for it, the way a panel that has not
+        // drained its endpoint yet holds the write - and with it the hub's tx gate.
+        public ManualResetEventSlim? WriteGate { get; set; }
+        public ManualResetEventSlim WriteEntered { get; } = new(false);
         public void Write(ReadOnlySpan<byte> data)
         {
             Writes.Add(data.ToArray());
+            if (WriteGate is { } gate)
+            {
+                WriteEntered.Set();
+                gate.Wait(TimeSpan.FromSeconds(10));
+            }
             if (NextFileList is { } list && data.SequenceEqual(TryxRkProtocol.BuildGetFileList(PanelSerial)))
             {
                 AvailableCustomMediaFilenames = list;
@@ -1534,6 +1543,60 @@ public class TryxPanoramaHubTests
         hub.SendHeartbeatTick();
 
         Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildCoolerConfig(PanelFanConfig)));
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_retries_an_unanswered_cooler_config_read_before_the_first_write()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        transport.CoolerConfigBody = null;
+        hub.SetCoolerFanTarget(55);
+
+        hub.SendHeartbeatTick();
+        Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+
+        transport.CoolerConfigBody = PanelCoolerConfig;
+        hub.SendHeartbeatTick();
+        hub.ReleaseCoolerFan();
+
+        Assert.Equal(2, CountFrames(transport, TryxRkProtocol.BuildGetCoolerConfig("BYZL1")));
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+        Assert.Equal(TryxRkProtocol.BuildCoolerConfig(PanelFanConfig), transport.Writes[^1]);
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_drives_the_cooler_fan_without_a_config_after_unanswered_reads()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        transport.CoolerConfigBody = null;
+        hub.SetCoolerFanTarget(55);
+
+        for (var i = 0; i < 4; i++) hub.SendHeartbeatTick();
+
+        Assert.Equal(3, CountFrames(transport, TryxRkProtocol.BuildGetCoolerConfig("BYZL1")));
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+    }
+
+    [Fact]
+    public async Task ReleaseCoolerFan_waits_for_a_write_in_flight_instead_of_skipping_the_hand_back()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        hub.SetCoolerFanTarget(90);
+        hub.SendHeartbeatTick();
+        using var gate = new ManualResetEventSlim(false);
+        transport.WriteGate = gate;
+
+        // A brightness write holds the tx gate while the panel has not taken the frame yet.
+        var busy = Task.Run(() => hub.SetBrightness(60));
+        Assert.True(transport.WriteEntered.Wait(TimeSpan.FromSeconds(5)));
+        var release = Task.Run(hub.ReleaseCoolerFan);
+        await Task.Delay(200);
+        Assert.False(release.IsCompleted);
+
+        gate.Set();
+        await Task.WhenAll(busy, release);
+
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerConfig(PanelFanConfig)));
     }
 
     [Fact]

@@ -38,8 +38,15 @@ public sealed class TryxPanoramaHeartbeatWorker : BackgroundService
             try { await timer.WaitForNextTickAsync(stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
         // Hand the VRM fan back before closing: the curve engine's shutdown release runs
-        // after this worker has stopped, when the panel is no longer connected.
+        // after this worker has stopped, when the panel is no longer connected. Done here,
+        // after the loop has ended, rather than at the end of ExecuteAsync, which the
+        // thread pool may not have started yet when a stop follows right after the start.
         _hub.ReleaseCoolerFan();
         _hub.Disconnect();
     }

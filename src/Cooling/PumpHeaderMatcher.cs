@@ -60,19 +60,23 @@ internal sealed class PumpHeaderMatcher
     {
         string? match = null;
         var matches = 0;
+        var matchedTracks = false;
         foreach (var ch in channels)
         {
             if (IsHeader(ch) && Tracks(ch.Rpm, pumpRpm))
             {
                 match = ch.Id;
                 matches++;
+                matchedTracks |= ch.Id == _matched;
             }
         }
         if (matches != 1) match = null;
 
         if (_matched is not null)
         {
-            _misses = match == _matched ? 0 : _misses + 1;
+            // A second header passing through the pump's speed makes the reading ambiguous for
+            // finding a match, but it is no evidence against the one already matched.
+            _misses = matchedTracks ? 0 : _misses + 1;
             if (_misses >= MissesToForget)
             {
                 _matched = null;

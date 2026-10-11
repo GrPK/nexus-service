@@ -105,6 +105,26 @@ public class PumpHeaderMatcherTests
     }
 
     [Fact]
+    public void Keeps_the_label_while_another_header_ramps_through_the_pump_speed()
+    {
+        var matcher = new PumpHeaderMatcher();
+        matcher.Label(Channels(2912), 2910);
+        matcher.Label(Channels(2884), 2880);
+        matcher.Label(Channels(2830), 2850);
+
+        // The chipset fan sits inside the pump's band for more readings than it takes to forget.
+        var channels = Channels(0);
+        foreach (var rpm in new[] { 2820, 2790, 2760, 2730, 2700, 2670 })
+        {
+            channels = Channels(cpuRpm: rpm + 10, chipsetRpm: rpm - 20);
+            matcher.Label(channels, rpm);
+        }
+
+        Assert.Equal("CPU Fan / Pump", NameOf(channels, CpuFan));
+        Assert.Equal("Chipset Fan", NameOf(channels, ChipsetFan));
+    }
+
+    [Fact]
     public void Labels_a_channel_object_a_provider_hands_back_again_only_once()
     {
         var matcher = new PumpHeaderMatcher();
