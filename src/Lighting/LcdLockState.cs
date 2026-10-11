@@ -171,23 +171,28 @@ public sealed class LcdLockBridge : IHostedService
 /// </summary>
 public sealed class LcdFade
 {
-    /// <summary>Distinct levels a ramp visits for most devices.</summary>
-    public const int DefaultSteps = 18;
-
-    /// <summary>How often a driver loop samples a ramp. Levels only change on step boundaries.</summary>
+    /// <summary>How often a driver loop samples a ramp. Cheap devices take one step per sample.</summary>
     public static readonly TimeSpan SampleInterval = TimeSpan.FromMilliseconds(40);
+
+    /// <summary>Exponent of the display response the ramp is shaped against: equal steps in perceived lightness, not in percent.</summary>
+    private const double Gamma = 2.2;
 
     private readonly long _startMs;
     private readonly long _durationMs;
     private readonly int _steps;
+    private readonly double _fromLightness;
+    private readonly double _toLightness;
 
-    public LcdFade(int from, int to, TimeSpan duration, long startMs, int steps = DefaultSteps)
+    /// <param name="steps">Distinct pre-final levels; null takes one step per <see cref="SampleInterval"/> of <paramref name="duration"/>.</param>
+    public LcdFade(int from, int to, TimeSpan duration, long startMs, int? steps = null)
     {
         From = from;
         To = to;
         _startMs = startMs;
         _durationMs = Math.Max(1, (long)duration.TotalMilliseconds);
-        _steps = Math.Max(1, steps);
+        _steps = Math.Max(1, steps ?? (int)Math.Round(duration / SampleInterval));
+        _fromLightness = Lightness(from);
+        _toLightness = Lightness(to);
     }
 
     public int From { get; }
@@ -196,7 +201,13 @@ public sealed class LcdFade
 
     public bool IsDoneAt(long nowMs) => nowMs - _startMs >= _durationMs;
 
-    /// <summary>The level at <paramref name="nowMs"/>: one of <c>steps</c> evenly spaced levels, exactly <see cref="To"/> once done.</summary>
+    // Brightness percent to perceived lightness and back. Interpolating in lightness makes every
+    // step look the same size: percent steps linger at the top and lurch at the bottom.
+    private static double Lightness(int percent) => Math.Pow(Math.Clamp(percent, 0, 100) / 100.0, 1.0 / Gamma);
+
+    private static int Percent(double lightness) => (int)Math.Round(100.0 * Math.Pow(Math.Clamp(lightness, 0.0, 1.0), Gamma));
+
+    /// <summary>The level at <paramref name="nowMs"/>: exactly <see cref="From"/> at the start, exactly <see cref="To"/> once done, and monotonic between.</summary>
     public int LevelAt(long nowMs)
     {
         if (IsDoneAt(nowMs))
@@ -205,7 +216,12 @@ public sealed class LcdFade
         }
         var elapsed = Math.Max(0, nowMs - _startMs);
         var step = (int)Math.Min(_steps - 1, elapsed * _steps / _durationMs);
-        return From + (int)Math.Round((To - From) * (double)step / _steps);
+        if (step <= 0)
+        {
+            return From;
+        }
+        var level = Percent(_fromLightness + (_toLightness - _fromLightness) * step / _steps);
+        return Math.Clamp(level, Math.Min(From, To), Math.Max(From, To));
     }
 }
 
