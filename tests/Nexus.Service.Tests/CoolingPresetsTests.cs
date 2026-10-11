@@ -192,7 +192,7 @@ public class CoolingPresetsTests : IDisposable
         _store.Update(s => s.Cooling.Presets.Add(preset));
 
         _store.Update(s => s.Cooling.ManualSpeeds["fan2"] = 55);
-        CoolingPresets.CaptureInto(preset, _store, _fans);
+        CoolingPresets.CaptureInto(preset, _store.Load().Cooling, CoolingPresets.FanIds(_fans));
 
         Assert.Equal("p1", preset.Id);
         Assert.Equal("Original", preset.Name);
