@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Hosting;
 using Nexus.Service.Platform;
 
 namespace Nexus.Service.Lighting;
@@ -18,11 +21,6 @@ public sealed class LcdLockState
 
     /// <summary>Raised after <see cref="IsLocked"/> flips. True = locked.</summary>
     public event Action<bool>? Changed;
-
-    public LcdLockState(SessionLockListener? listener = null)
-    {
-        listener?.LockChanged += Set;
-    }
 
     public bool IsLocked
     {
@@ -133,5 +131,34 @@ public sealed class LcdLockSleepSet
             _decided.Clear();
             return list;
         }
+    }
+}
+
+/// <summary>
+/// Feeds <see cref="LcdLockState"/> from <see cref="SessionLockListener"/>. A hosted service
+/// rather than a constructor dependency: the drivers that read the state are built inside
+/// the listener's own dependency chain, so the state itself must have no dependencies.
+/// </summary>
+public sealed class LcdLockBridge : IHostedService
+{
+    private readonly SessionLockListener _listener;
+    private readonly LcdLockState _state;
+
+    public LcdLockBridge(SessionLockListener listener, LcdLockState state)
+    {
+        _listener = listener;
+        _state = state;
+    }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _listener.LockChanged += _state.Set;
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        _listener.LockChanged -= _state.Set;
+        return Task.CompletedTask;
     }
 }

@@ -642,27 +642,31 @@ public static class NexusServiceCollectionExtensions
             // Singleton so the Stream Deck worker can subscribe to LockChanged.
             services.AddSingleton<Nexus.Service.Lighting.SessionLockListener>();
             services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Lighting.SessionLockListener>());
+            services.AddHostedService<Nexus.Service.Lighting.LcdLockBridge>();
         }
 
         // The lock as cooler / AIO LCD drivers see it; inert where no listener exists.
-        services.AddSingleton(sp => new Nexus.Service.Lighting.LcdLockState(
-            sp.GetService<Nexus.Service.Lighting.SessionLockListener>()));
+        services.AddSingleton<Nexus.Service.Lighting.LcdLockState>();
 
         return services;
     }
 
     private static Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub BindTryxLock(IServiceProvider sp, Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub hub)
     {
-        hub.BindLockSleep(sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>());
+        if (sp.GetService<Nexus.Service.Lighting.LcdLockState>() is { } lockState)
+        {
+            hub.BindLockSleep(lockState);
+        }
         return hub;
     }
 
     private static Nexus.Service.Peripherals.Nzxt.KrakenHub BindKrakenLock(IServiceProvider sp, Nexus.Service.Peripherals.Nzxt.KrakenHub hub)
     {
         var store = sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>();
-        hub.BindLockSleep(
-            sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>(),
-            () => store.Load().Devices.KrakenLcdSleepWhenLocked);
+        if (sp.GetService<Nexus.Service.Lighting.LcdLockState>() is { } lockState)
+        {
+            hub.BindLockSleep(lockState, () => store.Load().Devices.KrakenLcdSleepWhenLocked);
+        }
         return hub;
     }
 
@@ -1022,7 +1026,7 @@ public static class NexusServiceCollectionExtensions
 #else
                 port => new Nexus.Service.Peripherals.LianLiWireless.Slv3Transport(port.PortName, port.Role),
 #endif
-                lockState: sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>()));
+                lockState: sp.GetService<Nexus.Service.Lighting.LcdLockState>()));
         services.AddSingleton<Nexus.Service.Cooling.Slv3CoolingProvider>(sp =>
         {
             var hub = sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.Slv3Hub>();
@@ -1074,7 +1078,7 @@ public static class NexusServiceCollectionExtensions
             new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdHub(
                 sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.ISlv3LcdDiscovery>(),
                 port => new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdTransport(port.PortName),
-                sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>()));
+                sp.GetService<Nexus.Service.Lighting.LcdLockState>()));
         services.AddHostedService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdConnectionWorker>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdMediaLibrary>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdSensorReader>();
@@ -1690,7 +1694,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
                 sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>(),
                 lockSleeping: id => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.IsLockSleeping(id) == true);
-            sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>().Changed += _ => player.Wake();
+            sp.GetService<Nexus.Service.Lighting.LcdLockState>()?.Changed += _ => player.Wake();
             player.GlassOwnerChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
             return player;
         });
@@ -2287,7 +2291,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Devices.DeviceControlGate>(),
                 notifyOverlay,
                 notifyPanelChanged: id => Nexus.Service.Sockets.PanelTopics.BroadcastPanelDevice(sockets, id),
-                lockState: sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>());
+                lockState: sp.GetService<Nexus.Service.Lighting.LcdLockState>());
         });
         services.AddHostedService(sp =>
             sp.GetRequiredService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>());
