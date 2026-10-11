@@ -61,6 +61,9 @@ public class TryxPanoramaHubTests
         public (int Job, int Decrypt) DecryptResult { get; set; } = (0, 0);
         // Simulates the panel re-enumerating right after it accepts the decrypt job.
         public bool DropAfterDecryptStart { get; set; }
+        // The panel's cooler_config / cooler_status bodies; null leaves the request unanswered.
+        public byte[]? CoolerConfigBody { get; set; }
+        public byte[]? CoolerStatusBody { get; set; }
         public byte[]? Request(ReadOnlySpan<byte> frame, int replyField, int timeoutMs)
         {
             Writes.Add(frame.ToArray());
@@ -69,6 +72,8 @@ public class TryxPanoramaHubTests
             {
                 803 => Reply(803, [0x10, 0x01]),
                 804 => Reply(804, [0x08, (byte)DecryptResult.Job, 0x10, 0x64, 0x18, (byte)DecryptResult.Decrypt]),
+                506 when CoolerConfigBody is { } config => Reply(506, config),
+                507 when CoolerStatusBody is { } status => Reply(507, status),
                 _ => null,
             };
         }
@@ -77,9 +82,18 @@ public class TryxPanoramaHubTests
             var tag = (field << 3) | 2;
             return [(byte)((tag & 0x7F) | 0x80), (byte)(tag >> 7), (byte)body.Length, .. body];
         }
+        // When set, a write signals WriteEntered and then waits for it, the way a panel that has not
+        // drained its endpoint yet holds the write - and with it the hub's tx gate.
+        public ManualResetEventSlim? WriteGate { get; set; }
+        public ManualResetEventSlim WriteEntered { get; } = new(false);
         public void Write(ReadOnlySpan<byte> data)
         {
             Writes.Add(data.ToArray());
+            if (WriteGate is { } gate)
+            {
+                WriteEntered.Set();
+                gate.Wait(TimeSpan.FromSeconds(10));
+            }
             if (NextFileList is { } list && data.SequenceEqual(TryxRkProtocol.BuildGetFileList(PanelSerial)))
             {
                 AvailableCustomMediaFilenames = list;
@@ -92,9 +106,9 @@ public class TryxPanoramaHubTests
     private sealed class StubDiscovery : ITryxPanoramaPanelDiscovery
     {
         private readonly TryxPanoramaPortInfo _port;
-        public StubDiscovery(string portName = "COM1")
+        public StubDiscovery(string portName = "COM1", int productId = 0)
         {
-            _port = new TryxPanoramaPortInfo { PortName = portName, Serial = "test-serial" };
+            _port = new TryxPanoramaPortInfo { PortName = portName, Serial = "test-serial", ProductId = productId };
         }
         public IReadOnlyList<TryxPanoramaPortInfo> Discover() => new[] { _port };
     }
@@ -1412,6 +1426,298 @@ public class TryxPanoramaHubTests
         {
             File.Delete(path);
         }
+    }
+
+    // ── Cooler (VRM fan) ──
+
+    // cooler_status { fans_speed = 1450, pump_speed = 2800 } and cooler_config { fan_config { FixMode, 40 } }.
+    private static readonly byte[] PanelCoolerStatus = Convert.FromHexString("08aa0b10f015");
+    private static readonly byte[] PanelCoolerConfig = Convert.FromHexString("0a0408011828");
+    private static readonly byte[] PanelFanConfig = Convert.FromHexString("08011828");
+
+    private static (TryxPanoramaHub Hub, RecordingTransport Transport) BuildCoolerHub(
+        int productId = TryxPanoramaProtocol.ProductIdPanoramaRk)
+    {
+        var transport = new RecordingTransport
+        {
+            PanelSerial = "BYZL1",
+            CoolerConfigBody = PanelCoolerConfig,
+            CoolerStatusBody = PanelCoolerStatus,
+        };
+        var hub = BuildHub(discovery: new StubDiscovery(productId: productId), transportFactory: _ => transport);
+        hub.CoolerPollInterval = TimeSpan.Zero;
+        Assert.True(hub.EnsureConnected());
+        return (hub, transport);
+    }
+
+    private static int CountFrames(RecordingTransport transport, byte[] frame)
+        => transport.Writes.Count(w => w.AsSpan().SequenceEqual(frame));
+
+    [Fact]
+    public void SendHeartbeatTick_reads_the_cooler_speeds_and_the_panels_own_fixed_power()
+    {
+        var (hub, _) = BuildCoolerHub();
+
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(1450, hub.State.CoolerFanRpm);
+        Assert.Equal(2800, hub.State.CoolerPumpRpm);
+        Assert.Equal(40, hub.State.CoolerFanPower);
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_leaves_the_cooler_alone_on_a_model_without_the_fan()
+    {
+        var (hub, transport) = BuildCoolerHub(TryxPanoramaProtocol.ProductIdPanoramaRkSe);
+        hub.SetCoolerFanTarget(55);
+
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildGetCoolerStatus("BYZL1")));
+        Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+        Assert.Null(hub.State.CoolerFanRpm);
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_sends_no_cooler_frame_before_the_panel_serial_is_known()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        transport.PanelSerial = "";
+        hub.SetCoolerFanTarget(55);
+
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+        Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildGetCoolerConfig("")));
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_reads_the_panels_cooler_config_before_the_first_write()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        hub.SetCoolerFanTarget(55);
+
+        hub.SendHeartbeatTick();
+
+        var configRead = transport.Writes.FindIndex(w => w.AsSpan().SequenceEqual(TryxRkProtocol.BuildGetCoolerConfig("BYZL1")));
+        var write = transport.Writes.FindIndex(w => w.AsSpan().SequenceEqual(TryxRkProtocol.BuildCoolerFixedPower(55)));
+        Assert.InRange(configRead, 0, write - 1);
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_sends_one_cooler_power_frame_per_change()
+    {
+        var (hub, transport) = BuildCoolerHub();
+
+        hub.SetCoolerFanTarget(55);
+        hub.SendHeartbeatTick();
+        hub.SendHeartbeatTick();
+        hub.SetCoolerFanTarget(70);
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(70)));
+        Assert.Equal(70, hub.State.CoolerFanPower);
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_resends_the_cooler_target_after_a_reconnect_without_rereading_the_config()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        hub.SetCoolerFanTarget(55);
+        hub.SendHeartbeatTick();
+
+        hub.Disconnect();
+        Assert.True(hub.EnsureConnected());
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(2, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+        // A second read would capture the power Nexus set as the panel's own.
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildGetCoolerConfig("BYZL1")));
+    }
+
+    [Fact]
+    public void ReleaseCoolerFan_writes_back_the_config_the_panel_had_before()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        hub.SetCoolerFanTarget(90);
+        hub.SendHeartbeatTick();
+
+        hub.ReleaseCoolerFan();
+
+        Assert.Equal(TryxRkProtocol.BuildCoolerConfig(PanelFanConfig), transport.Writes[^1]);
+        Assert.Null(hub.CoolerFanTarget);
+        Assert.Equal(40, hub.State.CoolerFanPower);
+    }
+
+    [Fact]
+    public void ReleaseCoolerFan_sends_nothing_when_nexus_never_drove_the_fan()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        hub.SendHeartbeatTick();
+
+        hub.ReleaseCoolerFan();
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildCoolerConfig(PanelFanConfig)));
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_retries_an_unanswered_cooler_config_read_before_the_first_write()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        transport.CoolerConfigBody = null;
+        hub.SetCoolerFanTarget(55);
+
+        hub.SendHeartbeatTick();
+        Assert.Equal(0, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+
+        transport.CoolerConfigBody = PanelCoolerConfig;
+        hub.SendHeartbeatTick();
+        hub.ReleaseCoolerFan();
+
+        Assert.Equal(2, CountFrames(transport, TryxRkProtocol.BuildGetCoolerConfig("BYZL1")));
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+        Assert.Equal(TryxRkProtocol.BuildCoolerConfig(PanelFanConfig), transport.Writes[^1]);
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_drives_the_cooler_fan_without_a_config_after_unanswered_reads()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        transport.CoolerConfigBody = null;
+        hub.SetCoolerFanTarget(55);
+
+        for (var i = 0; i < 4; i++) hub.SendHeartbeatTick();
+
+        Assert.Equal(3, CountFrames(transport, TryxRkProtocol.BuildGetCoolerConfig("BYZL1")));
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerFixedPower(55)));
+    }
+
+    [Fact]
+    public async Task ReleaseCoolerFan_waits_for_a_write_in_flight_instead_of_skipping_the_hand_back()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        hub.SetCoolerFanTarget(90);
+        hub.SendHeartbeatTick();
+        using var gate = new ManualResetEventSlim(false);
+        transport.WriteGate = gate;
+
+        // A brightness write holds the tx gate while the panel has not taken the frame yet.
+        var busy = Task.Run(() => hub.SetBrightness(60));
+        Assert.True(transport.WriteEntered.Wait(TimeSpan.FromSeconds(5)));
+        var release = Task.Run(hub.ReleaseCoolerFan);
+        await Task.Delay(200);
+        Assert.False(release.IsCompleted);
+
+        gate.Set();
+        await Task.WhenAll(busy, release);
+
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerConfig(PanelFanConfig)));
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_stops_cooler_polling_after_unanswered_status_requests()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        transport.CoolerStatusBody = null;
+
+        for (var i = 0; i < 5; i++) hub.SendHeartbeatTick();
+
+        Assert.Equal(3, CountFrames(transport, TryxRkProtocol.BuildGetCoolerStatus("BYZL1")));
+        Assert.Null(hub.State.CoolerFanRpm);
+    }
+
+    [Fact]
+    public void SendHeartbeatTick_keeps_the_previous_cooler_fan_reading_over_a_glitch()
+    {
+        var (hub, transport) = BuildCoolerHub();
+        hub.SendHeartbeatTick();
+        // fans_speed = 5064, above the 3700 rpm Kanali treats as a glitch.
+        transport.CoolerStatusBody = Convert.FromHexString("08c82710f015");
+
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(1450, hub.State.CoolerFanRpm);
+    }
+
+    [Fact]
+    public void TryxCoolingProvider_lists_no_channels_until_the_panel_reports_speeds()
+    {
+        var (hub, _) = BuildCoolerHub();
+        var provider = new Nexus.Service.Cooling.TryxCoolingProvider(hub);
+
+        Assert.Empty(provider.GetFanChannels());
+        hub.SendHeartbeatTick();
+
+        // The pump runs off a motherboard header, so it is not a channel here; its tach goes
+        // out as PumpRpm for the composite to label that header.
+        var fan = Assert.Single(provider.GetFanChannels());
+        Assert.Equal("tryx:fan", fan.Id);
+        Assert.Equal(1450, fan.Rpm);
+        Assert.Equal(40, fan.DutyPercent);
+        Assert.Equal(Nexus.Service.Models.Cooling.FanModes.Auto, fan.Mode);
+        Assert.False(fan.ReadOnly);
+        Assert.True(fan.IsAio);
+        Assert.Equal(2800, provider.PumpRpm);
+    }
+
+    [Fact]
+    public void TryxCoolingProvider_reports_no_pump_rpm_on_a_model_without_the_fan()
+    {
+        var (hub, _) = BuildCoolerHub(TryxPanoramaProtocol.ProductIdPanoramaRkSe);
+        var provider = new Nexus.Service.Cooling.TryxCoolingProvider(hub);
+
+        hub.SendHeartbeatTick();
+
+        Assert.Null(provider.PumpRpm);
+        Assert.Empty(provider.GetFanChannels());
+    }
+
+    [Fact]
+    public async Task HeartbeatWorker_hands_the_cooler_fan_back_before_it_disconnects_on_stop()
+    {
+        // The curve engine's shutdown release runs after this worker has stopped, so the
+        // worker itself must write the panel's own config back while it is still connected.
+        var (hub, transport) = BuildCoolerHub();
+        hub.SetCoolerFanTarget(90);
+        hub.SendHeartbeatTick();
+        var worker = new TryxPanoramaHeartbeatWorker(hub, new Nexus.Service.Devices.DeviceControlGate(new InMemoryConfigStore()));
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal(1, CountFrames(transport, TryxRkProtocol.BuildCoolerConfig(PanelFanConfig)));
+        Assert.False(hub.IsConnected);
+        Assert.Null(hub.CoolerFanTarget);
+    }
+
+    [Fact]
+    public void TryxCoolingProvider_drives_only_the_vrm_fan()
+    {
+        var (hub, _) = BuildCoolerHub();
+        var provider = new Nexus.Service.Cooling.TryxCoolingProvider(hub);
+        hub.SendHeartbeatTick();
+
+        Assert.Equal(100, provider.SetFanSpeed("tryx:fan", 150));
+        provider.DriveFanSpeed("tryx:pump", 50);
+
+        var fan = Assert.Single(provider.GetFanChannels(), c => c.Id == "tryx:fan");
+        Assert.Equal(Nexus.Service.Models.Cooling.FanModes.Manual, fan.Mode);
+        Assert.Equal(100, fan.DutyPercent);
+        Assert.Equal(100, hub.CoolerFanTarget);
+
+        provider.ReleaseFan("tryx:fan");
+        Assert.Null(hub.CoolerFanTarget);
+    }
+
+    [Fact]
+    public void TryxCoolingProvider_owns_only_its_prefixed_ids()
+    {
+        Assert.True(Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId("tryx:fan"));
+        Assert.False(Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId("tryx"));
+        Assert.False(Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId("tryx-kanali:fan"));
+        Assert.False(Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId(""));
     }
 
     private static string WriteTempFile(int lengthBytes)

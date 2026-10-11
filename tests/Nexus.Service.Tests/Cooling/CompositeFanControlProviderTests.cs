@@ -104,6 +104,35 @@ public class CompositeFanControlProviderTests
         Assert.Equal(FanKinds.Pump, channels["mb:fan2"].Kind);
     }
 
+    // A cooler that reads its pump over USB (Tryx) while CPU_FAN drives the pump: once the
+    // header has tracked the reported speed it is labeled, and the name inference makes it a pump.
+    [Fact]
+    public void GetFanChannels_labels_the_header_a_coolers_pump_runs_on()
+    {
+        var noPorts = new NoPorts();
+        var cpu = new FanChannel { Id = "mb:fan0", Name = "CPU Fan" };
+        var tach = new PumpTachFans();
+        var composite = new CompositeFanControlProvider(
+            new NamedFans(cpu, new FanChannel { Id = "mb:fan1", Name = "System Fan #1", Rpm = 900 }),
+            new Np50CoolingProvider(new Np50Hub(noPorts, _ => null!)),
+            new MiniHubCoolingProvider(new MiniHubHub(noPorts, _ => null!)),
+            new PluginProviderRegistry(),
+            new CompositeFanControlProvider.FanSource(id => id.StartsWith("cooler:", StringComparison.Ordinal), tach));
+
+        IReadOnlyList<FanChannel> channels = Array.Empty<FanChannel>();
+        foreach (var rpm in new[] { 2910, 2880, 2850 })
+        {
+            cpu.Rpm = rpm;
+            tach.PumpRpm = rpm;
+            channels = composite.GetFanChannels();
+        }
+
+        var header = Assert.Single(channels, c => c.Id == "mb:fan0");
+        Assert.Equal("CPU Fan / Pump", header.Name);
+        Assert.Equal(FanKinds.Pump, header.Kind);
+        Assert.Equal(FanKinds.Fan, Assert.Single(channels, c => c.Id == "mb:fan1").Kind);
+    }
+
     [Fact]
     public void ReleaseAll_AttemptsEveryProvider_EvenWhenOneThrows_AndRethrowsNothing()
     {
@@ -281,6 +310,22 @@ public class CompositeFanControlProviderTests
         private readonly FanChannel[] _channels;
         public NamedFans(params FanChannel[] channels) => _channels = channels;
         public IReadOnlyList<FanChannel> GetFanChannels() => _channels;
+        public IReadOnlyList<TemperatureSource> GetTemperatureSources() => Array.Empty<TemperatureSource>();
+        public float? ReadTemperature(string sensorId) => null;
+        public int SetFanSpeed(string channelId, int dutyPercent) => dutyPercent;
+        public void DriveFanSpeed(string channelId, int dutyPercent) { }
+        public void ReleaseFan(string channelId) { }
+        public void ReleaseAll() { }
+        public Task<IReadOnlyList<FanCalibration>> CalibrateAsync(
+            IReadOnlyList<string> fanIds, IProgress<FanCalibrationProgress> progress, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<FanCalibration>>(Array.Empty<FanCalibration>());
+    }
+
+    /// <summary>A cooler with no channels of its own that reports its pump's speed.</summary>
+    private sealed class PumpTachFans : IFanControlProvider, IPumpTachSource
+    {
+        public int? PumpRpm { get; set; }
+        public IReadOnlyList<FanChannel> GetFanChannels() => Array.Empty<FanChannel>();
         public IReadOnlyList<TemperatureSource> GetTemperatureSources() => Array.Empty<TemperatureSource>();
         public float? ReadTemperature(string sensorId) => null;
         public int SetFanSpeed(string channelId, int dutyPercent) => dutyPercent;

@@ -233,6 +233,85 @@ public class TryxMediaListTests
         Assert.Null(TryxMediaList.ParseDecryptJobStatus(Convert.FromHexString("0a020801")));
     }
 
+    // Cooler replies: the first two are captured from a PANO (0x1011); the rest are hand-encoded
+    // from the cooler.proto field ids in Kanali's UDB.exe descriptor to cover the other shapes.
+
+    [Fact]
+    public void ParseCoolerStatus_reads_a_captured_panel_reply()
+    {
+        // header { version = 1 }, error {}, cooler_status { fans_speed = 1650, pump_speed = 2880 }.
+        var reply = Convert.FromHexString("0a0208011200da1f0608f20c10c016");
+
+        Assert.Equal(new TryxMediaList.CoolerStatus(1650, 2880), TryxMediaList.ParseCoolerStatus(reply));
+    }
+
+    [Fact]
+    public void ParseCoolerFanConfig_reads_a_captured_panel_reply()
+    {
+        // header { version = 1 }, error {}, cooler_config { fan_config { mode = 1, fix_power = 50 } }.
+        var reply = Convert.FromHexString("0a0208011200d21f060a0408011832");
+
+        var config = TryxMediaList.ParseCoolerFanConfig(reply);
+
+        Assert.NotNull(config);
+        Assert.Equal(50, config.Value.FixedPower);
+        Assert.Equal(Convert.FromHexString("08011832"), config.Value.Raw);
+    }
+
+    [Fact]
+    public void ParseCoolerStatus_reads_the_fan_and_pump_rpm()
+    {
+        // cooler_status (507) { fans_speed = 1450, pump_speed = 2800 }.
+        var reply = Convert.FromHexString("0a020801" + "da1f06" + "08aa0b" + "10f015");
+
+        Assert.Equal(new TryxMediaList.CoolerStatus(1450, 2800), TryxMediaList.ParseCoolerStatus(reply));
+    }
+
+    [Fact]
+    public void ParseCoolerStatus_reads_absent_speeds_as_zero()
+    {
+        Assert.Equal(new TryxMediaList.CoolerStatus(0, 0), TryxMediaList.ParseCoolerStatus(Convert.FromHexString("0a020801da1f00")));
+    }
+
+    [Fact]
+    public void ParseCoolerStatus_ignores_other_replies()
+    {
+        Assert.Null(TryxMediaList.ParseCoolerStatus(Convert.FromHexString("0a020801")));
+        Assert.Null(TryxMediaList.ParseCoolerStatus(Convert.FromHexString("0a020801" + "a232021064")));
+    }
+
+    [Fact]
+    public void ParseCoolerFanConfig_reads_a_fixed_power_and_keeps_the_raw_fan_config()
+    {
+        // cooler_config (506) { fan_config { mode = 1, fix_power = 60 }, pump_config {} }.
+        var reply = Convert.FromHexString("0a020801" + "d21f08" + "0a040801183c" + "1200");
+
+        var config = TryxMediaList.ParseCoolerFanConfig(reply);
+
+        Assert.NotNull(config);
+        Assert.Equal(60, config.Value.FixedPower);
+        Assert.Equal(Convert.FromHexString("0801183c"), config.Value.Raw);
+    }
+
+    [Fact]
+    public void ParseCoolerFanConfig_has_no_fixed_power_in_smart_mode()
+    {
+        // fan_config { fun_power_level { temperature = 30, power = 40 } }: mode 0 is not on the wire.
+        var reply = Convert.FromHexString("0a020801" + "d21f08" + "0a061204081e1028");
+
+        var config = TryxMediaList.ParseCoolerFanConfig(reply);
+
+        Assert.NotNull(config);
+        Assert.Null(config.Value.FixedPower);
+        Assert.Equal(Convert.FromHexString("1204081e1028"), config.Value.Raw);
+    }
+
+    [Fact]
+    public void ParseCoolerFanConfig_ignores_other_replies()
+    {
+        Assert.Null(TryxMediaList.ParseCoolerFanConfig(Convert.FromHexString("0a020801" + "da1f06" + "08aa0b10f015")));
+    }
+
     [Fact]
     public void ParseFirmwareVersion_reads_field_3_of_the_device_info_reply()
     {
