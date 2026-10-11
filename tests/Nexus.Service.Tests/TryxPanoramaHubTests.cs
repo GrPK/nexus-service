@@ -1515,4 +1515,44 @@ public class TryxPanoramaHubTests
         Assert.All(recording.Writes, w => Assert.False(w.AsSpan().SequenceEqual(TryxRkProtocol.BuildPreset("default_01.mp4", true, 70))));
         Assert.True(hub.State.ScreenEnabled);
     }
+
+    [Fact]
+    public void A_lock_handler_that_runs_after_the_unlock_does_not_turn_the_screen_off()
+    {
+        var (hub, recording, _, _) = LockRig();
+
+        // The handler of a lock whose unlock already happened; the state says unlocked.
+        hub.OnLockChanged(true);
+
+        Assert.False(hub.LockDimmed);
+        Assert.Empty(recording.Writes);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task Reconnects_racing_lock_and_unlock_never_leave_the_screen_held_off()
+    {
+        var (hub, _, state, _) = LockRig();
+        var toggles = System.Threading.Tasks.Task.Run(() =>
+        {
+            for (var i = 0; i < 300; i++)
+            {
+                state.Set(true);
+                state.Set(false);
+            }
+        });
+        var reconnects = System.Threading.Tasks.Task.Run(() =>
+        {
+            for (var i = 0; i < 300; i++)
+            {
+                hub.Disconnect();
+                hub.EnsureConnected();
+            }
+        });
+
+        await System.Threading.Tasks.Task.WhenAll(toggles, reconnects).WaitAsync(TimeSpan.FromSeconds(60));
+
+        // Every lock ended, so nothing may still hold the screen off.
+        Assert.False(state.IsLocked);
+        Assert.False(hub.LockDimmed);
+    }
 }

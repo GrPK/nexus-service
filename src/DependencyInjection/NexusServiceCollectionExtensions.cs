@@ -665,7 +665,11 @@ public static class NexusServiceCollectionExtensions
         var store = sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>();
         if (sp.GetService<Nexus.Service.Lighting.LcdLockState>() is { } lockState)
         {
-            hub.BindLockSleep(lockState, () => store.Load().Devices.KrakenLcdSleepWhenLocked);
+            hub.BindLockSleep(
+                lockState,
+                () => store.Load().Devices.KrakenLcdSleepWhenLocked,
+                () => store.Load().Devices.KrakenLcdLockRestore,
+                level => store.Update(st => st.Devices.KrakenLcdLockRestore = level));
         }
         return hub;
     }
@@ -1049,7 +1053,7 @@ public static class NexusServiceCollectionExtensions
                     screens[mac] = Nexus.Service.Peripherals.LianLiWireless.Slv3Protocol.AioScreenFrom(
                         s.Brightness, s.Theme, s.LabelColor, s.ValueColor, s.UnitColor,
                         s.ShowCpuTemp, s.ShowCpuLoad, s.ShowGpuTemp, s.ShowGpuLoad, s.ShowFanSpeed, s.LoopInterval,
-                        s.SleepWhenLocked);
+                        s.SleepWhenLocked, s.NexusWidgets);
                 }
                 return screens;
             };

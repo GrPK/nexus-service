@@ -254,10 +254,10 @@ public static class Slv3Protocol
     public static Slv3AioScreen AioScreenFrom(
         int brightness, int theme, string labelColor, string valueColor, string unitColor,
         bool cpuTemp, bool cpuLoad, bool gpuTemp, bool gpuLoad, bool fanSpeed, int loopInterval = AioLcdLoopInterval,
-        bool sleepWhenLocked = true) =>
+        bool sleepWhenLocked = true, bool nexusWidgets = true) =>
         new((byte)Math.Clamp(brightness, 0, 100), (byte)Math.Clamp(theme, 0, AioThemeCount - 1),
             OpaqueArgb(labelColor), OpaqueArgb(valueColor), OpaqueArgb(unitColor),
-            cpuTemp, cpuLoad, gpuTemp, gpuLoad, fanSpeed, (byte)Math.Clamp(loopInterval, 1, AioLcdLoopIntervalMax), sleepWhenLocked);
+            cpuTemp, cpuLoad, gpuTemp, gpuLoad, fanSpeed, (byte)Math.Clamp(loopInterval, 1, AioLcdLoopIntervalMax), sleepWhenLocked, nexusWidgets);
 
     private static uint OpaqueArgb(string hex) =>
         hex.Length == 7 && hex[0] == '#' && uint.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out var rgb)
@@ -825,7 +825,7 @@ public readonly record struct Slv3AioSensors(float? CpuTemp, float? CpuLoad, flo
 /// <summary>How a HydroShift II screen draws: backlight percent, theme, ARGB text colours, and which readings it shows.</summary>
 public readonly record struct Slv3AioScreen(
     byte Brightness, byte Theme, uint LabelArgb, uint ValueArgb, uint UnitArgb,
-    bool CpuTemp, bool CpuLoad, bool GpuTemp, bool GpuLoad, bool FanSpeed, byte LoopInterval, bool SleepWhenLocked = true)
+    bool CpuTemp, bool CpuLoad, bool GpuTemp, bool GpuLoad, bool FanSpeed, byte LoopInterval, bool SleepWhenLocked = true, bool NexusWidgets = true)
 {
     /// <summary>The screen a driven AIO gets before the user changes anything.</summary>
     public static Slv3AioScreen Default =>

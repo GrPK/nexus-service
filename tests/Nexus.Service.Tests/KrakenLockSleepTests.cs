@@ -19,11 +19,12 @@ public class KrakenLockSleepTests
         public readonly KrakenHub Hub;
         public Recorder Hid = new();
         public bool SleepSetting = true;
+        public int? PersistedRestore;
 
         public Rig(int brightness = 60)
         {
             Hub = new KrakenHub(new Factory());
-            Hub.BindLockSleep(Lock, () => SleepSetting);
+            Hub.BindLockSleep(Lock, () => SleepSetting, () => PersistedRestore, level => PersistedRestore = level);
             Connect();
             Assert.True(Hub.SetLcdBacklight(brightness, 0));
             Hid.Writes.Clear();
@@ -170,6 +171,74 @@ public class KrakenLockSleepTests
 
         Assert.Contains(hid.Writes, w => w.AsSpan(0, KrakenProtocol.ReportLength).SequenceEqual(KrakenProtocol.EncodeSetBacklight(0, 0)));
         Assert.True(hub.LockDimmed);
+    }
+
+    [Fact]
+    public void A_lock_handler_that_runs_after_the_unlock_does_not_dim()
+    {
+        var rig = new Rig(60);
+
+        // The handler of a lock whose unlock already happened; the state says unlocked.
+        rig.Hub.OnLockChanged(true);
+
+        Assert.False(rig.Hub.LockDimmed);
+        Assert.Equal(0, rig.BacklightWrites);
+        Assert.True(rig.Hub.PushStreamFrame(new byte[EliteNoRgb.LcdFrameBytes]));
+        Assert.NotEmpty(rig.Hid.Writes);
+    }
+
+    [Fact]
+    public void The_pre_lock_level_is_persisted_while_dark_and_cleared_on_unlock()
+    {
+        var rig = new Rig(60);
+
+        rig.Lock.Set(true);
+        Assert.Equal(60, rig.PersistedRestore);
+        Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
+
+        rig.Lock.Set(false);
+        Assert.Null(rig.PersistedRestore);
+    }
+
+    [Fact]
+    public void A_restart_while_dark_restores_the_persisted_level_on_connect()
+    {
+        // A previous run left the cooler dark with its level persisted; this run starts unlocked
+        // and the cooler reads back zero.
+        var lockState = new LcdLockState();
+        int? persisted = 60;
+        var hub = new KrakenHub(new Factory());
+        hub.BindLockSleep(lockState, () => true, () => persisted, level => persisted = level);
+        var hid = new Recorder();
+
+        hub.Attach(hid, EliteNoRgb, KrakenProtocol.ReportLength);
+        Assert.True(hub.Connect());
+
+        Assert.Equal(60, hub.Snapshot.LcdBrightness);
+        Assert.Contains(hid.Writes, w => w.AsSpan(0, KrakenProtocol.ReportLength).SequenceEqual(KrakenProtocol.EncodeSetBacklight(60, 0)));
+        Assert.Null(persisted);
+    }
+
+    [Fact]
+    public void Display_mode_and_image_changes_while_dark_are_held_until_unlock()
+    {
+        var rig = new Rig(60);
+        Assert.True(rig.Hub.UploadLcdImage(new byte[EliteNoRgb.LcdFrameBytes]));
+        rig.Lock.Set(true);
+        rig.Hid.Writes.Clear();
+
+        Assert.True(rig.Hub.SetDisplayMode(KrakenDisplayMode.Liquid));
+        Assert.True(rig.Hub.UploadLcdImage(new byte[EliteNoRgb.LcdFrameBytes]));
+        Assert.True(rig.Hub.SetLcdBacklight(60, 1));
+
+        // Nothing but the dark backlight reached the cooler: no mode switch, no bucket traffic.
+        Assert.All(rig.Hid.Writes, w => Assert.Equal(KrakenProtocol.EncodeSetBacklight(0, 0)[0], w[0]));
+        Assert.False(rig.Wrote(60));
+
+        rig.Hid.Writes.Clear();
+        rig.Lock.Set(false);
+        Assert.Contains(rig.Hid.Writes, w => w[0] != KrakenProtocol.EncodeSetBacklight(0, 0)[0]);
+        Assert.Equal(KrakenProtocol.EncodeSetBacklight(60, 1)[3], rig.Hid.Writes[^1][3]);
     }
 
     private sealed class Recorder : IHidDevice

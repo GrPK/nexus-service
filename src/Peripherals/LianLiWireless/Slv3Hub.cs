@@ -1130,7 +1130,10 @@ public sealed class Slv3Hub : IDisposable
                 ? Slv3Protocol.HydroShiftPumpRpm(percent, record.DevType)
                 : Slv3Protocol.HydroShiftDefaultPumpRpm;
             var shown = screenSet ? screen : Slv3AioScreen.Default;
-            if (_lockSleep is not null && _lockSleep.IsSleeping(key, () => shown.SleepWhenLocked))
+            // With the AIO's USB cable connected and Nexus widgets on, the streamed panel owns the
+            // glass and the panel record's own setting is the only one that applies; this byte
+            // stays at the user's value then, the same condition the web uses to hide this toggle.
+            if (_lockSleep is not null && _lockSleep.IsSleeping(key, () => shown.SleepWhenLocked) && !UsbPanelOwnsGlass(key, shown.NexusWidgets))
             {
                 shown = shown with { Brightness = 0 };
             }
@@ -1159,6 +1162,9 @@ public sealed class Slv3Hub : IDisposable
             _anyAioControlled = _aioControl.Count > 0;
         }
     }
+
+    private bool UsbPanelOwnsGlass(string key, bool nexusWidgets) =>
+        nexusWidgets && string.Equals(_usbAioMac, key, StringComparison.OrdinalIgnoreCase);
 
     private string? ReadUsbAioMac()
     {

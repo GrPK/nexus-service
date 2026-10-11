@@ -2532,7 +2532,7 @@ public class Slv3HubTests
 
     // ---- Sleep when locked (HydroShift II wireless screen) ----------------
 
-    private static (Slv3Hub Hub, FakeTxTransport Tx, Nexus.Service.Lighting.LcdLockState Lock, Func<bool> Setting) LockedAioHub(bool sleepWhenLocked = true)
+    private static (Slv3Hub Hub, FakeTxTransport Tx, Nexus.Service.Lighting.LcdLockState Lock, Func<bool> Setting) LockedAioHub(bool sleepWhenLocked = true, bool nexusWidgets = true, bool usbConnected = false)
     {
         var state = new Nexus.Service.Lighting.LcdLockState();
         var (hub, net, tx, _) = CreateConnectedHub(null, state);
@@ -2541,8 +2541,12 @@ public class Slv3HubTests
         var sleep = sleepWhenLocked;
         hub.AioScreens = () => new Dictionary<string, Slv3AioScreen>
         {
-            [Convert.ToHexString(FanMac)] = Slv3Protocol.AioScreenFrom(30, 4, "#FF0000", "#00FF00", "#0000FF", true, true, true, true, false, sleepWhenLocked: sleep),
+            [Convert.ToHexString(FanMac)] = Slv3Protocol.AioScreenFrom(30, 4, "#FF0000", "#00FF00", "#0000FF", true, true, true, true, false, sleepWhenLocked: sleep, nexusWidgets: nexusWidgets),
         };
+        if (usbConnected)
+        {
+            hub.UsbAioMac = () => Convert.ToHexString(FanMac);
+        }
         Assert.True(hub.DriveTick());
         Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
         return (hub, tx, state, () => sleep);
@@ -2594,6 +2598,39 @@ public class Slv3HubTests
         Assert.True(hub.DriveTick());
 
         Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void A_usb_connected_aio_with_nexus_widgets_keeps_its_brightness_byte_on_lock()
+    {
+        var (hub, tx, state, _) = LockedAioHub(usbConnected: true, nexusWidgets: true);
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void A_usb_connected_aio_showing_its_own_screen_still_goes_dark_on_lock()
+    {
+        var (hub, tx, state, _) = LockedAioHub(usbConnected: true, nexusWidgets: false);
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+
+        Assert.Equal(0, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void An_aio_with_no_usb_cable_goes_dark_even_with_nexus_widgets_on()
+    {
+        var (hub, tx, state, _) = LockedAioHub(usbConnected: false, nexusWidgets: true);
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+
+        Assert.Equal(0, LastAioBrightness(tx));
     }
 
     private static (Slv3Hub Hub, FakeSlv3Network Net, FakeTxTransport Tx, FakeRxTransport Rx) CreateConnectedHub(Func<long>? nowMs = null, Nexus.Service.Lighting.LcdLockState? lockState = null)

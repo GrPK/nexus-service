@@ -106,7 +106,13 @@ public sealed class TryxPanoramaHub : IDisposable
         state.Changed += OnLockChanged;
     }
 
-    private void OnLockChanged(bool locked)
+    // Taken only briefly and never across a send, so it cannot invert with _lock or _txGate.
+    private readonly object _lockGate = new();
+
+    /// <summary>True while the lock holds the screen off on the wire.</summary>
+    internal bool LockDimmed => _lockDimmed;
+
+    internal void OnLockChanged(bool locked)
     {
         if (_lockSleep is null)
         {
@@ -114,24 +120,40 @@ public sealed class TryxPanoramaHub : IDisposable
         }
         if (locked)
         {
-            if (!_lockSleep.IsSleeping(LockKey, LockSetting) || _lockDimmed)
+            // Decided under the gate: a handler that ran after its unlock sees the unlock here.
+            lock (_lockGate)
             {
-                return;
+                if (!_lockSleep.IsSleeping(LockKey, LockSetting) || _lockDimmed)
+                {
+                    return;
+                }
+                _lockDimmed = true;
             }
-            _lockDimmed = true;
             if (IsConnected && State.ScreenEnabled)
             {
                 ServiceLog.Info("[lcd-lock] tryx screen sleeping");
                 SendReliable(TryxRkProtocol.BuildConfig(false, State.Brightness));
+                bool unlockedMeanwhile;
+                lock (_lockGate) { unlockedMeanwhile = !_lockDimmed; }
+                if (unlockedMeanwhile && IsConnected && State.ScreenEnabled)
+                {
+                    // The unlock's wake went out before this off did; put the screen back.
+                    SendReliable(TryxRkProtocol.BuildConfig(true, State.Brightness));
+                }
             }
             return;
         }
-        _lockSleep.Drain();
-        if (!_lockDimmed)
+        bool wasDimmed;
+        lock (_lockGate)
+        {
+            _lockSleep.Drain();
+            wasDimmed = _lockDimmed;
+            _lockDimmed = false;
+        }
+        if (!wasDimmed)
         {
             return;
         }
-        _lockDimmed = false;
         if (IsConnected && State.ScreenEnabled)
         {
             ServiceLog.Info("[lcd-lock] tryx screen waking");
@@ -520,9 +542,12 @@ public sealed class TryxPanoramaHub : IDisposable
         {
             // A panel that attaches or re-enumerates while locked joins the sleep before its
             // first write, so the remembered enabled state never reaches the wire.
-            if (_lockSleep?.IsSleeping(LockKey, LockSetting) == true)
+            lock (_lockGate)
             {
-                _lockDimmed = true;
+                if (_lockSleep?.IsSleeping(LockKey, LockSetting) == true)
+                {
+                    _lockDimmed = true;
+                }
             }
             transport.Write(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), State.Brightness));
             // Bootstrap the device serial: get_file_list needs the panel's serial_number (locked),

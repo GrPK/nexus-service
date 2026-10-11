@@ -127,7 +127,7 @@ public class CorsairLcdLockTests
     }
 
     [Fact]
-    public void The_lock_never_sends_a_hand_back_or_stops_frames()
+    public void The_lock_pass_sends_only_a_brightness_report_and_never_a_hand_back()
     {
         var rig = new Rig();
         rig.Pass();
@@ -137,9 +137,8 @@ public class CorsairLcdLockTests
         rig.Lock.Set(true);
         rig.Pass();
 
-        // Only the brightness report: no 1d 00 host-mode-off and no hand-back select.
+        // The worker's brightness pass: one brightness report, no host-mode-off, no hand-back select.
         Assert.Equal(new[] { BrightnessZero }, rig.Hid.Features.Select(f => f).ToArray());
-        Assert.True(rig.Lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF }));
         Assert.DoesNotContain(rig.Hid.Features, f => f.Length >= 3 && f[1] == 0x1d && f[2] == 0x00);
     }
 

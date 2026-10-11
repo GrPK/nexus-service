@@ -75,11 +75,18 @@ public sealed class KrakenHub : IDisposable
     // Session lock. The backlight lives on the cooler, so the user's value is held here
     // while it is dark and never written into the snapshot or the settings. Guarded by _lock.
     private const string LockKey = "lcd";
+    private LcdLockState? _lockState;
     private LcdLockSleepSet? _lockSleep;
     private Func<bool>? _lockSetting;
+    private Func<int?>? _loadRestore;
+    private Action<int?>? _saveRestore;
     private bool _lockDimmed;
     private bool _lockRestorePending;
     private int _lockSavedBrightness;
+    // Changes made while dark are stored and applied on unlock, ahead of the backlight, so
+    // nothing here can put an image on a glass the lock is holding at zero.
+    private bool _lockPendingReupload;
+    private KrakenDisplayMode? _lockPendingMode;
 
     /// <summary>True while the lock holds the backlight at zero. Streamed frames are dropped meanwhile.</summary>
     public bool LockDimmed
@@ -87,15 +94,22 @@ public sealed class KrakenHub : IDisposable
         get { lock (_lock) { return _lockDimmed; } }
     }
 
-    /// <summary>Wires the session lock. <paramref name="sleepWhenLocked"/> is read once per lock.</summary>
-    public void BindLockSleep(LcdLockState state, Func<bool> sleepWhenLocked)
+    /// <summary>
+    /// Wires the session lock. <paramref name="sleepWhenLocked"/> is read once per lock.
+    /// The restore pair persists the pre-lock level in its own field, so a restart while dark
+    /// still brings the glass back; it is never the user's brightness.
+    /// </summary>
+    public void BindLockSleep(LcdLockState state, Func<bool> sleepWhenLocked, Func<int?>? loadRestore = null, Action<int?>? saveRestore = null)
     {
+        _lockState = state;
         _lockSleep = new LcdLockSleepSet(state);
         _lockSetting = sleepWhenLocked;
+        _loadRestore = loadRestore;
+        _saveRestore = saveRestore;
         state.Changed += OnLockChanged;
     }
 
-    private void OnLockChanged(bool locked)
+    internal void OnLockChanged(bool locked)
     {
         if (_lockSleep is null || _lockSetting is null)
         {
@@ -103,10 +117,7 @@ public sealed class KrakenHub : IDisposable
         }
         if (locked)
         {
-            if (_lockSleep.IsSleeping(LockKey, _lockSetting))
-            {
-                EnterLockSleep();
-            }
+            EnterLockSleep();
         }
         else
         {
@@ -116,12 +127,18 @@ public sealed class KrakenHub : IDisposable
     }
 
     // Same lock order as SetLcdBacklight: transfer lock first, so a rotation re-upload in
-    // flight finishes before the backlight moves.
+    // flight finishes before the backlight moves. The decision is taken under both locks:
+    // a handler that waited behind a bucket upload while the PC was unlocked meanwhile sees
+    // the unlock here and does nothing.
     private void EnterLockSleep()
     {
         lock (_lcdTransferLock)
         lock (_lock)
         {
+            if (_lockSleep is null || _lockSetting is null || !_lockSleep.IsSleeping(LockKey, _lockSetting))
+            {
+                return;
+            }
             // Not connected yet: Connect applies the lock itself, from the same decision.
             if (_lockDimmed || !_isConnected || _device == null || !_model.HasLcd)
             {
@@ -129,6 +146,7 @@ public sealed class KrakenHub : IDisposable
             }
             _lockSavedBrightness = _snapshot.LcdBrightness;
             _lockDimmed = true;
+            _saveRestore?.Invoke(_lockSavedBrightness);
             WriteLocked(KrakenProtocol.EncodeSetBacklight(0, _snapshot.LcdOrientationQuarterTurns));
             ServiceLog.Info($"[lcd-lock] kraken LCD sleeping (backlight {_lockSavedBrightness}% kept)");
         }
@@ -146,13 +164,37 @@ public sealed class KrakenHub : IDisposable
             _lockDimmed = false;
             if (_isConnected && _device != null)
             {
+                ApplyPendingWhileDarkLocked();
                 WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns));
+                _saveRestore?.Invoke(null);
                 ServiceLog.Info($"[lcd-lock] kraken LCD waking to {_lockSavedBrightness}%");
             }
             else
             {
                 // The cooler stays dark and its read-back will say zero; Connect restores the real value.
                 _lockRestorePending = true;
+            }
+        }
+    }
+
+    // Image and mode changes that arrived while the glass was held dark.
+    private void ApplyPendingWhileDarkLocked()
+    {
+        var reupload = _lockPendingReupload;
+        var mode = _lockPendingMode;
+        _lockPendingReupload = false;
+        _lockPendingMode = null;
+        if (reupload && _lastLcdFrame != null)
+        {
+            UploadLcdFrameLocked(_lastLcdFrame, _snapshot.LcdOrientationQuarterTurns);
+        }
+        else if (mode is { } wanted)
+        {
+            var reply = ExchangeLocked(
+                KrakenProtocol.EncodeSetDisplayMode(wanted, 0), 0x39, 0x01, CommandReadTimeoutMs);
+            if (reply != null && KrakenProtocol.IsAck(reply))
+            {
+                _snapshot = _snapshot.WithDisplayMode(wanted);
             }
         }
     }
@@ -320,10 +362,15 @@ public sealed class KrakenHub : IDisposable
                     ?? KrakenDisplayMode.Liquid;
             }
 
-            // A cooler that stayed dark across a reconnect reads back zero, which is not the
-            // user's value; the one held here is.
+            // A cooler that stayed dark across a reconnect, or across a restart, reads back
+            // zero, which is not the user's value; the one held here (or persisted) is.
             var sleepNow = _model.HasLcd && _lockSleep is not null && _lockSetting is not null
                 && _lockSleep.IsSleeping(LockKey, _lockSetting);
+            if (!_lockDimmed && !_lockRestorePending && _model.HasLcd && _loadRestore?.Invoke() is { } persisted)
+            {
+                _lockSavedBrightness = persisted;
+                _lockRestorePending = true;
+            }
             var restore = _lockRestorePending || (_lockDimmed && !sleepNow);
             if (_lockDimmed || restore)
             {
@@ -332,6 +379,7 @@ public sealed class KrakenHub : IDisposable
             else if (sleepNow)
             {
                 _lockSavedBrightness = brightness;
+                _saveRestore?.Invoke(brightness);
             }
             _lockDimmed = sleepNow;
 
@@ -342,6 +390,10 @@ public sealed class KrakenHub : IDisposable
             if (_model.HasLcd && (sleepNow || restore))
             {
                 WriteLocked(KrakenProtocol.EncodeSetBacklight(sleepNow ? 0 : brightness, orientation));
+                if (!sleepNow)
+                {
+                    _saveRestore?.Invoke(null);
+                }
                 ServiceLog.Info(sleepNow
                     ? "[lcd-lock] kraken LCD attached while locked; staying dark"
                     : $"[lcd-lock] kraken LCD restored to {brightness}% after reconnect");
@@ -526,7 +578,14 @@ public sealed class KrakenHub : IDisposable
             // The panel will not re-orient a stored image on its own.
             if (rotated && _lastLcdFrame != null && _snapshot.DisplayMode == KrakenDisplayMode.Bucket)
             {
-                UploadLcdFrameLocked(_lastLcdFrame, turns);
+                if (_lockDimmed)
+                {
+                    _lockPendingReupload = true;
+                }
+                else
+                {
+                    UploadLcdFrameLocked(_lastLcdFrame, turns);
+                }
             }
             return true;
         }
@@ -539,6 +598,14 @@ public sealed class KrakenHub : IDisposable
             if (_device == null)
             {
                 return false;
+            }
+            if (_lockDimmed)
+            {
+                // Held until unlock; the glass stays dark and unchanged meanwhile.
+                _lockPendingMode = mode;
+                _lockPendingReupload = false;
+                _snapshot = _snapshot.WithDisplayMode(mode);
+                return true;
             }
             var reply = ExchangeLocked(
                 KrakenProtocol.EncodeSetDisplayMode(mode, bucketIndex), 0x39, 0x01, CommandReadTimeoutMs);
@@ -630,6 +697,14 @@ public sealed class KrakenHub : IDisposable
             }
             _lastLcdFrame = source;
             _streamReady = false;
+            if (_lockDimmed)
+            {
+                // Stored now, shown on unlock.
+                _lockPendingReupload = true;
+                _lockPendingMode = null;
+                _snapshot = _snapshot.WithDisplayMode(KrakenDisplayMode.Bucket);
+                return true;
+            }
             return UploadLcdFrameLocked(source, _snapshot.LcdOrientationQuarterTurns);
         }
     }
