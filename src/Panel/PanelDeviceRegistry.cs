@@ -63,7 +63,14 @@ public sealed class PanelDeviceRegistry
                 if (existing is not null)
                 {
                     existing.LastSeenAt = now;
-                    existing.Capabilities = capabilities ?? existing.Capabilities;
+                    // A Y70 kiosk not yet on its panel sends the surface alone. Streamed
+                    // panels encode "unsupported" as null, so a merge would keep a swapped-out
+                    // model's flags: they replace.
+                    existing.Capabilities = capabilities is null
+                        ? existing.Capabilities
+                        : surface == PanelSurfaces.Y70
+                            ? MergeCapabilities(existing.Capabilities, capabilities)
+                            : capabilities;
                     result = Clone(existing);
                     return;
                 }

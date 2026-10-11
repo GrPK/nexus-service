@@ -70,6 +70,22 @@ public sealed class PanelDeviceRegistryTests : IDisposable
         Assert.Equal("#78350f", reused.BackgroundColor);
     }
 
+    // A Y70 kiosk still on the desktop monitor registers with its surface alone.
+    [Fact]
+    public void Allocate_Reuse_KeepsViewportFactsTheCallerOmits()
+    {
+        var first = _registry.Allocate(null, new PanelDeviceCapabilities
+        {
+            Surface = PanelSurfaces.Y70, CssWidth = 1100, CssHeight = 3840, Dpr = 1,
+        });
+
+        var reused = _registry.Allocate(null, Caps(PanelSurfaces.Y70));
+
+        Assert.Equal(first.Id, reused.Id);
+        Assert.Equal(1100, reused.Capabilities?.CssWidth);
+        Assert.Equal(3840, reused.Capabilities?.CssHeight);
+    }
+
     [Fact]
     public void Allocate_SingleInstance_DoesNotHijackDisplayBoundRecord()
     {

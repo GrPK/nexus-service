@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using LibreHardwareMonitor.Hardware;
 using LibreHardwareMonitor.Hardware.Storage;
@@ -208,20 +209,23 @@ public sealed class LhmComputer : IDisposable
     {
         if (!_openTask.IsCompletedSuccessfully) return;
 
+        var floorMs = refresh == SensorRefresh.Fast ? FastFloorMs : NormalFloorMs;
+        if (refresh != SensorRefresh.Force && Environment.TickCount64 - Interlocked.Read(ref _lastUpdateTicks) < floorMs)
+        {
+            return;
+        }
+        // Outside _updateLock: an IConfigStore.Update mutator can hold the store lock while waiting for it.
+        var monitoring = _config.Load().Monitoring;
+
         lock (_updateLock)
         {
             var now = Environment.TickCount64;
-            if (refresh != SensorRefresh.Force)
+            if (refresh != SensorRefresh.Force && now - _lastUpdateTicks < floorMs)
             {
-                var floorMs = refresh == SensorRefresh.Fast ? FastFloorMs : NormalFloorMs;
-                if (now - _lastUpdateTicks < floorMs)
-                {
-                    return;
-                }
+                return;
             }
 
-            _lastUpdateTicks = now;
-            var monitoring = _config.Load().Monitoring;
+            Interlocked.Exchange(ref _lastUpdateTicks, now);
             // LibreHardwareMonitor's IntelCpu.Update sleeps 1ms per physical core
             // in its core-clock loop. At Windows' default 15.6ms timer tick that
             // is ~188ms on a 12-core part - 57% of the whole walk, all of it

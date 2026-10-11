@@ -131,8 +131,6 @@ public static partial class LinuxSession
 
     private static void Apply(SessionInfo s)
     {
-        SessionUid = s.Uid;
-        SessionGid = s.Gid;
         // Override unconditionally: this only runs as a root daemon with no
         // session env, where HOME/XDG_CONFIG_HOME are pre-set to root's by
         // sudo/systemd - set-if-unset would leave them pointing at /root.
@@ -157,6 +155,9 @@ public static partial class LinuxSession
         // context as root on the user's XWayland. Browsers take them per-child.
         SessionDisplay = s.Display;
         SessionXauthority = s.Xauthority;
+        // Set last: LinuxPanelKioskHost.Reconcile reads a null SessionUid as "no session yet".
+        SessionGid = s.Gid;
+        SessionUid = s.Uid;
 
         Console.Error.WriteLine($"[session] root daemon adopted {s.Type ?? "unknown"} session of uid {s.Uid} (home {s.Home}, wayland {s.Wayland ?? "none"}, display {s.Display ?? "none"})");
     }

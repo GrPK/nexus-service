@@ -175,7 +175,7 @@ public sealed class SmartHealthMonitor : ISmartHealthSource
         }
     }
 
-    private static SmartDriveInfo BuildDrive(DiskInfoToolkit.StorageDevice dit, string hardwareId)
+    private static SmartDriveInfo BuildDrive(DiskInfoToolkit.Devices.StorageDevice dit, string hardwareId)
     {
         var serial = dit.SerialNumber ?? "";
         var id = !string.IsNullOrWhiteSpace(serial) ? $"storage:{serial}" : $"storage:{hardwareId}";
@@ -195,7 +195,7 @@ public sealed class SmartHealthMonitor : ISmartHealthSource
             };
         }
 
-        var attributeSamples = (dit.SmartAttributes ?? new List<DiskInfoToolkit.SmartAttributeEntry>())
+        var attributeSamples = (dit.SmartAttributes ?? new List<DiskInfoToolkit.Smart.SmartAttributeEntry>())
             .Select(a => new SmartAttributeSample(a.ID, a.Name ?? "", a.CurrentValue, a.WorstValue, a.ThresholdValue, a.RawValue))
             .ToList();
 
@@ -252,30 +252,30 @@ public sealed class SmartHealthMonitor : ISmartHealthSource
         };
     }
 
-    private static string MapBus(DiskInfoToolkit.StorageBusType bus) => bus switch
+    private static string MapBus(DiskInfoToolkit.Devices.StorageBusType bus) => bus switch
     {
-        DiskInfoToolkit.StorageBusType.Nvme => "nvme",
-        DiskInfoToolkit.StorageBusType.Sata or DiskInfoToolkit.StorageBusType.Ata => "sata",
-        DiskInfoToolkit.StorageBusType.Usb => "usb",
-        DiskInfoToolkit.StorageBusType.RAID => "raid",
+        DiskInfoToolkit.Devices.StorageBusType.Nvme => "nvme",
+        DiskInfoToolkit.Devices.StorageBusType.Sata or DiskInfoToolkit.Devices.StorageBusType.Ata => "sata",
+        DiskInfoToolkit.Devices.StorageBusType.Usb => "usb",
+        DiskInfoToolkit.Devices.StorageBusType.RAID => "raid",
         _ => "other",
     };
 
-    private static StorageBusKind MapBusKind(DiskInfoToolkit.StorageBusType bus) => bus switch
+    private static StorageBusKind MapBusKind(DiskInfoToolkit.Devices.StorageBusType bus) => bus switch
     {
-        DiskInfoToolkit.StorageBusType.Nvme => StorageBusKind.Nvme,
-        DiskInfoToolkit.StorageBusType.Sata or DiskInfoToolkit.StorageBusType.Ata => StorageBusKind.Sata,
-        DiskInfoToolkit.StorageBusType.Usb => StorageBusKind.Usb,
-        DiskInfoToolkit.StorageBusType.RAID => StorageBusKind.Raid,
+        DiskInfoToolkit.Devices.StorageBusType.Nvme => StorageBusKind.Nvme,
+        DiskInfoToolkit.Devices.StorageBusType.Sata or DiskInfoToolkit.Devices.StorageBusType.Ata => StorageBusKind.Sata,
+        DiskInfoToolkit.Devices.StorageBusType.Usb => StorageBusKind.Usb,
+        DiskInfoToolkit.Devices.StorageBusType.RAID => StorageBusKind.Raid,
         _ => StorageBusKind.Other,
     };
 
-    private static VendorHealthStatus? MapVendorHealth(DiskInfoToolkit.StorageHealthStatus? status) => status switch
+    private static VendorHealthStatus? MapVendorHealth(DiskInfoToolkit.Smart.StorageHealthStatus? status) => status switch
     {
-        DiskInfoToolkit.StorageHealthStatus.Good => VendorHealthStatus.Good,
-        DiskInfoToolkit.StorageHealthStatus.Caution => VendorHealthStatus.Caution,
-        DiskInfoToolkit.StorageHealthStatus.Warning => VendorHealthStatus.Warning,
-        DiskInfoToolkit.StorageHealthStatus.Bad => VendorHealthStatus.Bad,
+        DiskInfoToolkit.Smart.StorageHealthStatus.Good => VendorHealthStatus.Good,
+        DiskInfoToolkit.Smart.StorageHealthStatus.Caution => VendorHealthStatus.Caution,
+        DiskInfoToolkit.Smart.StorageHealthStatus.Warning => VendorHealthStatus.Warning,
+        DiskInfoToolkit.Smart.StorageHealthStatus.Bad => VendorHealthStatus.Bad,
         _ => null,
     };
 
