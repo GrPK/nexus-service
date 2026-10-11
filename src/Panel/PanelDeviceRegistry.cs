@@ -614,6 +614,8 @@ public sealed class PanelDeviceRegistry
             // cannot dim never read it.
             if (patch.LcdBrightness.HasValue)
                 record.LcdBrightness = Math.Clamp(patch.LcdBrightness.Value, 0, 100);
+            if (patch.SleepWhenLocked.HasValue)
+                record.SleepWhenLocked = patch.SleepWhenLocked.Value;
             if (patch.SecondaryMonitor.HasValue)
                 record.SecondaryMonitor = patch.SecondaryMonitor.Value;
             if (patch.Portrait.HasValue)
@@ -736,6 +738,7 @@ public sealed class PanelDeviceRegistry
             record.Flip180 = null;
             record.Mirror = null;
             record.LcdBrightness = null;
+            record.SleepWhenLocked = null;
             record.SecondaryMonitor = null;
             record.Portrait = null;
             record.HighResolution = null;
@@ -1019,6 +1022,7 @@ public sealed class PanelDeviceRegistry
             Flip180 = r.Flip180,
             Mirror = r.Mirror,
             LcdBrightness = r.LcdBrightness,
+            SleepWhenLocked = r.SleepWhenLocked,
             SecondaryMonitor = r.SecondaryMonitor,
             Portrait = r.Portrait,
             HighResolution = r.HighResolution,

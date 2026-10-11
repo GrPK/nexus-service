@@ -99,7 +99,11 @@ public static partial class DevicesRoutes
             CorsairLinkLcd lcd,
             IConfigStore store) =>
         {
-            if (body.Brightness.HasValue) lcd.SetBrightness(body.Brightness.Value);
+            var storedSetting = store.Load().Devices.Corsair;
+            // While the lock holds the glass dark the new value is stored only; the worker
+            // applies it on unlock.
+            if (body.Brightness.HasValue && !lcd.IsLockSleeping(() => storedSetting.SleepWhenLocked))
+                lcd.SetBrightness(body.Brightness.Value);
             if (body.Rotation.HasValue) lcd.SetRotation(body.Rotation.Value);
 
             store.Update(s =>
@@ -116,6 +120,10 @@ public static partial class DevicesRoutes
                 {
                     s.Devices.Corsair.LcdRotation = body.Rotation.Value;
                 }
+                if (body.SleepWhenLocked.HasValue)
+                {
+                    s.Devices.Corsair.SleepWhenLocked = body.SleepWhenLocked.Value;
+                }
             });
 
             return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
@@ -131,6 +139,7 @@ public static partial class DevicesRoutes
                     SelectedMediaId = s.LcdSelectedMediaId,
                     Brightness = s.LcdBrightness,
                     Rotation = s.LcdRotation,
+                    SleepWhenLocked = s.SleepWhenLocked,
                 },
                 AppJsonContext.Default.LcdStateResponse);
         });
@@ -154,6 +163,7 @@ public sealed class LcdSettingsRequest
     public string? MediaId { get; set; }
     public byte? Brightness { get; set; }
     public byte? Rotation { get; set; }
+    public bool? SleepWhenLocked { get; set; }
 }
 
 public sealed class LcdStateResponse
@@ -162,4 +172,5 @@ public sealed class LcdStateResponse
     public string? SelectedMediaId { get; set; }
     public byte Brightness { get; set; }
     public byte Rotation { get; set; }
+    public bool SleepWhenLocked { get; set; }
 }

@@ -644,6 +644,10 @@ public static class NexusServiceCollectionExtensions
             services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Lighting.SessionLockListener>());
         }
 
+        // The lock as cooler / AIO LCD drivers see it; inert where no listener exists.
+        services.AddSingleton(sp => new Nexus.Service.Lighting.LcdLockState(
+            sp.GetService<Nexus.Service.Lighting.SessionLockListener>()));
+
         return services;
     }
 
@@ -1665,7 +1669,9 @@ public static class NexusServiceCollectionExtensions
                 hub, driver,
                 sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveMedia>(),
                 sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
-                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>());
+                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>(),
+                lockSleeping: id => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.IsLockSleeping(id) == true);
+            sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>().Changed += _ => player.Wake();
             player.GlassOwnerChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
             return player;
         });
@@ -2261,7 +2267,8 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>(),
                 sp.GetRequiredService<Nexus.Service.Devices.DeviceControlGate>(),
                 notifyOverlay,
-                notifyPanelChanged: id => Nexus.Service.Sockets.PanelTopics.BroadcastPanelDevice(sockets, id));
+                notifyPanelChanged: id => Nexus.Service.Sockets.PanelTopics.BroadcastPanelDevice(sockets, id),
+                lockState: sp.GetRequiredService<Nexus.Service.Lighting.LcdLockState>());
         });
         services.AddHostedService(sp =>
             sp.GetRequiredService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>());

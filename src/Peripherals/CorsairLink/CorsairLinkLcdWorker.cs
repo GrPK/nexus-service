@@ -27,6 +27,7 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
     private byte _appliedBrightness = 255;
     private byte _appliedRotation = 255;
     private int _appliedGeneration = -1;
+    private bool _lockSlept;
 
     public CorsairLinkLcdWorker(
         CorsairLinkLcd lcd,
@@ -76,10 +77,20 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
 
                 // Brightness and rotation are feature reports on their own channel, so they
                 // apply while a panel session streams.
-                if (s.LcdBrightness != _appliedBrightness)
+                // The lock override lives here, not in the stored setting: an attach or
+                // re-open resets the sentinels above, so the dark value wins over the stored
+                // one on every path, and unlock simply stops overriding.
+                var sleeping = _lcd.IsLockSleeping(() => s.SleepWhenLocked);
+                var brightness = sleeping ? (byte)0 : s.LcdBrightness;
+                if (sleeping != _lockSlept)
                 {
-                    _lcd.SetBrightness(s.LcdBrightness);
-                    _appliedBrightness = s.LcdBrightness;
+                    _lockSlept = sleeping;
+                    ServiceLog.Info($"[lcd-lock] corsair LCD {(sleeping ? "sleeping" : "waking")}");
+                }
+                if (brightness != _appliedBrightness)
+                {
+                    _lcd.SetBrightness(brightness);
+                    _appliedBrightness = brightness;
                 }
 
                 if (s.LcdRotation != _appliedRotation)

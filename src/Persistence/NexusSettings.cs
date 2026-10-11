@@ -1966,6 +1966,8 @@ public sealed class NollieStandaloneSettings
 
 public sealed class CorsairSettings
 {
+    /// <summary>Put the LCD dark while the PC is locked and restore <see cref="LcdBrightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     public string? LcdSelectedMediaId { get; set; }
     /// <summary>LCD brightness 0-100. 0 = display off, 100 = maximum.</summary>
     public byte LcdBrightness { get; set; } = 100;
