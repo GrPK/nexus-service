@@ -342,19 +342,19 @@ public class BulkPanelDriverTests
     // ── policy ──
 
     [Fact]
-    public void Every_bulk_driver_defaults_to_nexus_control_off_and_all_but_zmatrices_read_as_experimental()
+    public void Every_bulk_driver_defaults_to_nexus_control_off_and_only_lianli_reads_as_experimental()
     {
         IBulkPanelDriver[] drivers =
         {
             new ThermalrightPanelDriver(), new RyujinPanelDriver(), new UniversalScreen88Driver(),
-            new ZMatricesPanelDriver(), new HydroShift2LcdDriver(),
+            new ZMatricesPanelDriver(), new HydroShift2LcdDriver(), new HydroShift2CurveLcdDriver(),
         };
 
         Assert.All(drivers, d =>
         {
-            var isZMatrices = d is ZMatricesPanelDriver;
+            var isLianLi = d is UniversalScreen88Driver or HydroShift2LcdDriver or HydroShift2CurveLcdDriver;
             Assert.False(DeviceControlPolicy.DefaultOn(d.HandlerId));
-            Assert.Equal(!isZMatrices, DeviceControlPolicy.IsExperimental(d.HandlerId));
+            Assert.Equal(isLianLi, DeviceControlPolicy.IsExperimental(d.HandlerId));
             Assert.NotEmpty(d.ProductIds);
             Assert.NotEqual(0, d.WritePipeId);
         });
