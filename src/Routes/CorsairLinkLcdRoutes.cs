@@ -129,6 +129,60 @@ public static partial class DevicesRoutes
             return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
         });
 
+        // What the glass shows while Nexus is not running: a library item written into the
+        // LCD's flash (MediaId), or the firmware's coolant screen (null).
+        app.MapPut("/devices/corsair/lcd/device-screen", (
+            LcdDeviceScreenRequest body,
+            CorsairLinkLcd lcd,
+            CorsairLinkHubs hubs,
+            CorsairLinkLcdMediaLibrary library,
+            Nexus.Service.Devices.DeviceControlGate gate,
+            IConfigStore store) =>
+        {
+            // Writing flash and toggling host mode would take the glass from whoever owns it.
+            if (!lcd.HasDevice || !gate.IsEnabled(CorsairLinkLcd.DeviceId) || hubs.LcdHub is { ForeignHostSeen: true })
+            {
+                return Results.Json(ApiResponse.Fail("The cooler screen is not under Nexus Control"), AppJsonContext.Default.ApiResponse, statusCode: 409);
+            }
+            if (body.MediaId is { } id)
+            {
+                var image = CorsairLinkLcdMediaLibrary.IsValidId(id) ? library.LoadImageData(id) : null;
+                if (image is null)
+                {
+                    return Results.Json(ApiResponse.Fail("Media not found"), AppJsonContext.Default.ApiResponse, statusCode: 404);
+                }
+                var frames = new byte[image.Frames.Length][];
+                var delays = new int[image.Frames.Length];
+                for (var i = 0; i < frames.Length; i++)
+                {
+                    var frame = CorsairLinkLcdDeviceFile.ForDevice(image.Frames[i].JpegBytes);
+                    if (frame is null)
+                    {
+                        return Results.Json(ApiResponse.Fail("The image could not be read"), AppJsonContext.Default.ApiResponse, statusCode: 422);
+                    }
+                    frames[i] = frame;
+                    delays[i] = image.Frames[i].DelayMs;
+                }
+                var file = CorsairLinkLcdDeviceFile.Build(frames, CorsairLinkLcdDeviceFile.FrameMs(delays, frames.Length));
+                if (file is null)
+                {
+                    return Results.Json(ApiResponse.Fail("Too large to store on the cooler"), AppJsonContext.Default.ApiResponse, statusCode: 413);
+                }
+                if (!lcd.StoreImage(file))
+                {
+                    return Results.Json(ApiResponse.Fail("The cooler screen did not accept the image"), AppJsonContext.Default.ApiResponse, statusCode: 502);
+                }
+            }
+
+            // Persisted first: the LCD worker re-reads the setting into ShowsStoredImage.
+            store.Update(s => s.Devices.Corsair.LcdDeviceMediaId = body.MediaId);
+            if (!lcd.SelectHandBackScreen(storedImage: body.MediaId is not null))
+            {
+                return Results.Json(ApiResponse.Fail("The cooler screen did not accept the change"), AppJsonContext.Default.ApiResponse, statusCode: 502);
+            }
+            return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
+        });
+
         app.MapGet("/devices/corsair/lcd/state", (CorsairLinkLcd lcd, IConfigStore store) =>
         {
             var s = store.Load().Devices.Corsair;
@@ -140,6 +194,7 @@ public static partial class DevicesRoutes
                     Brightness = s.LcdBrightness,
                     Rotation = s.LcdRotation,
                     SleepWhenLocked = s.SleepWhenLocked,
+                    DeviceMediaId = s.LcdDeviceMediaId,
                 },
                 AppJsonContext.Default.LcdStateResponse);
         });
@@ -173,4 +228,10 @@ public sealed class LcdStateResponse
     public byte Brightness { get; set; }
     public byte Rotation { get; set; }
     public bool SleepWhenLocked { get; set; }
+    public string? DeviceMediaId { get; set; }
+}
+
+public sealed class LcdDeviceScreenRequest
+{
+    public string? MediaId { get; set; }
 }

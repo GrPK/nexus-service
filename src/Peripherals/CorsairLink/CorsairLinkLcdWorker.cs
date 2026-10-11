@@ -74,6 +74,7 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
                 }
 
                 var s = _store.Load().Devices.Corsair;
+                _lcd.ShowsStoredImage = s.LcdDeviceMediaId is not null;
 
                 // Brightness and rotation are feature reports on their own channel, so they
                 // apply while a panel session streams.

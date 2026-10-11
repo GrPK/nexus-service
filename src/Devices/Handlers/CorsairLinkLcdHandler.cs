@@ -16,14 +16,16 @@ namespace Nexus.Service.Devices.Handlers;
 public sealed class CorsairLinkLcdHandler : IDeviceHandler
 {
     private readonly CorsairLinkLcd _lcd;
+    private readonly CorsairLinkHubs _hubs;
 
-    public CorsairLinkLcdHandler(CorsairLinkLcd lcd)
+    public CorsairLinkLcdHandler(CorsairLinkLcd lcd, CorsairLinkHubs hubs)
     {
         _lcd = lcd;
+        _hubs = hubs;
     }
 
     public string Id => CorsairLinkLcd.DeviceId;
-    public string Name => "Corsair iCUE LINK LCD";
+    public string Name => "Corsair " + _hubs.LcdProductName;
     public string Category => "cooler";
     public bool HasPage => false;
 

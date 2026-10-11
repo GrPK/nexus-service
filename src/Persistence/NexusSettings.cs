@@ -1973,6 +1973,8 @@ public sealed class CorsairSettings
     public byte LcdBrightness { get; set; } = 100;
     /// <summary>LCD rotation: 0 = 0 deg, 1 = 90 deg, 2 = 180 deg, 3 = 270 deg.</summary>
     public byte LcdRotation { get; set; }
+    /// <summary>Media stored in the LCD's flash and shown while no host drives it; null = the coolant screen.</summary>
+    public string? LcdDeviceMediaId { get; set; }
     /// <summary>USB serial (or HID path) of the LINK hub that owns the unqualified "corsair:ch{N}" ids.</summary>
     public string? PrimaryHubKey { get; set; }
 }

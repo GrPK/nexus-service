@@ -44,6 +44,15 @@ public sealed class CorsairLinkLcd
     // vendor app's until Nexus Control is on and something actually paints it. Only then
     // is there anything to hand back, so only then is the shutdown sequence ours to send.
     private bool _claimed;
+    // Frames are ignored until host mode is on, and a hand-back (Nexus's or iCUE's exit)
+    // turns it off, so the first frame after attach or a hand-back turns it back on.
+    private bool _hostMode;
+    // A gone LCD fails every write; a busy one can fail one. Dropping the handle on a
+    // run of failures re-opens it without flapping on a single miss.
+    private const int FailedWritesBeforeDrop = 3;
+    private int _failedWrites;
+    private bool _retired;
+    private int _repaintRequested;
     private int _attachGeneration;
 
     public CorsairLinkLcd(Nexus.Service.Lighting.LcdLockState? lockState = null)
@@ -90,7 +99,10 @@ public sealed class CorsairLinkLcd
     /// </summary>
     public bool IsStreamLive =>
         _streamOwner is not null
-        && System.Environment.TickCount64 - System.Threading.Volatile.Read(ref _lastStreamFrameMs) < StreamIdleMs;
+        && (_storing || System.Environment.TickCount64 - System.Threading.Volatile.Read(ref _lastStreamFrameMs) < StreamIdleMs);
+
+    // An upload holds the pipe for seconds; the stream it paused still owns the glass.
+    private volatile bool _storing;
 
     /// <summary>
     /// Marks <paramref name="owner"/> as the panel session holding the glass. The claim is
@@ -100,6 +112,7 @@ public sealed class CorsairLinkLcd
     public void ClaimStream(object owner)
     {
         _streamOwner = owner;
+        System.Threading.Volatile.Write(ref _repaintRequested, 0);
         System.Threading.Volatile.Write(ref _lastStreamFrameMs, System.Environment.TickCount64);
     }
 
@@ -115,6 +128,13 @@ public sealed class CorsairLinkLcd
             System.Threading.Volatile.Write(ref _lastStreamFrameMs, System.Environment.TickCount64);
         }
     }
+
+    /// <summary>
+    /// True once after a screen select took the glass from <paramref name="owner"/>'s stream:
+    /// the stream re-pushes its last frame instead of waiting for the next render.
+    /// </summary>
+    public bool TakeRepaintRequest(object owner) =>
+        ReferenceEquals(_streamOwner, owner) && System.Threading.Interlocked.Exchange(ref _repaintRequested, 0) == 1;
 
     /// <summary>Releases the claim, but only if <paramref name="owner"/> still holds it.</summary>
     public void ReleaseStream(object owner)
@@ -134,6 +154,7 @@ public sealed class CorsairLinkLcd
     {
         lock (_lock)
         {
+            if (_retired) return;
             CorsairLinkDevice? lcdDev = null;
             foreach (var d in chain)
             {
@@ -146,7 +167,8 @@ public sealed class CorsairLinkLcd
             if (lcdDev is null) return;
 
             var opened = TryOpenMatchingHid(hid, AioPid, lcdDev.Serial)
-                ?? TryOpenMatchingHid(hid, Xd5Pid, lcdDev.Serial);
+                ?? TryOpenMatchingHid(hid, Xd5Pid, lcdDev.Serial)
+                ?? TryOpenSoleHid(hid, lcdDev.Type == 14 ? Xd5Pid : AioPid);
             if (opened is null) return;
 
             _device = opened;
@@ -168,6 +190,45 @@ public sealed class CorsairLinkLcd
         return null;
     }
 
+    // A TITAN RX LCD's USB serial differs from its chain serial, so a sole LCD on the
+    // type's PID is taken without a serial match, as OLH GetAioLCDSerial does.
+    private static IHidDevice? TryOpenSoleHid(IHidEnumerator hid, int pid)
+    {
+        HidDeviceInfo? sole = null;
+        foreach (var info in hid.Find(LcdVendorId, pid))
+        {
+            if (info.OutputReportByteLength != LcdOutputReportByteLength) continue;
+            if (sole is not null) return null;
+            sole = info;
+        }
+        return sole is null ? null : hid.Open(sole.Path, forInput: false);
+    }
+
+    // Repeated failed writes mean the LCD left the bus (it re-enumerates on its own); the
+    // hub session re-opens it on its next poll. Nothing is sent to the gone handle.
+    private void DropDevice()
+    {
+        ServiceLog.Warn("[corsair-lcd] writes failing; reopening the screen");
+        _failedWrites = 0;
+        _device?.Dispose();
+        _device = null;
+        _attached = false;
+        _serial = null;
+        _claimed = false;
+        _hostMode = false;
+    }
+
+    /// <summary>
+    /// Service-stop release: the fast teardown skips the connection worker's own release, so
+    /// the glass is handed back here (to the stored image or the coolant screen) and no late
+    /// re-attach takes it again before the process exits.
+    /// </summary>
+    public void ReleaseForShutdown(bool handBack)
+    {
+        lock (_lock) _retired = true;
+        Detach(handBack);
+    }
+
     /// <summary>Sends the shutdown feature-report sequence and disposes the device.</summary>
     /// <param name="handBack">False when another program now owns the LCD: the shutdown sequence would override its screen.</param>
     public void Detach(bool handBack = true)
@@ -180,6 +241,7 @@ public sealed class CorsairLinkLcd
                 SendShutdown();
             }
             _claimed = false;
+            _hostMode = false;
             _device.Dispose();
             _device = null;
             _attached = false;
@@ -199,6 +261,10 @@ public sealed class CorsairLinkLcd
             if (_device is null) return false;
 
             _claimed = true;
+            if (!_hostMode)
+            {
+                _hostMode = _device.SetFeature(HostModeOn);
+            }
             var lcdSlice = _writeBuffer.AsSpan(0, LcdBufferSize);
             var offset = 0;
             var total = jpeg.Length;
@@ -216,8 +282,10 @@ public sealed class CorsairLinkLcd
 
                 if (!_device.Write(_writeBuffer))
                 {
+                    if (++_failedWrites >= FailedWritesBeforeDrop) DropDevice();
                     return false;
                 }
+                _failedWrites = 0;
 
                 offset += chunkSize;
                 chunkIndex++;
@@ -246,11 +314,94 @@ public sealed class CorsairLinkLcd
         }
     }
 
-    // Three-step shutdown sequence per lsh.go:659-677.
+    /// <summary>
+    /// What the glass shows once the host lets go: the image stored in the LCD's flash, or
+    /// the firmware's coolant screen. Set from settings; the shutdown sequence carries it.
+    /// </summary>
+    public bool ShowsStoredImage { get; set; }
+
+    /// <summary>
+    /// Writes <paramref name="file"/> (a <see cref="CorsairLinkLcdDeviceFile"/>) into the
+    /// LCD's flash and commits it. It plays only once the stored screen is selected.
+    /// </summary>
+    public bool StoreImage(byte[] file)
+    {
+        lock (_lock)
+        {
+            if (_device is null) return false;
+            _storing = true;
+            try
+            {
+                return StoreImageLocked(_device, file);
+            }
+            finally
+            {
+                _storing = false;
+            }
+        }
+    }
+
+    private bool StoreImageLocked(IHidDevice device, byte[] file)
+    {
+        var sent = 0;
+        foreach (var report in CorsairLinkLcdDeviceFile.UploadReports(file))
+        {
+            if (!device.Write(report))
+            {
+                ServiceLog.Warn($"[corsair-lcd] stored-image write failed at report {sent} ({file.Length} B file)");
+                return false;
+            }
+            sent++;
+        }
+        // The upload held the pipe; a panel stream that was live still owns the glass.
+        if (_streamOwner is not null)
+        {
+            System.Threading.Volatile.Write(ref _lastStreamFrameMs, System.Environment.TickCount64);
+        }
+        if (!device.SetFeature(CorsairLinkLcdDeviceFile.CommitReport(file)))
+        {
+            ServiceLog.Warn($"[corsair-lcd] stored-image commit refused after {sent} reports");
+            return false;
+        }
+        ServiceLog.Info($"[corsair-lcd] stored a {file.Length} B image in {sent} reports");
+        return true;
+    }
+
+    /// <summary>
+    /// Selects the stored image or the coolant screen as the hand-back screen and shows it
+    /// now. iCUE wraps the choice in host mode on, choice, host mode off. Frames are ignored
+    /// out of host mode, so if Nexus was painting the glass host mode goes back on.
+    /// </summary>
+    public bool SelectHandBackScreen(bool storedImage)
+    {
+        lock (_lock)
+        {
+            if (_device is null) return false;
+            ShowsStoredImage = storedImage;
+            var painting = _hostMode;
+            var source = storedImage ? (byte)0x00 : (byte)0x01;
+            var ok = _device.SetFeature(HostModeOn)
+                && _device.SetFeature(new byte[] { 0x03, 0x1b, source, 0x01 })
+                && _device.SetFeature(new byte[] { 0x03, 0x1e, source, 0x01 })
+                && _device.SetFeature(HostModeOff);
+            _hostMode = false;
+            if (ok && painting)
+            {
+                ok = _hostMode = _device.SetFeature(HostModeOn);
+                System.Threading.Volatile.Write(ref _repaintRequested, 1);
+            }
+            if (!ok) ServiceLog.Warn($"[corsair-lcd] hand-back screen select refused (stored={storedImage})");
+            return ok;
+        }
+    }
+
+    // Shutdown sequence per lsh.go:659-677, with 1e naming the hand-back screen
+    // (00 stored image, 01 coolant screen), as iCUE sends it on exit.
     private void SendShutdown()
     {
-        _device!.SetFeature(new byte[] { 0x03, 0x1e, 0x01, 0x01 });
-        _device!.SetFeature(new byte[] { 0x03, 0x1d, 0x00, 0x01 });
+        var source = ShowsStoredImage ? (byte)0x00 : (byte)0x01;
+        _device!.SetFeature(new byte[] { 0x03, 0x1e, source, 0x01 });
+        _device!.SetFeature(HostModeOff);
         _device!.SetFeature(new byte[] { 0x03, 0x0b, 0x64, 0x01 });
     }
 
@@ -280,6 +431,9 @@ public sealed class CorsairLinkLcd
         buffer[6] = (byte)(dataLen & 0xFF);
         buffer[7] = (byte)((dataLen >> 8) & 0xFF);
     }
+
+    private static readonly byte[] HostModeOn = { 0x03, 0x1d, 0x01, 0x01 };
+    private static readonly byte[] HostModeOff = { 0x03, 0x1d, 0x00, 0x01 };
 
     internal static byte[] BuildBrightnessReport(byte value) =>
         new byte[] { 0x03, 0x0b, value, 0x01 };

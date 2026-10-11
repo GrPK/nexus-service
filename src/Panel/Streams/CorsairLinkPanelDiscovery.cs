@@ -48,7 +48,7 @@ public sealed class CorsairLinkPanelDiscovery : IStreamedPanelDiscovery
                 Profile = new StreamedPanelProfile
                 {
                     Kind = ProfileKind,
-                    DisplayName = "iCUE LINK LCD",
+                    DisplayName = _hubs.LcdProductName,
                     Surface = PanelSurfaces.LcdRound,
                     // Shares 'lcd-round' with the XC7, so the sidebar brands from this
                     // rather than the surface name.

@@ -163,6 +163,8 @@ public sealed class CorsairLinkLcdMediaLibrary
                 await MediaImporter.RunFfmpeg(
                     "-y", "-i", sourcePath,
                     "-vf", "scale=480:480",
+                    // The LCD decodes only 4:2:0 JPEG; ffmpeg keeps an RGB source at 4:4:4.
+                    "-pix_fmt", "yuvj420p",
                     "-frames:v", "1",
                     "-q:v", "5",
                     Path.Combine(dir, "frame-0000.jpg")).ConfigureAwait(false);
@@ -172,8 +174,12 @@ public sealed class CorsairLinkLcdMediaLibrary
                 await MediaImporter.RunFfmpeg(
                     "-y", "-i", sourcePath,
                     "-vf", "scale=480:480",
+                    // The LCD decodes only 4:2:0 JPEG; ffmpeg keeps an RGB source at 4:4:4.
+                    "-pix_fmt", "yuvj420p",
                     "-vsync", "0",
                     "-q:v", "5",
+                    // image2 numbers from 1 unless told otherwise; frames are read from 0000.
+                    "-start_number", "0",
                     Path.Combine(dir, "frame-%04d.jpg")).ConfigureAwait(false);
             }
 
