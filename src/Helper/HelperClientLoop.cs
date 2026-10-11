@@ -162,9 +162,8 @@ public sealed class HelperClientLoop
                 Payload = JsonSerializer.SerializeToElement(result, AppJsonContext.Default.HelperResult),
             };
             var bytes = JsonSerializer.SerializeToUtf8Bytes(reply, AppJsonContext.Default.HelperEnvelope);
-            // Reply writes don't go through HelperOutbound; they're driven
-            // by the read loop itself and ride the same pipe sequentially.
-            await Framing.WriteFrameAsync(pipe, bytes, ct).ConfigureAwait(false);
+            // Never write the pipe directly: replies run concurrently with each other and telemetry.
+            await _outbound.WriteReplyAsync(pipe, bytes, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
