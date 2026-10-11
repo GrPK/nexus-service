@@ -312,6 +312,39 @@ public class TryxMediaListTests
         Assert.Null(TryxMediaList.ParseCoolerFanConfig(Convert.FromHexString("0a020801" + "da1f06" + "08aa0b10f015")));
     }
 
+    [Fact]
+    public void ParseFirmwareVersion_reads_field_3_of_the_device_info_reply()
+    {
+        var reply = BuildDeviceInfoReply(firmwareVersion: "1.2.3", serial: "BYZL24112900109364");
+
+        Assert.Equal("1.2.3", TryxMediaList.ParseFirmwareVersion(reply));
+        Assert.Equal("BYZL24112900109364", TryxMediaList.ParseSerialNumber(reply));
+    }
+
+    [Fact]
+    public void ParseFirmwareVersion_is_null_without_a_version_or_for_other_replies()
+    {
+        Assert.Null(TryxMediaList.ParseFirmwareVersion(BuildDeviceInfoReply(firmwareVersion: null, serial: "BYZL24112900109364")));
+        Assert.Null(TryxMediaList.ParseFirmwareVersion(Convert.FromHexString("0a020801")));
+        Assert.Null(TryxMediaList.ParseFirmwareVersion(ReadOnlySpan<byte>.Empty));
+    }
+
+    // A device_info reply: header { version = 1 }, then device_info (f500) { firmware_version = 3,
+    // serial_number = 8 }.
+    private static byte[] BuildDeviceInfoReply(string? firmwareVersion, string serial)
+    {
+        var info = new List<byte>();
+        if (firmwareVersion is not null)
+        {
+            WriteTag(info, 3, 2); WriteVarint(info, (ulong)firmwareVersion.Length); info.AddRange(Encoding.UTF8.GetBytes(firmwareVersion));
+        }
+        WriteTag(info, 8, 2); WriteVarint(info, (ulong)serial.Length); info.AddRange(Encoding.UTF8.GetBytes(serial));
+        var top = new List<byte>();
+        WriteTag(top, 1, 2); WriteVarint(top, 2); top.Add(0x08); top.Add(0x01);
+        WriteTag(top, 500, 2); WriteVarint(top, (ulong)info.Count); top.AddRange(info);
+        return top.ToArray();
+    }
+
     private static byte[] BuildMediaListBlob(params (string path, long size)[] files)
     {
         var entries = new List<byte>();

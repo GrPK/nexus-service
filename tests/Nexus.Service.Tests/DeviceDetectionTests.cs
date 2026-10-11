@@ -69,7 +69,7 @@ public class DeviceDetectionTests
     [Fact]
     public void Tryx_IsConnected_ForCurrentRkFirmware()
     {
-        var handler = new TryxHandler();
+        var handler = TestHandlers.Tryx();
         var devices = new List<UsbDeviceEntry>
         {
             new() { VendorId = 0x391A, ProductId = 0x1011, Name = "PANO" },
@@ -81,7 +81,7 @@ public class DeviceDetectionTests
     [Fact]
     public void Tryx_IsConnected_ForPanorama360SePid()
     {
-        var handler = new TryxHandler();
+        var handler = TestHandlers.Tryx();
         var devices = new List<UsbDeviceEntry>
         {
             new() { VendorId = 0x391A, ProductId = 0x1021, Name = "PASE" },
@@ -93,7 +93,7 @@ public class DeviceDetectionTests
     [Fact]
     public void Tryx_IsConnected_ForPanorama360SeSecondPid()
     {
-        var handler = new TryxHandler();
+        var handler = TestHandlers.Tryx();
         var devices = new List<UsbDeviceEntry>
         {
             new() { VendorId = 0x391A, ProductId = 0x1061, Name = "PASE" },
@@ -108,7 +108,7 @@ public class DeviceDetectionTests
     [InlineData(0x10B1)] // PANO v2 / CV
     public void Tryx_IsConnected_ForPanoramaFamilyPids(int productId)
     {
-        var handler = new TryxHandler();
+        var handler = TestHandlers.Tryx();
         var devices = new List<UsbDeviceEntry>
         {
             new() { VendorId = 0x391A, ProductId = productId, Name = "PANO" },
@@ -120,13 +120,19 @@ public class DeviceDetectionTests
     [Fact]
     public void Tryx_NotConnected_ForRetiredLegacy18D1Firmware()
     {
-        var handler = new TryxHandler();
+        var handler = TestHandlers.Tryx();
         var devices = new List<UsbDeviceEntry>
         {
             new() { VendorId = 0x18D1, ProductId = 0x2D03, Name = "cm01" },
         };
 
         Assert.False(handler.IsConnected(devices));
+    }
+
+    [Fact]
+    public void Tryx_FirmwareVersion_IsEmpty_WithoutAConnectedPanel()
+    {
+        Assert.Equal("", TestHandlers.Tryx().GetFirmwareVersion());
     }
 
     [Fact]

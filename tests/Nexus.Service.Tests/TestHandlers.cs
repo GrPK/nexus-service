@@ -7,6 +7,7 @@ using Nexus.Service.Peripherals.Hyte.Cnvs;
 using Nexus.Service.Peripherals.Hyte.MiniHub;
 using Nexus.Service.Peripherals.Hyte.QSeriesCooler;
 using Nexus.Service.Peripherals.Hyte.Y70Display;
+using Nexus.Service.Peripherals.Tryx.Panorama;
 using Nexus.Service.Persistence;
 using Nexus.Service.Platform.Displays;
 
@@ -35,6 +36,13 @@ internal static class TestHandlers
             new StubY70DisplayPortDiscovery(),
             _ => throw new InvalidOperationException("Y70 transport is not expected in detection tests")),
         topology ?? FakeTopology());
+
+    public static TryxHandler Tryx() => new(new TryxPanoramaHub(
+        new StubTryxPanoramaPortDiscovery(),
+        _ => throw new InvalidOperationException("Tryx transport is not expected in detection tests"),
+        new Integration.StubSensorProvider(),
+        new StreamDeck.FakeFpsProvider(),
+        new InertConfigStore()));
 
     /// <summary>DisplayTopologyService over a fixed display list, for Y70 monitor-detection tests.</summary>
     internal static DisplayTopologyService FakeTopology(IReadOnlyList<RawDisplayInfo>? displays = null)

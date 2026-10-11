@@ -49,6 +49,9 @@ public interface ITryxPanoramaTransport : IDisposable
     /// not the USB chip id.</summary>
     string PanelSerial => "";
 
+    /// <summary>The panel's firmware_version from the same device_info reply, empty until received.</summary>
+    string PanelFirmwareVersion => "";
+
     /// <summary>Sends a file_pull_request and waits for its response chunk (data still masked);
     /// not Ok on a panel error reply, null on timeout or when the transport cannot pull.</summary>
     TryxMediaList.FilePullChunk? PullFileChunk(string deviceFileName, long offset, int timeoutMs) => null;
