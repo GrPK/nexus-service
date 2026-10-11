@@ -162,3 +162,104 @@ public sealed class LcdLockBridge : IHostedService
         return Task.CompletedTask;
     }
 }
+
+/// <summary>
+/// One stepped brightness ramp between two levels, read off a millisecond clock so the same
+/// answer comes back however often it is asked. Nothing here sends or persists anything: a
+/// device samples <see cref="LevelAt"/> and writes the result, and the level a lock fade
+/// returns to is whatever the caller captured before the first step.
+/// </summary>
+public sealed class LcdFade
+{
+    /// <summary>Distinct levels a ramp visits for most devices.</summary>
+    public const int DefaultSteps = 18;
+
+    /// <summary>How often a driver loop samples a ramp. Levels only change on step boundaries.</summary>
+    public static readonly TimeSpan SampleInterval = TimeSpan.FromMilliseconds(40);
+
+    private readonly long _startMs;
+    private readonly long _durationMs;
+    private readonly int _steps;
+
+    public LcdFade(int from, int to, TimeSpan duration, long startMs, int steps = DefaultSteps)
+    {
+        From = from;
+        To = to;
+        _startMs = startMs;
+        _durationMs = Math.Max(1, (long)duration.TotalMilliseconds);
+        _steps = Math.Max(1, steps);
+    }
+
+    public int From { get; }
+    public int To { get; }
+    public bool Down => To < From;
+
+    public bool IsDoneAt(long nowMs) => nowMs - _startMs >= _durationMs;
+
+    /// <summary>The level at <paramref name="nowMs"/>: one of <c>steps</c> evenly spaced levels, exactly <see cref="To"/> once done.</summary>
+    public int LevelAt(long nowMs)
+    {
+        if (IsDoneAt(nowMs))
+        {
+            return To;
+        }
+        var elapsed = Math.Max(0, nowMs - _startMs);
+        var step = (int)Math.Min(_steps - 1, elapsed * _steps / _durationMs);
+        return From + (int)Math.Round((To - From) * (double)step / _steps);
+    }
+}
+
+/// <summary>
+/// Drives a sampling callback on one background loop until it reports no more work. Starting
+/// it while it runs does nothing, so ramps never stack up: a new or reversed ramp is just new
+/// state for the same loop to read. Tests switch the loop off and call the callback themselves.
+/// </summary>
+public sealed class LcdFadeRunner
+{
+    private readonly Func<bool> _step;
+    private readonly TimeSpan _interval;
+    private int _running;
+
+    public LcdFadeRunner(Func<bool> step, TimeSpan? interval = null)
+    {
+        _step = step;
+        _interval = interval ?? LcdFade.SampleInterval;
+    }
+
+    /// <summary>False in tests, which step by hand.</summary>
+    public bool AutoRun { get; set; } = true;
+
+    public void Kick()
+    {
+        if (!AutoRun || Interlocked.Exchange(ref _running, 1) == 1)
+        {
+            return;
+        }
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                try
+                {
+                    while (_step())
+                    {
+                        await Task.Delay(_interval).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ServiceLog.Info($"[lcd-lock] fade step failed: {ex.GetType().Name}: {ex.Message}");
+                }
+                Volatile.Write(ref _running, 0);
+                // Work that arrived between the last sample and the flag reset.
+                bool more;
+                try { more = _step(); }
+                catch { more = false; }
+                if (!more || Interlocked.Exchange(ref _running, 1) == 1)
+                {
+                    return;
+                }
+            }
+        });
+    }
+}

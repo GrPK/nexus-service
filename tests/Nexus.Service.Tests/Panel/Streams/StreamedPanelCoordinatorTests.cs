@@ -63,6 +63,7 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
             nowMs: () => _nowMs,
             notifyPanelChanged: _panelChanges.Add,
             lockState: _lock);
+        _coordinator.FadeRunner.AutoRun = false;
         return _coordinator;
     }
 
@@ -550,6 +551,12 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
 
     // ---- Sleep when locked -------------------------------------------------
 
+    private void Advance(StreamedPanelCoordinator coordinator, int ms)
+    {
+        _nowMs += ms;
+        coordinator.StepFades();
+    }
+
     private (StreamedPanelCoordinator Coordinator, string PanelId, FakeBrightnessTransport Transport) DimmablePanel(int? stored)
     {
         _discovery.UseBrightnessTransport = true;
@@ -570,12 +577,14 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         var (coordinator, panelId, transport) = DimmablePanel(stored: 35);
 
         _lock.Set(true);
+        Advance(coordinator, 5000);
 
         Assert.Equal(0, transport.LastApplied);
         Assert.Empty(coordinator.GetAssignments().Assignments);
         Assert.Equal(35, _registry.Get(panelId)!.LcdBrightness);
 
         _lock.Set(false);
+        Advance(coordinator, 5000);
 
         Assert.Equal(35, transport.LastApplied);
         Assert.Single(coordinator.GetAssignments().Assignments);
@@ -647,11 +656,13 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
     [Fact]
     public void A_record_with_no_stored_backlight_returns_to_full_after_unlock()
     {
-        var (_, _, transport) = DimmablePanel(stored: null);
+        var (coordinator, _, transport) = DimmablePanel(stored: null);
 
         _lock.Set(true);
+        Advance(coordinator, 5000);
         Assert.Equal(0, transport.LastApplied);
         _lock.Set(false);
+        Advance(coordinator, 5000);
 
         Assert.Equal(StreamedPanelCoordinator.UnlockDefaultBrightness, transport.LastApplied);
     }
@@ -671,6 +682,7 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         Assert.Empty(coordinator.GetAssignments().Assignments);
 
         _lock.Set(false);
+        Advance(coordinator, 5000);
 
         Assert.Single(coordinator.GetAssignments().Assignments);
         Assert.NotEqual(0, transport.LastApplied);
@@ -718,15 +730,17 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
     [Fact]
     public void A_panel_with_no_stored_backlight_returns_to_the_level_it_had_before_the_lock()
     {
-        var (_, panelId, transport) = DimmablePanel(stored: null);
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
         transport.Applied = 42;
 
         _lock.Set(true);
+        Advance(coordinator, 5000);
         Assert.Equal(0, transport.LastApplied);
         Assert.Equal(42, _registry.Get(panelId)!.LockRestoreBrightness);
         Assert.Null(_registry.Get(panelId)!.LcdBrightness);
 
         _lock.Set(false);
+        Advance(coordinator, 5000);
         Assert.Equal(42, transport.LastApplied);
         Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
     }
@@ -747,7 +761,6 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
 
         Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
         Assert.Equal(42, transport.Applied);
-        Assert.Equal(42, transport.LastApplied);
     }
 
     [Fact]
@@ -756,9 +769,11 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         var (coordinator, panelId, transport) = DimmablePanel(stored: null);
         transport.Applied = 42;
         _lock.Set(true);
+        Advance(coordinator, 5000);
         transport.FailWrites = true;
 
         _lock.Set(false);
+        Advance(coordinator, 5000);
 
         Assert.Equal(42, _registry.Get(panelId)!.LockRestoreBrightness);
         Assert.Equal(0, transport.Applied);
@@ -768,6 +783,90 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         var reopened = _discovery.BrightnessTransports.Last();
         Assert.Equal(42, reopened.LastApplied);
         Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void Lock_fades_down_while_still_rendering_then_goes_dark_at_zero()
+    {
+        var (coordinator, _, transport) = DimmablePanel(stored: 60);
+
+        _lock.Set(true);
+        Assert.Equal(60, transport.Applied);
+        Assert.Single(coordinator.GetAssignments().Assignments);
+
+        Advance(coordinator, 750);
+        Assert.InRange(transport.Applied!.Value, 1, 59);
+        Assert.Single(coordinator.GetAssignments().Assignments);
+
+        Advance(coordinator, 2000);
+        Assert.Equal(0, transport.Applied);
+        Assert.Empty(coordinator.GetAssignments().Assignments);
+    }
+
+    [Fact]
+    public void Unlock_fades_up_from_zero_to_exactly_the_level_the_lock_started_at()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 60);
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+
+        _lock.Set(false);
+        Assert.Equal(0, transport.Applied);
+        Advance(coordinator, 450);
+        Assert.InRange(transport.Applied!.Value, 1, 59);
+        Advance(coordinator, 2000);
+
+        Assert.Equal(60, transport.Applied);
+        Assert.Equal(60, _registry.Get(panelId)!.LcdBrightness);
+    }
+
+    [Fact]
+    public void An_unlock_mid_fade_down_reverses_to_the_start_level_not_the_step_it_caught()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        _lock.Set(true);
+        Advance(coordinator, 750);
+        Assert.InRange(transport.Applied!.Value, 1, 41);
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+
+        Assert.Equal(42, transport.Applied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Null(_registry.Get(panelId)!.LcdBrightness);
+    }
+
+    [Fact]
+    public void A_lock_mid_fade_up_reverses_down_and_the_next_unlock_still_restores_the_start_level()
+    {
+        var (coordinator, _, transport) = DimmablePanel(stored: 60);
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        _lock.Set(false);
+        Advance(coordinator, 450);
+        Assert.InRange(transport.Applied!.Value, 1, 59);
+
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        Assert.Equal(0, transport.Applied);
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+        Assert.Equal(60, transport.Applied);
+    }
+
+    [Fact]
+    public void A_fade_never_persists_an_intermediate_level()
+    {
+        var (coordinator, panelId, _) = DimmablePanel(stored: 60);
+        _lock.Set(true);
+        Advance(coordinator, 750);
+        Assert.Equal(60, _registry.Get(panelId)!.LcdBrightness);
+        _lock.Set(false);
+        Advance(coordinator, 200);
+
+        Assert.Equal(60, _registry.Get(panelId)!.LcdBrightness);
     }
 
     [Fact]

@@ -55,6 +55,11 @@ public sealed class StreamedPanelCoordinator : BackgroundService
     private readonly Func<long> _nowMs;
     private readonly SemaphoreSlim _wake = new(0, 1);
     private readonly LcdLockState? _lockState;
+    // Lock fades in flight, per panel record id. A leaf lock: the brightness getter reads it
+    // from frame threads, so nothing else is ever taken while holding it.
+    private readonly object _fadeGate = new();
+    private readonly Dictionary<string, LcdFade> _fades = new(StringComparer.Ordinal);
+    internal LcdFadeRunner FadeRunner { get; }
     private readonly LcdLockSleepSet? _lockSleep;
 
     /// <summary>Backlight percent used only when a panel with no stored value never revealed its pre-lock level.</summary>
@@ -77,6 +82,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         _notifyOverlay = notifyOverlay;
         _notifyPanelChanged = notifyPanelChanged;
         _nowMs = nowMs ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        FadeRunner = new LcdFadeRunner(StepFades);
         if (lockState is not null)
         {
             _lockState = lockState;
@@ -119,6 +125,19 @@ public sealed class StreamedPanelCoordinator : BackgroundService
     // Takes no coordinator lock; see IsLockSleeping.
     private int? EffectiveBrightness(string panelDeviceId)
     {
+        // A fade in flight answers with its stepped level; a finished one falls through to the
+        // settled answer, which is the same number.
+        lock (_fadeGate)
+        {
+            if (_fades.TryGetValue(panelDeviceId, out var fade))
+            {
+                var now = _nowMs();
+                if (!fade.IsDoneAt(now))
+                {
+                    return fade.LevelAt(now);
+                }
+            }
+        }
         if (IsLockSleeping(panelDeviceId))
         {
             return 0;
@@ -140,6 +159,71 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             }
         }
         return null;
+    }
+
+    private LcdFade? ActiveFade(string panelDeviceId)
+    {
+        lock (_fadeGate)
+        {
+            return _fades.TryGetValue(panelDeviceId, out var fade) && !fade.IsDoneAt(_nowMs()) ? fade : null;
+        }
+    }
+
+    private void RemoveFade(string panelDeviceId)
+    {
+        lock (_fadeGate) { _fades.Remove(panelDeviceId); }
+    }
+
+    private void BeginFade(string panelDeviceId, int from, int to, TimeSpan duration)
+    {
+        if (from == to)
+        {
+            RemoveFade(panelDeviceId);
+            return;
+        }
+        lock (_fadeGate) { _fades[panelDeviceId] = new LcdFade(from, to, duration, _nowMs()); }
+        FadeRunner.Kick();
+    }
+
+    /// <summary>True while the lock holds this panel dark and its fade down has finished: rendering stops only then.</summary>
+    public bool IsLockDark(string panelDeviceId) =>
+        IsLockSleeping(panelDeviceId) && ActiveFade(panelDeviceId) is not { Down: true };
+
+    /// <summary>One sample of every fade: applies each panel's stepped level, finishes the ones that landed.</summary>
+    internal bool StepFades()
+    {
+        var now = _nowMs();
+        List<(string Id, bool Up)> finished = new();
+        List<string> ids;
+        lock (_fadeGate)
+        {
+            ids = _fades.Keys.ToList();
+            foreach (var id in ids)
+            {
+                if (_fades[id].IsDoneAt(now))
+                {
+                    finished.Add((id, !_fades[id].Down));
+                    _fades.Remove(id);
+                }
+            }
+        }
+        foreach (var id in ids)
+        {
+            var applied = ApplyBrightness(id);
+            foreach (var (doneId, up) in finished)
+            {
+                // Cleared only once the panel confirmed the level it was returning to.
+                if (doneId == id && up && applied && !IsLockSleeping(id))
+                {
+                    SetMarker(id, null);
+                }
+            }
+        }
+        if (finished.Any(f => !f.Up))
+        {
+            _notifyOverlay?.Invoke();
+        }
+        lock (_fadeGate) { return _fades.Count > 0; }
     }
 
     // A panel with no stored backlight has no value to return to after the lock, so the
@@ -215,8 +299,17 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                 {
                     var epoch = _lockState?.Epoch ?? 0;
                     var level = CaptureRestoreLevel(id);
-                    ApplyBrightness(id);
+                    // The level to come back to is fixed here, before the first step: an up-fade
+                    // caught mid-way reverses from where it is, never from an intermediate level.
+                    var record = _registry.Get(id);
+                    var remembered = record?.LcdBrightness ?? record?.LockRestoreBrightness ?? level ?? UnlockDefaultBrightness;
+                    var from = ActiveFade(id) is { Down: false } rising ? rising.LevelAt(_nowMs()) : remembered;
                     WriteMarkerForLock(id, level, epoch);
+                    if (_lockState is { IsLocked: true } current && current.Epoch == epoch)
+                    {
+                        BeginFade(id, from, 0, SleepBlackoutCoordinator.LockFadeDuration);
+                    }
+                    ApplyBrightness(id);
                 }
             }
         }
@@ -241,11 +334,29 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             }
             foreach (var id in panels)
             {
+                var record = _registry.Get(id);
+                var target = record?.LcdBrightness ?? record?.LockRestoreBrightness;
+                var current = DimmableTransport(id)?.CurrentBrightness;
+                // Up from 0, or from wherever a fade down was caught; a panel the lock never dimmed
+                // stays where it is.
+                var from = ActiveFade(id) is { Down: true } falling ? falling.LevelAt(_nowMs()) : current ?? 0;
+                if (target is int wanted && wanted > 0 && from != wanted)
+                {
+                    BeginFade(id, from, wanted, SleepBlackoutCoordinator.UnlockFadeDuration);
+                }
+                else
+                {
+                    RemoveFade(id);
+                }
                 // Cleared only after the panel confirmed the write; a failed one keeps the marker
-                // for the next apply or connect to retry.
-                if (ApplyBrightness(id) && !IsLockSleeping(id))
+                // for the next apply or connect to retry. A fade up clears it when it lands.
+                if (ActiveFade(id) is null && ApplyBrightness(id) && !IsLockSleeping(id))
                 {
                     SetMarker(id, null);
+                }
+                else if (ActiveFade(id) is not null)
+                {
+                    ApplyBrightness(id);
                 }
             }
         }
@@ -490,7 +601,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             foreach (var ds in _bySerial.Values)
             {
                 if (ds.Session.Closed || ShowsSecondaryMonitor(ds)) continue;
-                if (IsLockSleeping(ds.Session.PanelDeviceId)) continue;
+                if (IsLockDark(ds.Session.PanelDeviceId)) continue;
                 var p = ds.Info.Profile;
                 response.Assignments.Add(new StreamAssignmentDto
                 {
@@ -729,6 +840,8 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                 var sleeping = IsLockSleeping(panelId);
                 if (sleeping)
                 {
+                    // Attached mid-lock: dark at once, no ramp.
+                    RemoveFade(panelId);
                     var epoch = _lockState?.Epoch ?? 0;
                     var level = CaptureRestoreLevel(panelId);
                     lockDimmable.ApplyBrightness();
