@@ -340,6 +340,9 @@ public sealed class TryxPanoramaHub : IDisposable
     /// empty until the device_info reply (from the connect-time CMD_Get_DeviceInfo) is parsed.</summary>
     public string PanelSerial => _transport?.PanelSerial ?? "";
 
+    /// <summary>The panel's firmware_version from the same device_info reply; empty until it is parsed.</summary>
+    public string PanelFirmwareVersion => _transport?.PanelFirmwareVersion ?? "";
+
     /// <summary>Bytes stored on the panel's /userdata: this session's own per-file map,
     /// re-synced from the transport's media-list push on each version bump and adjusted
     /// locally for uploads/deletes made since, until the next list reply replaces them.</summary>

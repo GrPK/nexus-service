@@ -7,9 +7,17 @@ namespace Nexus.Service.Devices.Handlers;
 /// <summary>Tryx Panorama AIO screen. RK firmware enumerates under VID 391A
 /// across the Panorama family (base "RK PANO", SE "PASE", WaterBlock, v2);
 /// control over its raw-USB-bulk interface is not yet implemented, so this
-/// handler reports presence only.</summary>
+/// handler reports presence, plus the firmware version the connected panel
+/// sent in its device_info reply.</summary>
 public sealed class TryxHandler : IDeviceHandler
 {
+    private readonly TryxPanoramaHub _hub;
+
+    public TryxHandler(TryxPanoramaHub hub)
+    {
+        _hub = hub;
+    }
+
     public string Id => "tryx";
     public string Name => "Tryx Panorama";
     public string Category => "cooler";
@@ -27,5 +35,5 @@ public sealed class TryxHandler : IDeviceHandler
     public bool IsConnected(IReadOnlyList<UsbDeviceEntry> detectedDevices) =>
         detectedDevices.Any(d => Identifiers.Any(id => id.VendorId == d.VendorId && id.ProductId == d.ProductId));
 
-    public string GetFirmwareVersion() => "";
+    public string GetFirmwareVersion() => _hub.IsConnected ? _hub.PanelFirmwareVersion : "";
 }
