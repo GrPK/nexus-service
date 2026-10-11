@@ -1,5 +1,9 @@
 using System;
+using System.Linq;
+using Nexus.Service.Lighting;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Nexus.Service.Platform;
 using RgbColor = Nexus.Service.Peripherals.Hyte.Np50.RgbColor;
 
@@ -39,13 +43,17 @@ public sealed class Slv3Hub : IDisposable
     // Wholesale replacement per poll is what made chains flap in and out of
     // cooling/lighting (Y70 log: "device list: 2 -> 1 -> 2" continuously).
     private readonly Dictionary<string, Slv3KnownChain> _knownChains = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Slv3BindingLog> _bindingLogs = new(StringComparer.Ordinal);
+    internal const long BindingLogIntervalMs = 60_000;
 
     // A validated record can still carry a corrupted MAC, so a new chain is
-    // listed only once another poll within the confirm window repeats it.
-    // Value: the poll the MAC was first seen in.
-    private readonly Dictionary<string, long> _unconfirmedChains = new(StringComparer.Ordinal);
+    // listed only once enough polls within the confirm window repeat it.
+    private readonly Dictionary<string, Slv3Unconfirmed> _unconfirmedChains = new(StringComparer.Ordinal);
     private long _devicePolls;
     internal const int ChainConfirmWindowPolls = 10;
+    internal const int ChainConfirmSightings = 3;
+    // Polls a chain must have been seen in before it counts as owned or can take part in a slot conflict.
+    internal const int EstablishedChainPolls = 20;
 
     /// <summary>False lists a new chain on first sight.</summary>
     internal bool ConfirmNewChains { get; init; } = true;
@@ -77,6 +85,38 @@ public sealed class Slv3Hub : IDisposable
     /// </summary>
     public event Action<string>? AioSwitched;
 
+    /// <summary>Persisted MAC hex to last slot of the devices Nexus owns; read once, outside the hub lock.</summary>
+    public Func<IReadOnlyDictionary<string, int>>? OwnedDevicesLoad { get; set; }
+
+    /// <summary>Persists the owned-device list; invoked outside the hub lock after the list changes.</summary>
+    public Action<IReadOnlyDictionary<string, int>>? OwnedDevicesSave { get; set; }
+
+    // Devices Nexus bound to its master, by MAC hex, with the slot each last held.
+    private readonly Dictionary<string, int> _owned = new(StringComparer.Ordinal);
+    private bool _ownedLoaded;
+    private int _ownedLoadFailures;
+    private string _ownedLoadError = "";
+    private long _nextOwnedLoadLogMs;
+    private readonly object _ownedSaveLock = new();
+    private bool _ownedDirty;
+    // Explicitly unbound through Nexus this session; never re-seeded as owned.
+    private readonly HashSet<string> _userUnbound = new(StringComparer.Ordinal);
+
+    // An owned device found unbound or off our channel is bound back with a
+    // doubling wait between attempts, capped; it never gives up while owned.
+    internal const long AutoRebindIntervalMs = 30_000;
+    internal const long AutoRebindMaxIntervalMs = 300_000;
+    // Fresh polls two chains must report one slot before one is moved.
+    internal const int SlotConflictPolls = 5;
+    private readonly Dictionary<int, int> _slotConflicts = new();
+    private long _conflictPoll;
+
+    internal Action<int> SleepMs { get; init; } = Thread.Sleep;
+    private readonly Dictionary<string, AutoRebindState> _rebind = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AutoRebindState> _moves = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RebindSighting> _rebindSeen = new(StringComparer.Ordinal);
+    internal const int RebindConfirmPolls = 3;
+
     private ISlv3Transport? _tx;
     private ISlv3Transport? _rx;
     private byte[] _masterMac = new byte[Slv3Protocol.MacLength];
@@ -96,36 +136,57 @@ public sealed class Slv3Hub : IDisposable
 
     // A chain unseen this long is treated as gone (powered off / out of range)
     // and dropped; until then it stays listed so downstream devices are stable.
+    // Only time the RX was answering counts: a busy, failing or closed RX can
+    // not see anyone, while the TX keeps driving the chains.
     private const long ChainExpiryMs = 30_000;
     // Unseen this long = telemetry is last-known, surfaced as Stale.
     private const long ChainStaleMs = 3_500;
+    private long? _blindSinceMs;
+    private long _blindTotalMs;
+    // PWM frames to a chain whose record cannot confirm them (RX blind, or the
+    // chain absent from the last list) repeat a target only this often.
+    private const long UnconfirmedPwmResendMs = 5_000;
+    private readonly Dictionary<string, (byte[] Pwm, long SentMs)> _unconfirmedPwm = new(StringComparer.Ordinal);
 
-    // GetDev failure escalation (lian-li-linux controller.rs): 5 consecutive
-    // USB-level failures -> UsbResetAnother to the RX MCU (a handle reopen does
-    // not reset a wedged radio). A good reply refills the reset budget, so only
-    // resets that fail back to back hand the worker its disconnect/reconnect.
+    // GetDev failure escalation (L-Connect MasterDevice.ResetRx): consecutive
+    // RX failures -> UsbResetAnother written on the TX handle, which resets the
+    // RX half (written on the RX it would reset the TX instead). Recoverable
+    // faults never tear the link down; consecutive recoveries are spaced by a
+    // doubling backoff, and a good reply clears it.
     private const int RxFailStreakForReset = 5;
-    private const int MaxRxResetsPerConnection = 3;
-    // Post-reset settle per the reference's 500 ms sleep after USB_ResetAnother.
-    private const int RxResetSettleMs = 500;
+    private const long RecoveryBackoffMs = 5_000;
+    private const long RecoveryBackoffMaxMs = 60_000;
     private int _rxFailStreak;
-    private int _rxResetCount;
+    private int _rxRecoveries;
+    private long _nextRxRecoveryMs;
 
     // A reply opening with 0 is the RX's "no device list this cycle". It does
     // this on its own every ~17 s for a few seconds and recovers without help,
     // so only a busy spell this long is treated as a wedge. A wedge gets a fresh
-    // RX handle, not UsbResetAnother: the reset re-enumerates the TX, and the RX
-    // reopen is the step a full reconnect adds over it.
+    // RX handle; one with no good reply since the last RX recovery gets UsbResetAnother.
     private const int RxBusyPollsBeforeReset = 60;
-    private const int MaxRxReopens = 3;
     private int _rxBusyStreak;
-    private int _rxReopenCount;
     private byte[]? _firstBusyReply;
 
-    // Polls a TX that went away (it re-enumerates about a second after an RX
-    // reset) may take to come back before the link is torn down and rebuilt.
-    private const int TxReopenPollBudget = 10;
-    private int _txMissingPolls;
+    // L-Connect MasterDevice.ResetTx: consecutive TX reopen failures ->
+    // UsbResetAnother written on the RX handle, then the TX keeps reopening.
+    private const int TxFailsBeforeReset = 5;
+    private int _txOpenFails;
+    private int _txRecoveries;
+    private long _nextTxRecoveryMs;
+
+    // Neither dongle enumerating this long means it was unplugged: the only
+    // fault that ends the connection.
+    internal const long LinkAbsentDisconnectMs = 10_000;
+    private long _bothAbsentSinceMs;
+
+    // A half that stays unenumerated this long is surfaced as rxMissing / txMissing;
+    // the link and the device list are kept.
+    internal const long HalfMissingStatusMs = 30_000;
+    private long _rxAbsentSinceMs;
+    private long _txAbsentSinceMs;
+    private long _nextRxOpenMs;
+    private int _rxOpenFailures;
 
     // SaveCfg after a confirmed bind: L-Connect broadcasts one on every loop
     // pass for a few seconds after Bind() (lastBindTime); here one per poll
@@ -184,12 +245,25 @@ public sealed class Slv3Hub : IDisposable
     private const int MaxDeviceListPages = 3;
     private int _lastRecordCount;
 
-    public Slv3Hub(ISlv3Discovery discovery, Func<Slv3PortInfo, ISlv3Transport> transportFactory, Func<long>? nowMs = null)
+    public Slv3Hub(
+        ISlv3Discovery discovery,
+        Func<Slv3PortInfo, ISlv3Transport> transportFactory,
+        Func<long>? nowMs = null,
+        Nexus.Service.Lighting.LcdLockState? lockState = null)
     {
         _discovery = discovery;
         _transportFactory = transportFactory;
         _nowMs = nowMs ?? (() => Environment.TickCount64);
+        if (lockState is not null)
+        {
+            _lockSleep = new Nexus.Service.Lighting.LcdLockSleepSet(lockState);
+        }
     }
+
+    // Session lock. The HydroShift II screen's backlight rides in the param block that goes
+    // out every drive tick, so the dark value is written into that block and nothing else is
+    // sent: no extra frames, no timing or link change. Decided once per lock per AIO.
+    private readonly Nexus.Service.Lighting.LcdLockSleepSet? _lockSleep;
 
     // Monotonic ms clock; injectable so tests drive chain expiry deterministically.
     private readonly Func<long> _nowMs;
@@ -197,11 +271,10 @@ public sealed class Slv3Hub : IDisposable
     public Slv3State State { get; } = new();
 
     /// <summary>
-    /// The link is up: connected, and the RX that reports the device list is
-    /// open. The TX can be briefly gone while it re-enumerates after an RX
-    /// reset; <see cref="PollTick"/> reopens it without dropping the list.
+    /// The link is up. It stays up while a dongle half is reset or reopened in
+    /// place; only a replug (neither half enumerating) or <see cref="Disconnect"/> ends it.
     /// </summary>
-    public bool IsConnected => State.IsConnected && _rx is { IsOpen: true };
+    public bool IsConnected => State.IsConnected;
 
     /// <summary>Opens the TX + RX dongles and learns our master MAC. Both must open for the link to be usable.</summary>
     public bool EnsureConnected()
@@ -294,7 +367,7 @@ public sealed class Slv3Hub : IDisposable
         State.IsConnected = false;
         // A failure path sets its own reason just before tearing down; only an
         // 'ok' from a link that was live outlives its meaning here.
-        if (State.LinkStatus == Slv3LinkStatus.Ok)
+        if (State.LinkStatus is Slv3LinkStatus.Ok or Slv3LinkStatus.Recovering)
         {
             State.LinkStatus = Slv3LinkStatus.Unknown;
         }
@@ -304,9 +377,21 @@ public sealed class Slv3Hub : IDisposable
         _anyAioBound = false;
         _knownChains.Clear();
         _unconfirmedChains.Clear();
+        _bindingLogs.Clear();
         _pending.Clear();
         _pendingCommands.Clear();
         _lastIssuedSeq.Clear();
+        _rebind.Clear();
+        _rebindSeen.Clear();
+        _moves.Clear();
+        _slotConflicts.Clear();
+        _rxAbsentSinceMs = 0;
+        _txAbsentSinceMs = 0;
+        _nextRxOpenMs = 0;
+        _rxOpenFailures = 0;
+        _blindSinceMs = null;
+        _blindTotalMs = 0;
+        _unconfirmedPwm.Clear();
         foreach (var control in _aioControl.Values)
         {
             control.Switched = false;
@@ -314,34 +399,77 @@ public sealed class Slv3Hub : IDisposable
         }
         _rxFailStreak = 0;
         _rxBusyStreak = 0;
-        _rxResetCount = 0;
-        _rxReopenCount = 0;
-        _txMissingPolls = 0;
+        _rxRecoveries = 0;
+        _nextRxRecoveryMs = 0;
+        _txOpenFails = 0;
+        _txRecoveries = 0;
+        _nextTxRecoveryMs = 0;
+        _bothAbsentSinceMs = 0;
         _saveCfgBurstRemaining = 0;
         _saveCfgDueMs = 0;
         _videoModeActive = false;
         _videoModePreppedCount = 0;
     }
 
-    // Reopens a TX whose handle died with its device, keeping the device list
-    // so nothing downstream sees the link drop. The new handle must answer
-    // GetMac: a dying instance can still be listed for a moment.
-    private bool TryReopenTxLocked()
+    // Reopens whichever half lost its handle, keeping the device list, pending
+    // ops and owned state. Returns false only once neither dongle has enumerated
+    // for LinkAbsentDisconnectMs.
+    private bool RecoverHandlesLocked(long nowMs)
     {
-        try { _tx?.Dispose(); } catch { /* best effort */ }
-        _tx = null;
         Slv3PortInfo? txPort = null;
+        Slv3PortInfo? rxPort = null;
         foreach (var port in _discovery.Discover())
         {
             if (port.Role == Slv3DongleRole.Tx)
             {
-                txPort = port;
-                break;
+                txPort ??= port;
+            }
+            else if (port.Role == Slv3DongleRole.Rx)
+            {
+                rxPort ??= port;
             }
         }
+        if (txPort is null && rxPort is null)
+        {
+            if (_bothAbsentSinceMs == 0)
+            {
+                _bothAbsentSinceMs = nowMs;
+            }
+            if (nowMs - _bothAbsentSinceMs >= LinkAbsentDisconnectMs)
+            {
+                ServiceLog.Warn($"[lianli-wireless] neither dongle enumerated for {LinkAbsentDisconnectMs / 1000}s, link down");
+                return false;
+            }
+        }
+        else
+        {
+            _bothAbsentSinceMs = 0;
+        }
+        if (_tx is not { IsOpen: true })
+        {
+            ReopenTxLocked(txPort, nowMs);
+        }
+        if (_rx is not { IsOpen: true })
+        {
+            ReopenRxLocked(rxPort);
+        }
+        _txAbsentSinceMs = _tx is { IsOpen: true } || txPort is not null ? 0 : _txAbsentSinceMs == 0 ? nowMs : _txAbsentSinceMs;
+        _rxAbsentSinceMs = _rx is { IsOpen: true } || rxPort is not null ? 0 : _rxAbsentSinceMs == 0 ? nowMs : _rxAbsentSinceMs;
+        State.LinkStatus = _rxAbsentSinceMs != 0 && nowMs - _rxAbsentSinceMs >= HalfMissingStatusMs ? Slv3LinkStatus.RxMissing
+            : _txAbsentSinceMs != 0 && nowMs - _txAbsentSinceMs >= HalfMissingStatusMs ? Slv3LinkStatus.TxMissing
+            : Slv3LinkStatus.Recovering;
+        return true;
+    }
+
+    // The new handle must answer GetMac: a dying instance can still be listed for a moment.
+    private void ReopenTxLocked(Slv3PortInfo? txPort, long nowMs)
+    {
+        try { _tx?.Dispose(); } catch { /* best effort */ }
+        _tx = null;
         if (txPort is null)
         {
-            return false;
+            NoteTxOpenFailureLocked(nowMs);
+            return;
         }
         try
         {
@@ -349,20 +477,43 @@ public sealed class Slv3Hub : IDisposable
         }
         catch (Exception)
         {
-            return false;
+            NoteTxOpenFailureLocked(nowMs);
+            return;
         }
         if (!TryGetMacOnChannelLocked(_channel))
         {
             try { _tx.Dispose(); } catch { /* best effort */ }
             _tx = null;
-            return false;
+            NoteTxOpenFailureLocked(nowMs);
+            return;
         }
+        _txOpenFails = 0;
+        _txRecoveries = 0;
+        _nextTxRecoveryMs = 0;
         // The restarted TX lost the LCD video arming; the LCD loop re-arms it.
         _videoModeActive = false;
         _videoModePreppedCount = 0;
         ServiceLog.Info("[lianli-wireless] TX reopened");
-        return true;
     }
+
+    // L-Connect ResetTx: UsbResetAnother on the RX handle restarts the TX.
+    private void NoteTxOpenFailureLocked(long nowMs)
+    {
+        if (++_txOpenFails < TxFailsBeforeReset || nowMs < _nextTxRecoveryMs)
+        {
+            return;
+        }
+        _txOpenFails = 0;
+        _txRecoveries++;
+        _nextTxRecoveryMs = nowMs + RecoveryBackoffFor(_txRecoveries);
+        if (_rx is { IsOpen: true } && _rx.RfSend(Slv3Protocol.BuildResetAnother()))
+        {
+            ServiceLog.Warn($"[lianli-wireless] {TxFailsBeforeReset} consecutive TX open failures, resetting TX via RX ({_txRecoveries})");
+        }
+    }
+
+    private static long RecoveryBackoffFor(int recoveries) =>
+        Math.Min(RecoveryBackoffMs << Math.Min(recoveries - 1, 4), RecoveryBackoffMaxMs);
 
     private bool MasterInitLocked()
     {
@@ -419,6 +570,10 @@ public sealed class Slv3Hub : IDisposable
         {
             return false;
         }
+        if (!Slv3Protocol.MacIsZero(_masterMac) && !Slv3Protocol.MacEquals(_masterMac, mac))
+        {
+            ServiceLog.Warn($"[lianli-wireless] dongle master MAC {Convert.ToHexString(_masterMac)} -> {Convert.ToHexString(mac)} on channel {channel}");
+        }
         _masterMac = mac;
         State.MasterMac = Convert.ToHexString(mac);
         State.TxFirmwareVersion = fw;
@@ -429,15 +584,23 @@ public sealed class Slv3Hub : IDisposable
     /// <summary>
     /// The 500 ms pass (L-Connect RefreshList + SyncControlInfo): refresh the
     /// device list, resolve pending bind/unbind/select/reboot against the fresh
-    /// report, and re-send whatever is still pending. Returns false when the
-    /// link is down or the poll failed past its reset budget.
+    /// report, and re-send whatever is still pending. Returns false only when
+    /// the link is down; a faulty dongle half is recovered in place.
     /// </summary>
     public bool PollTick()
     {
         _usbAioMac = ReadUsbAioMac();
-        lock (_lock)
+        EnsureOwnedLoaded();
+        try
         {
-            return PollLocked();
+            lock (_lock)
+            {
+                return PollLocked();
+            }
+        }
+        finally
+        {
+            FlushOwned();
         }
     }
 
@@ -453,6 +616,19 @@ public sealed class Slv3Hub : IDisposable
         var aio = _anyAioControlled || _anyAioBound;
         var aioSensors = aio ? ReadAioSensors() : default;
         var aioScreens = aio ? ReadAioScreens() : null;
+        EnsureOwnedLoaded();
+        try
+        {
+            return DriveLocked(aioSensors, aioScreens);
+        }
+        finally
+        {
+            FlushOwned();
+        }
+    }
+
+    private bool DriveLocked(Slv3AioSensors aioSensors, IReadOnlyDictionary<string, Slv3AioScreen>? aioScreens)
+    {
         lock (_lock)
         {
             if (!PollLocked())
@@ -478,18 +654,21 @@ public sealed class Slv3Hub : IDisposable
         {
             return false;
         }
-        if (_tx is { IsOpen: true } || TryReopenTxLocked())
-        {
-            _txMissingPolls = 0;
-        }
-        else if (++_txMissingPolls >= TxReopenPollBudget)
+        var nowMs = _nowMs();
+        if ((_tx is not { IsOpen: true } || _rx is not { IsOpen: true }) && !RecoverHandlesLocked(nowMs))
         {
             return false;
+        }
+        if (_rx is not { IsOpen: true })
+        {
+            AgeChainsLocked(nowMs);
+            return true;
         }
         if (!RefreshDeviceListLocked())
         {
             return false;
         }
+
         // Pending binds, commands and saves keep their budgets while the TX is
         // away instead of spending them on sends that cannot go out.
         if (_tx is not { IsOpen: true })
@@ -497,8 +676,307 @@ public sealed class Slv3Hub : IDisposable
             return true;
         }
         ResolvePendingLocked();
+        TrackOwnedLocked();
+        AutoRebindLocked();
         SyncControlLocked();
         return true;
+    }
+
+    private void EnsureOwnedLoaded()
+    {
+        if (_ownedLoaded)
+        {
+            return;
+        }
+        IReadOnlyDictionary<string, int>? saved = null;
+        if (OwnedDevicesLoad is { } load)
+        {
+            try
+            {
+                saved = load();
+            }
+            catch (Exception ex)
+            {
+                // Not marked loaded, so the next poll retries and no save overwrites the persisted list.
+                var nowMs = _nowMs();
+                if (_ownedLoadFailures++ == 0 || ex.Message != _ownedLoadError || nowMs >= _nextOwnedLoadLogMs)
+                {
+                    ServiceLog.Warn($"[lianli-wireless] owned device list read failed ({_ownedLoadFailures}): {ex.Message}");
+                    _ownedLoadError = ex.Message;
+                    _nextOwnedLoadLogMs = nowMs + RecoveryBackoffFor(_ownedLoadFailures);
+                }
+                return;
+            }
+        }
+        lock (_lock)
+        {
+            if (_ownedLoaded)
+            {
+                return;
+            }
+            if (saved is not null)
+            {
+                foreach (var (mac, slot) in saved)
+                {
+                    var key = mac.ToUpperInvariant();
+                    if (!_userUnbound.Contains(key))
+                    {
+                        _owned.TryAdd(key, slot);
+                    }
+                }
+            }
+            _ownedLoaded = true;
+            _ownedLoadFailures = 0;
+            _ownedDirty |= saved is not null && _owned.Count != saved.Count;
+        }
+    }
+
+    // The save lock spans snapshot and save, so a stale snapshot can never overwrite a newer one.
+    private void FlushOwned()
+    {
+        lock (_ownedSaveLock)
+        {
+            Dictionary<string, int> snapshot;
+            lock (_lock)
+            {
+                if (!_ownedDirty || !_ownedLoaded)
+                {
+                    return;
+                }
+                _ownedDirty = false;
+                snapshot = new Dictionary<string, int>(_owned, StringComparer.Ordinal);
+            }
+            try
+            {
+                OwnedDevicesSave?.Invoke(snapshot);
+            }
+            catch (Exception ex)
+            {
+                lock (_lock)
+                {
+                    _ownedDirty = true;
+                }
+                ServiceLog.Warn($"[lianli-wireless] owned device list save failed: {ex.Message}");
+            }
+        }
+    }
+
+    // Any established device seen bound to our master is ours, which also seeds
+    // the list on upgrade. A young chain may be a corrupt copy of a real one.
+    private void TrackOwnedLocked()
+    {
+        foreach (var record in _lastFanRecords)
+        {
+            if (!IsBoundToUsLocked(record))
+            {
+                continue;
+            }
+            var key = Convert.ToHexString(record.Mac);
+            if (_userUnbound.Contains(key) || (_pending.TryGetValue(key, out var op) && op.Unbind))
+            {
+                continue;
+            }
+            var known = _owned.TryGetValue(key, out var slot);
+            if (known ? slot == record.RxType || SlotSharedLocked(record) : !EstablishedLocked(key))
+            {
+                continue;
+            }
+            _owned[key] = record.RxType;
+            _ownedDirty = true;
+        }
+    }
+
+    private bool EstablishedLocked(string key) =>
+        _knownChains.TryGetValue(key, out var chain) && chain.Sightings >= EstablishedChainPolls;
+
+    // Two chains bound to us reporting one slot: the owned slot is kept until the conflict resolves.
+    private bool SlotSharedLocked(Slv3DeviceRecord record)
+    {
+        foreach (var other in _lastFanRecords)
+        {
+            if (IsBoundToUsLocked(other) && other.RxType == record.RxType && !Slv3Protocol.MacEquals(other.Mac, record.Mac))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // L-Connect SyncControlInfo for owned devices: bind one back when it reports
+    // no master or sits off our channel, addressed to its current pipe. A device
+    // on a non-zero foreign master is never touched.
+    private void AutoRebindLocked()
+    {
+        if (Slv3Protocol.MacIsZero(_masterMac) || _owned.Count == 0)
+        {
+            ResolveSlotConflictsLocked();
+            return;
+        }
+        var now = _nowMs();
+        foreach (var key in new List<string>(_rebindSeen.Keys))
+        {
+            if (!_owned.ContainsKey(key))
+            {
+                _rebindSeen.Remove(key);
+            }
+        }
+        foreach (var record in _lastFanRecords)
+        {
+            var key = Convert.ToHexString(record.Mac);
+            if (!_owned.TryGetValue(key, out var lastSlot))
+            {
+                continue;
+            }
+            var zeroMaster = Slv3Protocol.MacIsZero(record.MasterMac);
+            var ours = Slv3Protocol.MacEquals(record.MasterMac, _masterMac);
+            var settled = ours && IsBoundToUsLocked(record) && record.Channel == _channel;
+            if (!(zeroMaster || ours) || settled)
+            {
+                _rebind.Remove(key);
+                _rebindSeen.Remove(key);
+                continue;
+            }
+            if (_pending.ContainsKey(key))
+            {
+                continue;
+            }
+            _rebind.TryGetValue(key, out var state);
+            if (state.Attempts > 0 && now - state.LastAttemptMs < RebindWaitMs(state.Attempts))
+            {
+                continue;
+            }
+            // A corrupt record can show a zero master once, so every attempt, retries included, needs its own
+            // run of fresh abnormal sightings. A poll that misses the chain is an RF gap and counts for nothing.
+            if (!_knownChains.TryGetValue(key, out var chain) || chain.Poll != _devicePolls)
+            {
+                continue;
+            }
+            _rebindSeen.TryGetValue(key, out var seen);
+            if (seen.LastPoll != _devicePolls)
+            {
+                seen = new RebindSighting(_devicePolls, seen.Count + 1);
+                _rebindSeen[key] = seen;
+            }
+            if (seen.Count < RebindConfirmPolls)
+            {
+                continue;
+            }
+            var drift = ours && IsBoundToUsLocked(record);
+            var slot = drift ? record.RxType
+                : lastSlot >= Slv3Protocol.MinSlot && lastSlot <= Slv3Protocol.MaxSlot && !SlotInUseLocked(lastSlot) ? lastSlot
+                : FirstFreeSlotLocked();
+            if (slot < 0)
+            {
+                continue;
+            }
+            _rebind[key] = new AutoRebindState(now, state.Attempts + 1);
+            ServiceLog.Info($"[lianli-wireless] auto-rebind {key} {(drift ? "off our channel" : "unbound")}, binding to slot {slot} (attempt {state.Attempts + 1})");
+            StartBindLocked(record, (byte)slot, auto: true);
+        }
+        ResolveSlotConflictsLocked();
+    }
+
+    private static long RebindWaitMs(int attempts) =>
+        Math.Min(AutoRebindIntervalMs << Math.Min(attempts - 1, 8), AutoRebindMaxIntervalMs);
+
+    // L-Connect unbinds one of two chains reporting a slot for more than four
+    // polls; here the loser moves to the first free slot instead.
+    private void ResolveSlotConflictsLocked()
+    {
+        if (_devicePolls == _conflictPoll)
+        {
+            return;
+        }
+        _conflictPoll = _devicePolls;
+        var bySlot = new Dictionary<int, List<Slv3DeviceRecord>>();
+        foreach (var record in _lastFanRecords)
+        {
+            var key = Convert.ToHexString(record.Mac);
+            if (!IsBoundToUsLocked(record) || !_knownChains.TryGetValue(key, out var chain)
+                || chain.Poll != _devicePolls || chain.Sightings < EstablishedChainPolls)
+            {
+                continue;
+            }
+            if (!bySlot.TryGetValue(record.RxType, out var group))
+            {
+                bySlot[record.RxType] = group = new List<Slv3DeviceRecord>();
+            }
+            group.Add(record);
+        }
+        foreach (var slot in new List<int>(_slotConflicts.Keys))
+        {
+            if (!bySlot.TryGetValue(slot, out var g) || g.Count < 2)
+            {
+                _slotConflicts.Remove(slot);
+            }
+        }
+        var contested = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in bySlot.Values)
+        {
+            if (group.Count >= 2)
+            {
+                foreach (var record in group)
+                {
+                    contested.Add(Convert.ToHexString(record.Mac));
+                }
+            }
+        }
+        foreach (var key in new List<string>(_moves.Keys))
+        {
+            if (!contested.Contains(key))
+            {
+                _moves.Remove(key);
+            }
+        }
+        var now = _nowMs();
+        foreach (var (slot, group) in bySlot)
+        {
+            if (group.Count < 2)
+            {
+                continue;
+            }
+            var count = _slotConflicts.GetValueOrDefault(slot) + 1;
+            if (count < SlotConflictPolls)
+            {
+                _slotConflicts[slot] = count;
+                continue;
+            }
+            _slotConflicts.Remove(slot);
+            var mover = PickConflictMover(group, slot);
+            var moverKey = Convert.ToHexString(mover.Mac);
+            var target = FirstFreeSlotLocked();
+            _moves.TryGetValue(moverKey, out var move);
+            if (target < 0 || _pending.ContainsKey(moverKey)
+                || (move.Attempts > 0 && now - move.LastAttemptMs < RebindWaitMs(move.Attempts)))
+            {
+                continue;
+            }
+            _moves[moverKey] = new AutoRebindState(now, move.Attempts + 1);
+            ServiceLog.Info($"[lianli-wireless] slot {slot} reported by {group.Count} chains, moving {moverKey} to slot {target}");
+            StartBindLocked(mover, (byte)target, auto: true);
+        }
+    }
+
+    // Prefers the chain whose owned slot differs from the contested one; ties go to the higher MAC.
+    private Slv3DeviceRecord PickConflictMover(List<Slv3DeviceRecord> group, int slot)
+    {
+        Slv3DeviceRecord best = default;
+        var bestKey = "";
+        var bestDiffers = false;
+        foreach (var record in group)
+        {
+            var key = Convert.ToHexString(record.Mac);
+            var differs = _owned.TryGetValue(key, out var owned) && owned != slot;
+            if (bestKey.Length == 0
+                || (differs && !bestDiffers)
+                || (differs == bestDiffers && string.CompareOrdinal(key, bestKey) > 0))
+            {
+                best = record;
+                bestKey = key;
+                bestDiffers = differs;
+            }
+        }
+        return best;
     }
 
     // Re-send every pending bind/unbind frame and sequenced command, and one
@@ -506,11 +984,27 @@ public sealed class Slv3Hub : IDisposable
     // until the device list echoes the result.
     private void SyncControlLocked()
     {
-        foreach (var op in _pending.Values)
+        List<string>? abandoned = null;
+        foreach (var (key, op) in _pending)
         {
             if (TryFindRecordLocked(op.Mac, out var record))
             {
+                // An automatic bind stops the moment the device shows a foreign master.
+                if (op.Auto && !op.Unbind && !Slv3Protocol.MacIsZero(record.MasterMac)
+                    && !Slv3Protocol.MacEquals(record.MasterMac, _masterMac))
+                {
+                    (abandoned ??= new List<string>()).Add(key);
+                    continue;
+                }
                 SendBindFrameLocked(record, op.TargetSlot, op.Unbind);
+            }
+        }
+        if (abandoned is not null)
+        {
+            foreach (var key in abandoned)
+            {
+                _pending.Remove(key);
+                ServiceLog.Info($"[lianli-wireless] auto-rebind {key} dropped, device is bound to another master");
             }
         }
 
@@ -583,10 +1077,27 @@ public sealed class Slv3Hub : IDisposable
                 continue;
             }
             var pwm = Slv3Protocol.BuildPwmTuple(targets, record.FanCount, record.Family);
-            if (Slv3Protocol.NeedSyncPwm(record.Pwm, pwm))
+            if (!Slv3Protocol.NeedSyncPwm(record.Pwm, pwm))
             {
-                SendBindFrameLocked(record, record.RxType, unbind: false);
+                _unconfirmedPwm.Remove(key);
+                continue;
             }
+            var confirmable = _blindSinceMs is null && _knownChains.TryGetValue(key, out var chain) && chain.Poll == _devicePolls;
+            if (confirmable)
+            {
+                _unconfirmedPwm.Remove(key);
+            }
+            else
+            {
+                var nowMs = _nowMs();
+                if (_unconfirmedPwm.TryGetValue(key, out var sent) && sent.Pwm.AsSpan().SequenceEqual(pwm)
+                    && nowMs - sent.SentMs < UnconfirmedPwmResendMs)
+                {
+                    continue;
+                }
+                _unconfirmedPwm[key] = (pwm, nowMs);
+            }
+            SendBindFrameLocked(record, record.RxType, unbind: false);
         }
     }
 
@@ -655,12 +1166,28 @@ public sealed class Slv3Hub : IDisposable
             var rpm = control.Percent is int percent
                 ? Slv3Protocol.HydroShiftPumpRpm(percent, record.DevType)
                 : Slv3Protocol.HydroShiftDefaultPumpRpm;
+            var shown = screenSet ? screen : Slv3AioScreen.Default;
+            // With the AIO's USB cable connected and Nexus widgets on, the streamed panel owns the
+            // glass and the panel record's own setting is the only one that applies; this byte
+            // stays at the user's value then, the same condition the web uses to hide this toggle.
+            var sleeping = _lockSleep is not null && _lockSleep.IsSleeping(key, () => shown.SleepWhenLocked) && !UsbPanelOwnsGlass(key, shown.NexusWidgets);
+            shown = shown with { Brightness = AioLockBrightness(key, shown.Brightness, sleeping) };
             var block = Slv3Protocol.BuildAioParamBlock(
                 sensors, Slv3Protocol.HydroShiftPumpTimer(rpm, record.DevType),
-                screenSet ? screen : Slv3AioScreen.Default,
+                shown,
                 RadiatorFanRpm(record));
             var payload = Slv3Protocol.BuildAioParams(record.Mac, _masterMac, record.RxType, record.Channel, BindOrdinalLocked(record.Mac), block);
             SendRfPayloadLocked(record.Channel, record.RxType, payload);
+        }
+        // A screen that left (unbound, unplugged, expired) forgets its lock state, so the next sight of
+        // it counts as a first sight and goes straight to the state, not along a stale ramp.
+        if (_aioLockSlept.Count > 0)
+        {
+            foreach (var gone in _aioLockSlept.Keys.Where(k => bound is null || !bound.Contains(k)).ToList())
+            {
+                _aioLockSlept.Remove(gone);
+                _aioFades.Remove(gone);
+            }
         }
         // A released pump on an AIO that is no longer bound here has nothing left to hold.
         List<string>? released = null;
@@ -680,6 +1207,52 @@ public sealed class Slv3Hub : IDisposable
             _anyAioControlled = _aioControl.Count > 0;
         }
     }
+
+    // The lock fade for the screen's brightness byte. It rides the param block that already goes out
+    // every drive tick, so the ramp has exactly as many steps as ticks land inside it and adds no
+    // send. Guarded by _lock, like the rest of SyncAioLocked.
+    private readonly Dictionary<string, bool> _aioLockSlept = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LcdFade> _aioFades = new(StringComparer.Ordinal);
+
+    private byte AioLockBrightness(string key, byte user, bool sleeping)
+    {
+        var now = _nowMs();
+        if (!_aioLockSlept.TryGetValue(key, out var was))
+        {
+            // First sight of this screen (it came up mid-lock): go straight to the state, no ramp.
+            _aioLockSlept[key] = sleeping;
+            return sleeping ? (byte)0 : user;
+        }
+        if (sleeping != was)
+        {
+            _aioLockSlept[key] = sleeping;
+            // From the level the screen shows now, or the step a ramp in flight is on, to the other
+            // end. The level it comes back to is the user's setting, which nothing here changes.
+            var from = _aioFades.TryGetValue(key, out var running) ? running.LevelAt(now) : was ? 0 : user;
+            var to = sleeping ? 0 : user;
+            if (from == to)
+            {
+                _aioFades.Remove(key);
+            }
+            else
+            {
+                _aioFades[key] = new LcdFade(from, to, sleeping ? SleepBlackoutCoordinator.LockFadeDuration : SleepBlackoutCoordinator.UnlockFadeDuration, now);
+            }
+        }
+        if (_aioFades.TryGetValue(key, out var fade))
+        {
+            var level = fade.LevelAt(now);
+            if (fade.IsDoneAt(now))
+            {
+                _aioFades.Remove(key);
+            }
+            return (byte)level;
+        }
+        return sleeping ? (byte)0 : user;
+    }
+
+    private bool UsbPanelOwnsGlass(string key, bool nexusWidgets) =>
+        nexusWidgets && string.Equals(_usbAioMac, key, StringComparison.OrdinalIgnoreCase);
 
     private string? ReadUsbAioMac()
     {
@@ -766,11 +1339,17 @@ public sealed class Slv3Hub : IDisposable
             {
                 var done = op.Unbind
                     ? !IsBoundToUsLocked(record)
-                    : IsBoundToUsLocked(record);
+                    : IsBoundToUsLocked(record) && record.Channel == _channel && record.RxType == op.TargetSlot;
                 if (done)
                 {
+                    ServiceLog.Info($"[lianli-wireless] {(op.Unbind ? "unbind" : "bind")} for {key} confirmed ({DescribeBinding(record, _masterMac)})");
                     (resolved ??= new List<string>()).Add(key);
                     bindConfirmed |= !op.Unbind;
+                    if (op.Auto)
+                    {
+                        ServiceLog.Info($"[lianli-wireless] auto-rebind {key} bound to slot {record.RxType}");
+                    }
+                    _rebind.Remove(key);
                     continue;
                 }
             }
@@ -808,7 +1387,14 @@ public sealed class Slv3Hub : IDisposable
         {
             foreach (var key in expired)
             {
-                ServiceLog.Warn($"[lianli-wireless] bind/unbind for {key} did not converge in {PendingOpTickBudget} polls, dropping");
+                if (_pending.TryGetValue(key, out var droppedOp) && droppedOp.Auto)
+                {
+                    ServiceLog.Warn($"[lianli-wireless] auto-rebind {key} did not converge in {PendingOpTickBudget} polls, retrying after backoff");
+                }
+                else
+                {
+                    ServiceLog.Warn($"[lianli-wireless] bind/unbind for {key} did not converge in {PendingOpTickBudget} polls, dropping");
+                }
                 _pending.Remove(key);
             }
         }
@@ -844,17 +1430,22 @@ public sealed class Slv3Hub : IDisposable
         SendSaveCfgLocked();
     }
 
-    private void SendSaveCfgLocked()
+    // Stops at the first frame that fails to write, so a stalled TX costs one write timeout.
+    private bool SendSaveCfgLocked()
     {
         if (_tx is null)
         {
-            return;
+            return false;
         }
         var payload = Slv3Protocol.BuildSaveCfg(_masterMac);
         foreach (var frame in Slv3Protocol.BuildUsbSendRf(_channel, 0xFF, payload))
         {
-            _tx.RfSend(frame);
+            if (!_tx.RfSend(frame))
+            {
+                return false;
+            }
         }
+        return true;
     }
 
     // Pages needed to hold recordCount records at RecordsPerPage each, >=1 and
@@ -879,9 +1470,8 @@ public sealed class Slv3Hub : IDisposable
         var pageCount = DeviceListPagesFor(_lastRecordCount);
         if (!_rx.RfSend(Slv3Protocol.BuildGetDev(pageCount)))
         {
-            // A failed USB write means the handle itself is dead (replug,
-            // suspend); fail the tick so the worker reopens promptly.
-            return false;
+            // A failed write counts toward the same streak as an unreadable reply.
+            return HandleGetDevFailureLocked();
         }
         var reply = _rx.RfRead(Slv3Protocol.PageLength * pageCount);
         // A missing/invalid GetDev echo with a healthy handle is a wedged RX
@@ -897,13 +1487,22 @@ public sealed class Slv3Hub : IDisposable
         }
         _rxFailStreak = 0;
         _rxBusyStreak = 0;
-        _rxResetCount = 0;
-        _rxReopenCount = 0;
+        _rxRecoveries = 0;
+        _nextRxRecoveryMs = 0;
+        if (State.LinkStatus == Slv3LinkStatus.Recovering && _tx is { IsOpen: true })
+        {
+            State.LinkStatus = Slv3LinkStatus.Ok;
+        }
 
         State.MotherboardPwmPercent = Slv3Protocol.ParseGetDevMoboDuty(reply);
 
         var count = Slv3Protocol.RecordCount(reply);
         var nowMs = _nowMs();
+        if (_blindSinceMs is { } blindSince)
+        {
+            _blindTotalMs += nowMs - blindSince;
+            _blindSinceMs = null;
+        }
         _devicePolls++;
         for (var i = 0; i < count; i++)
         {
@@ -911,28 +1510,54 @@ public sealed class Slv3Hub : IDisposable
             if (Slv3Protocol.TryParseRecord(reply, offset, out var record) && record.IsWirelessFan)
             {
                 var key = Convert.ToHexString(record.Mac);
-                if (!_knownChains.ContainsKey(key))
+                if (!_knownChains.TryGetValue(key, out var known))
                 {
-                    if (ConfirmNewChains
-                        && (!_unconfirmedChains.TryGetValue(key, out var firstPoll) || firstPoll == _devicePolls))
+                    if (IsZeroedCopyOfKnownChainLocked(record.Mac))
                     {
-                        _unconfirmedChains.TryAdd(key, _devicePolls);
                         continue;
+                    }
+                    if (ConfirmNewChains)
+                    {
+                        var seen = _unconfirmedChains.TryGetValue(key, out var u)
+                            ? (u.LastPoll == _devicePolls ? u : u with { LastPoll = _devicePolls, Sightings = u.Sightings + 1 })
+                            : new Slv3Unconfirmed(_devicePolls, _devicePolls, 1);
+                        _unconfirmedChains[key] = seen;
+                        if (seen.Sightings < ChainConfirmSightings)
+                        {
+                            continue;
+                        }
                     }
                     _unconfirmedChains.Remove(key);
                     var what = record.IsStrimer ? $"Strimer dev_type {record.DevType}"
                         : record.IsHydroShift ? $"HydroShift II dev_type {record.DevType}, {record.FanCount} fan(s)"
                         : $"{record.FanCount} fan(s), {record.Family}";
-                    ServiceLog.Info($"[lianli-wireless] chain {key} appeared ({what})");
+                    ServiceLog.Info($"[lianli-wireless] chain {key} appeared ({what}, {DescribeBinding(record, _masterMac)})");
                 }
-                _knownChains[key] = new Slv3KnownChain(record, nowMs);
+                else if (TraceBindingLocked(key, known.Record, record, reply, offset, nowMs) is { } line)
+                {
+                    ServiceLog.Info(line);
+                }
+                var sightings = (_knownChains.TryGetValue(key, out var prior) ? prior.Sightings : 0) + 1;
+                _knownChains[key] = new Slv3KnownChain(record, nowMs, _devicePolls, sightings, _blindTotalMs);
             }
         }
 
+        ExpireChainsLocked(nowMs);
+
+        // Page estimate follows the larger of the reply's count and the tracked
+        // set, so a partial report can't shrink the next read below the full list.
+        _lastRecordCount = Math.Max(count, _knownChains.Count);
+        PublishFansLocked(nowMs);
+        return true;
+    }
+
+    private void ExpireChainsLocked(long nowMs)
+    {
+        var blindMs = _blindTotalMs + (_blindSinceMs is { } since ? nowMs - since : 0);
         List<string>? gone = null;
-        foreach (var (key, firstPoll) in _unconfirmedChains)
+        foreach (var (key, unconfirmed) in _unconfirmedChains)
         {
-            if (_devicePolls - firstPoll >= ChainConfirmWindowPolls)
+            if (_devicePolls - unconfirmed.FirstPoll >= ChainConfirmWindowPolls)
             {
                 (gone ??= new List<string>()).Add(key);
             }
@@ -944,7 +1569,7 @@ public sealed class Slv3Hub : IDisposable
         }
         foreach (var (key, chain) in _knownChains)
         {
-            if (nowMs - chain.LastSeenMs > ChainExpiryMs)
+            if (nowMs - chain.LastSeenMs - (blindMs - chain.BlindMsAtSeen) > ChainExpiryMs)
             {
                 (gone ??= new List<string>()).Add(key);
             }
@@ -955,6 +1580,10 @@ public sealed class Slv3Hub : IDisposable
             {
                 ServiceLog.Info($"[lianli-wireless] chain {key} dropped ({ChainExpiryMs / 1000}s unseen)");
                 _knownChains.Remove(key);
+                _rebind.Remove(key);
+                _rebindSeen.Remove(key);
+                _bindingLogs.Remove(key);
+                _unconfirmedPwm.Remove(key);
                 if (_aioControl.TryGetValue(key, out var control))
                 {
                     control.Switched = false;
@@ -962,12 +1591,14 @@ public sealed class Slv3Hub : IDisposable
                 }
             }
         }
+    }
 
-        // Page estimate follows the larger of the reply's count and the tracked
-        // set, so a partial report can't shrink the next read below the full list.
-        _lastRecordCount = Math.Max(count, _knownChains.Count);
+    // A poll that got no device list from the RX.
+    private void AgeChainsLocked(long nowMs)
+    {
+        _blindSinceMs ??= nowMs;
+        ExpireChainsLocked(nowMs);
         PublishFansLocked(nowMs);
-        return true;
     }
 
     // Surfaces the known chains, flagging any unseen for longer than
@@ -987,6 +1618,29 @@ public sealed class Slv3Hub : IDisposable
         State.Fans = fans.ToArray();
     }
 
+    // A corrupt RX copy of a real chain: same MAC with some bytes zeroed.
+    private bool IsZeroedCopyOfKnownChainLocked(byte[] mac)
+    {
+        foreach (var chain in _knownChains.Values)
+        {
+            var known = chain.Record.Mac;
+            if (known.Length != mac.Length || Slv3Protocol.MacEquals(known, mac))
+            {
+                continue;
+            }
+            var copy = true;
+            for (var i = 0; i < mac.Length && copy; i++)
+            {
+                copy = mac[i] == known[i] || mac[i] == 0;
+            }
+            if (copy)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // MAC-ordered keys so the surfaced list is stable across polls regardless
     // of dictionary iteration order.
     private List<string> SortedChainKeysLocked()
@@ -999,7 +1653,7 @@ public sealed class Slv3Hub : IDisposable
     // The RX answered but has no list: keep the last-known one.
     private bool HandleRxBusyLocked(byte[] reply)
     {
-        PublishFansLocked(_nowMs());
+        AgeChainsLocked(_nowMs());
         if (++_rxBusyStreak == 1)
         {
             _firstBusyReply = reply;
@@ -1008,37 +1662,86 @@ public sealed class Slv3Hub : IDisposable
         {
             return true;
         }
-        if (_rxReopenCount >= MaxRxReopens)
-        {
-            // Out of reopens: the streak stays past its threshold, so every
-            // further busy poll fails and the worker reconnects.
-            return false;
-        }
-        _rxBusyStreak = 0;
-        _rxReopenCount++;
         var first = _firstBusyReply is { } b ? Convert.ToHexString(b, 0, Math.Min(b.Length, Slv3Protocol.UsbPacketSize)) : "";
-        ServiceLog.Warn($"[lianli-wireless] {RxBusyPollsBeforeReset} consecutive busy GetDev replies (first {first}), reopening RX ({_rxReopenCount}/{MaxRxReopens})");
-        return TryReopenRxLocked();
+        // Any earlier RX recovery with no good reply since makes this one reset the RX MCU.
+        return BeginRxRecoveryLocked($"{RxBusyPollsBeforeReset} consecutive busy GetDev replies (first {first})", resetViaTx: _rxRecoveries > 0);
     }
 
-    // Reopens the RX handle, keeping the device list.
-    private bool TryReopenRxLocked()
+    // Only a good reply clears the busy and failure streaks, so an RX that
+    // alternates between the two still escalates.
+    private bool HandleGetDevFailureLocked()
     {
+        AgeChainsLocked(_nowMs());
+        _rxFailStreak++;
+        if (_rxFailStreak < RxFailStreakForReset)
+        {
+            // Transient: keep the last-known list and let the next tick retry.
+            return true;
+        }
+        return BeginRxRecoveryLocked($"{RxFailStreakForReset} consecutive GetDev failures", resetViaTx: true);
+    }
+
+    // Resets the RX half by writing UsbResetAnother on the TX handle, or just
+    // reopens the RX handle when asked to or when the TX is unavailable. The
+    // reopen retries each tick until the RX enumerates. Never ends the link.
+    private bool BeginRxRecoveryLocked(string reason, bool resetViaTx)
+    {
+        var nowMs = _nowMs();
+        if (nowMs < _nextRxRecoveryMs)
+        {
+            return true;
+        }
+        _rxFailStreak = 0;
+        _rxBusyStreak = 0;
+        _rxRecoveries++;
+        _nextRxRecoveryMs = nowMs + RecoveryBackoffFor(_rxRecoveries);
+        State.LinkStatus = Slv3LinkStatus.Recovering;
+        var reset = resetViaTx && _tx is { IsOpen: true } && _tx.RfSend(Slv3Protocol.BuildResetAnother());
+        ServiceLog.Warn($"[lianli-wireless] {reason}, {(reset ? "resetting RX via TX" : "reopening RX")} ({_rxRecoveries})");
         try { _rx?.Dispose(); } catch { /* best effort */ }
         _rx = null;
-        Slv3PortInfo? rxPort = null;
+        if (!reset)
+        {
+            ReopenRxLocked(FindPortLocked(Slv3DongleRole.Rx));
+        }
+        return true;
+    }
+
+    private Slv3PortInfo? FindPortLocked(Slv3DongleRole role)
+    {
         foreach (var port in _discovery.Discover())
         {
-            if (port.Role == Slv3DongleRole.Rx)
+            if (port.Role == role)
             {
-                rxPort = port;
-                break;
+                return port;
             }
         }
+        return null;
+    }
+
+    // A half that is not enumerated is reset again on the recovery backoff; one that
+    // enumerates but fails to open is retried on the same backoff, logging once per step.
+    private void ReopenRxLocked(Slv3PortInfo? rxPort)
+    {
+        var nowMs = _nowMs();
+        try { _rx?.Dispose(); } catch { /* best effort */ }
+        _rx = null;
         if (rxPort is null)
         {
-            ServiceLog.Warn("[lianli-wireless] RX reopen failed: RX not enumerated");
-            return false;
+            if (_tx is { IsOpen: true } && nowMs >= _nextRxRecoveryMs)
+            {
+                _rxRecoveries++;
+                _nextRxRecoveryMs = nowMs + RecoveryBackoffFor(_rxRecoveries);
+                if (_tx.RfSend(Slv3Protocol.BuildResetAnother()))
+                {
+                    ServiceLog.Warn($"[lianli-wireless] RX not enumerated, resetting RX via TX ({_rxRecoveries})");
+                }
+            }
+            return;
+        }
+        if (nowMs < _nextRxOpenMs)
+        {
+            return;
         }
         try
         {
@@ -1046,55 +1749,62 @@ public sealed class Slv3Hub : IDisposable
         }
         catch (Exception ex)
         {
-            ServiceLog.Warn($"[lianli-wireless] RX reopen failed: {ex.GetType().Name}: {ex.Message}");
-            return false;
+            _rxOpenFailures++;
+            _nextRxOpenMs = nowMs + RecoveryBackoffFor(_rxOpenFailures);
+            ServiceLog.Warn($"[lianli-wireless] RX reopen failed ({_rxOpenFailures}): {ex.GetType().Name}: {ex.Message}");
+            return;
         }
+        _rxOpenFailures = 0;
+        _nextRxOpenMs = 0;
         ServiceLog.Info("[lianli-wireless] RX reopened");
-        return true;
-    }
-
-    // Only a good reply clears the busy and failure streaks, so an RX that
-    // alternates between the two still escalates.
-    private bool HandleGetDevFailureLocked()
-    {
-        PublishFansLocked(_nowMs());
-        _rxFailStreak++;
-        if (_rxFailStreak < RxFailStreakForReset)
-        {
-            // Transient: keep the last-known list and let the next tick retry.
-            return true;
-        }
-        return ResetRxLocked($"{RxFailStreakForReset} consecutive GetDev failures");
-    }
-
-    private bool ResetRxLocked(string reason)
-    {
-        if (_rxResetCount >= MaxRxResetsPerConnection)
-        {
-            // Out of resets. The streak stays past its threshold, so every
-            // further failed or busy poll lands here and the worker's
-            // consecutive-failure path gets its disconnect/reopen.
-            return false;
-        }
-        _rxFailStreak = 0;
-        _rxBusyStreak = 0;
-        _rxResetCount++;
-        ServiceLog.Warn($"[lianli-wireless] {reason}, resetting RX MCU ({_rxResetCount}/{MaxRxResetsPerConnection})");
-        if (_rx is not null && _rx.RfSend(Slv3Protocol.BuildResetAnother()))
-        {
-            _rx.RfRead(Slv3Protocol.UsbPacketSize);
-        }
-        // Reference sleeps 500 ms after USB_ResetAnother before the next poll.
-        Thread.Sleep(RxResetSettleMs);
-        return true;
     }
 
     // Bound to us = our master MAC and a valid slot. A release clears both in
     // the chain's record; a stale master with slot 0 is unbound.
-    private bool IsBoundToUsLocked(Slv3DeviceRecord record) =>
-        Slv3Protocol.MacEquals(record.MasterMac, _masterMac)
+    private bool IsBoundToUsLocked(Slv3DeviceRecord record) => IsBoundTo(record, _masterMac);
+
+    private static bool IsBoundTo(Slv3DeviceRecord record, byte[] masterMac) =>
+        Slv3Protocol.MacEquals(record.MasterMac, masterMac)
         && record.RxType >= Slv3Protocol.MinSlot
         && record.RxType <= Slv3Protocol.MaxSlot;
+
+    // A flapping record logs at most once per BindingLogIntervalMs per chain, so
+    // it cannot push older lines out of the support bundle's log tail.
+    internal string? TraceBindingLocked(string key, Slv3DeviceRecord before, Slv3DeviceRecord after, byte[] reply, int offset, long nowMs)
+    {
+        var changed = BindingChanged(before, after);
+        var found = _bindingLogs.TryGetValue(key, out var log);
+        var quiet = found && nowMs - log.LastMs < BindingLogIntervalMs;
+        if (changed && quiet)
+        {
+            _bindingLogs[key] = log with { Unlogged = log.Unlogged + 1 };
+            return null;
+        }
+        var unlogged = log.Unlogged > 0 ? $" after {log.Unlogged} unlogged change(s)" : "";
+        string line;
+        if (changed)
+        {
+            line = $"[lianli-wireless] chain {key} binding {DescribeBinding(before, _masterMac)} -> {DescribeBinding(after, _masterMac)}{unlogged}, record {Convert.ToHexString(reply, offset, Slv3Protocol.RecordLength)}";
+        }
+        else if (log.Unlogged > 0 && !quiet)
+        {
+            line = $"[lianli-wireless] chain {key} binding now at {DescribeBinding(after, _masterMac)}{unlogged}";
+        }
+        else
+        {
+            return null;
+        }
+        _bindingLogs[key] = new Slv3BindingLog(nowMs, 0);
+        return line;
+    }
+
+    internal static bool BindingChanged(Slv3DeviceRecord before, Slv3DeviceRecord after) =>
+        !Slv3Protocol.MacEquals(before.MasterMac, after.MasterMac)
+        || before.RxType != after.RxType
+        || before.Channel != after.Channel;
+
+    internal static string DescribeBinding(Slv3DeviceRecord record, byte[] masterMac) =>
+        $"master {Convert.ToHexString(record.MasterMac)} slot {record.RxType} ch {record.Channel} {(IsBoundTo(record, masterMac) ? "bound" : "unbound")}";
 
     private Slv3FanInfo ToFanInfo(Slv3DeviceRecord record, bool stale) => new()
     {
@@ -1246,12 +1956,23 @@ public sealed class Slv3Hub : IDisposable
             {
                 return false;
             }
-            _pending[key] = new Slv3PendingOp(mac, (byte)slot, Unbind: false, PendingOpTickBudget);
-            // First frame goes out now; the poll re-sends until the device list
-            // confirms, so a request does not wait up to a full tick to start.
-            SendBindFrameLocked(existing, (byte)slot, unbind: false);
+            ServiceLog.Info($"[lianli-wireless] bind requested for {key} on slot {slot}");
+            _userUnbound.Remove(key);
+            _owned[key] = slot;
+            _ownedDirty = true;
+            StartBindLocked(existing, (byte)slot, auto: false);
         }
+        FlushOwned();
         return true;
+    }
+
+    private void StartBindLocked(Slv3DeviceRecord record, byte slot, bool auto)
+    {
+        _rebindSeen.Remove(Convert.ToHexString(record.Mac));
+        _pending[Convert.ToHexString(record.Mac)] = new Slv3PendingOp(record.Mac, slot, Unbind: false, PendingOpTickBudget, auto);
+        // First frame goes out now; the poll re-sends until the device list
+        // confirms, so a request does not wait up to a full tick to start.
+        SendBindFrameLocked(record, slot, unbind: false);
     }
 
     /// <summary>
@@ -1272,14 +1993,25 @@ public sealed class Slv3Hub : IDisposable
                 return false;
             }
             var key = Convert.ToHexString(mac);
+            _userUnbound.Add(key);
+            _rebind.Remove(key);
+            _rebindSeen.Remove(key);
+            if (_owned.Remove(key))
+            {
+                _ownedDirty = true;
+            }
             if (!IsBoundToUsLocked(existing))
             {
                 _pending.Remove(key);
-                return true;
             }
-            _pending[key] = new Slv3PendingOp(mac, 0, Unbind: true, PendingOpTickBudget);
-            SendBindFrameLocked(existing, 0, unbind: true);
+            else
+            {
+                ServiceLog.Info($"[lianli-wireless] unbind requested for {key}");
+                _pending[key] = new Slv3PendingOp(mac, 0, Unbind: true, PendingOpTickBudget);
+                SendBindFrameLocked(existing, 0, unbind: true);
+            }
         }
+        FlushOwned();
         return true;
     }
 
@@ -1811,7 +2543,7 @@ public sealed class Slv3Hub : IDisposable
         }
     }
 
-    /// <summary>Sets our operating channel; must be the default or an odd value (firmware rejects even). Reaches a bound chain with its next bind/PWM frame.</summary>
+    /// <summary>Sets our operating channel; must be the default or an odd value (firmware rejects even). Every device bound to us is retargeted at once.</summary>
     public bool SetChannel(int channel)
     {
         if (channel != Slv3Protocol.DefaultChannel && (channel < 1 || channel > 39 || channel % 2 == 0))
@@ -1822,12 +2554,122 @@ public sealed class Slv3Hub : IDisposable
         {
             _channel = (byte)channel;
             State.Channel = channel;
+            // Every device bound to us now reports the old channel; retarget them at once.
+            _rebind.Clear();
+            foreach (var record in _lastFanRecords)
+            {
+                if (IsBoundToUsLocked(record) && !_pending.ContainsKey(Convert.ToHexString(record.Mac)))
+                {
+                    StartBindLocked(record, record.RxType, auto: true);
+                }
+            }
         }
         return true;
     }
 
+    /// <summary>
+    /// System suspend: SaveCfg repeated at MasterDevice.SaveConfig's cadence so the
+    /// bindings reach device flash before power drops. The whole sequence runs on the
+    /// returned background task; the call waits only for the first attempt, and at
+    /// most <see cref="SuspendFirstSendCapMs"/>, so a stuck write cannot hold the
+    /// caller. The lock is never held across a wait, a send that finds it busy is
+    /// skipped, and a down link or disposed hub ends the sequence at once.
+    /// </summary>
+    public Task OnSystemSuspending()
+    {
+        if (_disposed || !IsConnected)
+        {
+            return Task.CompletedTask;
+        }
+        var firstAttempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sequence = Task.Run(() =>
+        {
+            var sent = 0;
+            try
+            {
+                for (var i = 1; i <= SuspendSaveCfgSends; i++)
+                {
+                    if (i > 1)
+                    {
+                        // Gap between tries per MasterDevice.SaveConfig, outside the lock.
+                        SleepMs(SuspendSaveCfgGapMs);
+                    }
+                    var result = TrySuspendSaveCfg(i);
+                    firstAttempted.TrySetResult();
+                    if (result == SuspendSend.Down)
+                    {
+                        break;
+                    }
+                    sent += result == SuspendSend.Sent ? 1 : 0;
+                }
+                ServiceLog.Info($"[lianli-wireless] suspend SaveCfg sent {sent}/{SuspendSaveCfgSends}");
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warn($"[lianli-wireless] suspend SaveCfg failed: {ex.Message}");
+            }
+            finally
+            {
+                firstAttempted.TrySetResult();
+            }
+        });
+        firstAttempted.Task.Wait(SuspendFirstSendCapMs);
+        return sequence;
+    }
+
+    private enum SuspendSend { Sent, Skipped, Failed, Down }
+
+    private SuspendSend TrySuspendSaveCfg(int number)
+    {
+        if (!Monitor.TryEnter(_lock, SuspendLockWaitMs))
+        {
+            ServiceLog.Warn($"[lianli-wireless] suspend SaveCfg {number} skipped, hub busy");
+            return SuspendSend.Skipped;
+        }
+        try
+        {
+            if (_disposed || !IsConnected || _tx is not { IsOpen: true })
+            {
+                return SuspendSend.Down;
+            }
+            return SendSaveCfgLocked() ? SuspendSend.Sent : SuspendSend.Failed;
+        }
+        finally
+        {
+            Monitor.Exit(_lock);
+        }
+    }
+
+    // One lock wait, one TX write timeout (the transport's pipe timeout) and a margin.
+    private const int SuspendLockWaitDefaultMs = 300;
+    private const int SuspendWriteTimeoutMs = 500;
+    private const int SuspendCapMarginMs = 100;
+    internal int SuspendLockWaitMs { get; init; } = SuspendLockWaitDefaultMs;
+    internal int SuspendFirstSendCapMs { get; init; } = SuspendLockWaitDefaultMs + SuspendWriteTimeoutMs + SuspendCapMarginMs;
+    private const int SuspendSaveCfgSends = 3;
+    private const int SuspendSaveCfgGapMs = 200;
+
     // Slots already used by a fan bound to us, or already claimed by an in-flight
     // bind, are excluded. Caller holds _lock.
+    private bool SlotInUseLocked(int slot)
+    {
+        foreach (var record in _lastFanRecords)
+        {
+            if (IsBoundToUsLocked(record) && record.RxType == slot)
+            {
+                return true;
+            }
+        }
+        foreach (var op in _pending.Values)
+        {
+            if (!op.Unbind && op.TargetSlot == slot)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private int FirstFreeSlotLocked()
     {
         var used = new HashSet<int>();
@@ -1891,11 +2733,20 @@ public sealed class Slv3Hub : IDisposable
         }
     }
 
-    private readonly record struct Slv3PendingOp(byte[] Mac, byte TargetSlot, bool Unbind, int TicksRemaining);
+    private readonly record struct Slv3PendingOp(byte[] Mac, byte TargetSlot, bool Unbind, int TicksRemaining, bool Auto = false);
+
+    private readonly record struct AutoRebindState(long LastAttemptMs, int Attempts);
+
+    private readonly record struct RebindSighting(long LastPoll, int Count);
 
     private readonly record struct Slv3PendingCommand(byte[] Mac, byte RfCmd, byte TargetSeq, int SendsRemaining, byte Arg = 0);
 
-    private readonly record struct Slv3KnownChain(Slv3DeviceRecord Record, long LastSeenMs);
+    // BlindMsAtSeen = the hub's blind total at that sighting, so expiry can leave out later blind time.
+    private readonly record struct Slv3KnownChain(Slv3DeviceRecord Record, long LastSeenMs, long Poll, int Sightings, long BlindMsAtSeen);
+
+    private readonly record struct Slv3Unconfirmed(long FirstPoll, long LastPoll, int Sightings);
+
+    private readonly record struct Slv3BindingLog(long LastMs, int Unlogged);
 
     // SwitchSeq is the cmdSeq of the last RF_AioSwitchWireless sent; 0 = none in flight.
     private sealed class Slv3AioControl

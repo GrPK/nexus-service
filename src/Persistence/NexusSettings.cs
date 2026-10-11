@@ -589,6 +589,9 @@ public sealed class LightingSettings
     /// preference rather than a look, so unlike the slider it is not captured
     /// into presets.</summary>
     public BrightnessSchedule BrightnessSchedule { get; set; } = new();
+    /// <summary>Dims to <see cref="IdleDimSettings.Level"/> percent while the PC is idle, see
+    /// <see cref="Nexus.Service.Lighting.IdleDim.IdleDimController"/>. Not captured into presets.</summary>
+    public IdleDimSettings IdleDim { get; set; } = new();
     public Dictionary<string, int> SpeedScale { get; set; } = new();
     public bool SpeedEnabled { get; set; } = InstallDefaults.Lighting.SpeedEnabled;
     public int FrameRate { get; set; } = InstallDefaults.Lighting.FrameRate;
@@ -690,6 +693,16 @@ public sealed class BrightnessSchedule
 {
     public bool Enabled { get; set; }
     public List<BrightnessSchedulePoint> Points { get; set; } = Nexus.Service.Lighting.MasterBrightness.DefaultSchedule();
+}
+
+public sealed class IdleDimSettings
+{
+    public bool Enabled { get; set; }
+    /// <summary>0 follows the OS screen-off; otherwise seconds of input idle, within the controller's timeout range.</summary>
+    public int TimeoutSeconds { get; set; }
+    /// <summary>Master brightness cap while idle, percent 0..100.</summary>
+    public int Level { get; set; } = DefaultLevel;
+    public const int DefaultLevel = 10;
 }
 
 public sealed class BrightnessSchedulePoint
@@ -1272,6 +1285,8 @@ public sealed class TryxSettings
     public int SlideshowIntervalSec { get; set; } = Nexus.Service.Peripherals.Tryx.Panorama.TryxSlideshowConfig.DefaultIntervalSec;
     public bool SlideshowShuffle { get; set; }
     public bool SlideshowFinishVideos { get; set; } = true;
+    /// <summary>Turn the Panorama screen off while the PC is locked and restore its prior state on unlock.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
 }
 
 /// <summary>One NZXT Kraken channel's firmware animation. <see cref="Colors"/> holds
@@ -1305,6 +1320,10 @@ public sealed class DevicesSettings
     /// way to read it back, so the last write is remembered here to seed the settings UI.
     /// </summary>
     public Dictionary<string, KrakenFirmwareLighting> KrakenFirmwareLighting { get; set; } = new();
+    /// <summary>Put the NZXT Kraken LCD dark while the PC is locked and restore its backlight on unlock. The service drives one Kraken, so this is not keyed per device.</summary>
+    public bool KrakenLcdSleepWhenLocked { get; set; } = true;
+    /// <summary>Service-internal: the Kraken backlight to return to after a lock darkened it. Set while dark, cleared once restored; never the user's brightness.</summary>
+    public int? KrakenLcdLockRestore { get; set; }
     /// <summary>LEGACY (pre-v6, per-card key). Read only by the one-time schema migration that moves entries into <see cref="DeviceLedOverrides"/>; empty afterward. Do not write.</summary>
     public Dictionary<string, List<LedPositionOverride>> LedMapOverrides { get; set; } = new();
     /// <summary>LEGACY (pre-v6, per-card key). Migration source for <see cref="DeviceAspectRatios"/>; empty afterward. Do not write.</summary>
@@ -1603,6 +1622,9 @@ public sealed class LianLiWirelessSettings
 
     /// <summary>HydroShift II screen settings, keyed by the AIO's MAC hex (uppercase).</summary>
     public Dictionary<string, LianLiAioScreenSettings> AioScreens { get; set; } = new();
+
+    /// <summary>Devices Nexus bound to its dongle, by MAC hex (uppercase), with the slot each last held; an unbound one is bound back.</summary>
+    public Dictionary<string, int> OwnedDevices { get; set; } = new();
 }
 
 /// <summary>What a HydroShift II's screen shows while Nexus drives its pump.</summary>
@@ -1610,6 +1632,8 @@ public sealed class LianLiAioScreenSettings
 {
     /// <summary>Backlight, percent.</summary>
     public int Brightness { get; set; } = Nexus.Service.Peripherals.LianLiWireless.Slv3Protocol.AioLcdBrightness;
+    /// <summary>Put the screen dark while the PC is locked and restore <see cref="Brightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     /// <summary>Index of one of the AIO's built-in screen themes.</summary>
     public int Theme { get; set; }
     public string LabelColor { get; set; } = "#FFFFFF";
@@ -1760,6 +1784,8 @@ public sealed class LianLiWirelessScreenSettings
     public string? MediaId { get; set; }
     /// <summary>0-100.</summary>
     public byte Brightness { get; set; } = 100;
+    /// <summary>Put the screen dark while the PC is locked and restore <see cref="Brightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     /// <summary>0 = 0 deg, 1 = 90 deg, 2 = 180 deg, 3 = 270 deg.</summary>
     public byte Rotation { get; set; }
     /// <summary>"cpuLoad" | "cpuTemp" | "gpuLoad" | "gpuTemp" | "memoryUsage" | "vramUsage" | "fanRpm". Used when ContentType is "sensor".</summary>
@@ -1950,11 +1976,17 @@ public sealed class NollieStandaloneSettings
 
 public sealed class CorsairSettings
 {
+    /// <summary>Put the LCD dark while the PC is locked and restore <see cref="LcdBrightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     public string? LcdSelectedMediaId { get; set; }
     /// <summary>LCD brightness 0-100. 0 = display off, 100 = maximum.</summary>
     public byte LcdBrightness { get; set; } = 100;
     /// <summary>LCD rotation: 0 = 0 deg, 1 = 90 deg, 2 = 180 deg, 3 = 270 deg.</summary>
     public byte LcdRotation { get; set; }
+    /// <summary>Media stored in the LCD's flash and shown while no host drives it; null = the coolant screen.</summary>
+    public string? LcdDeviceMediaId { get; set; }
+    /// <summary>USB serial (or HID path) of the LINK hub that owns the unqualified "corsair:ch{N}" ids.</summary>
+    public string? PrimaryHubKey { get; set; }
 }
 
 /// <summary>
@@ -2159,8 +2191,8 @@ public sealed class UpdateSettings
     public string UpdateMode { get; set; } = "always";
 
     /// <summary>"production" or "beta". Production maps to the GitHub latest-release
-    /// endpoint (excludes prereleases); beta picks the newest release regardless of
-    /// the prerelease flag.</summary>
+    /// endpoint (excludes prereleases); beta picks the highest prerelease and never
+    /// a stable.</summary>
     public string UpdateChannel { get; set; } = "production";
 
     /// <summary>

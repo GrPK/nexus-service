@@ -543,6 +543,8 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(BrightnessScale))]
 [JsonSerializable(typeof(Nexus.Service.Models.Lighting.GlobalBrightnessBody))]
 [JsonSerializable(typeof(Nexus.Service.Models.Lighting.BrightnessScheduleBody))]
+[JsonSerializable(typeof(Nexus.Service.Models.Lighting.IdleDimBody))]
+[JsonSerializable(typeof(Nexus.Service.Models.Lighting.IdleDimStatus))]
 [JsonSerializable(typeof(Nexus.Service.Models.Lighting.RenderGpuBody))]
 [JsonSerializable(typeof(SpeedScale))]
 [JsonSerializable(typeof(AnimateHeadlessStart))]
@@ -957,6 +959,10 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Helper.Domains.ServiceRequestStopPayload))]
 [JsonSerializable(typeof(Nexus.Service.Helper.Domains.LockInputWatchPayload))]
 [JsonSerializable(typeof(Nexus.Service.Helper.Domains.LockInputSeenPayload))]
+[JsonSerializable(typeof(Nexus.Service.Helper.Domains.IdleDimWatchPayload))]
+[JsonSerializable(typeof(Nexus.Service.Helper.Domains.IdleStatePayload))]
+[JsonSerializable(typeof(Nexus.Service.Helper.Domains.DisplayStatePayload))]
+[JsonSerializable(typeof(Nexus.Service.Helper.Domains.ScreenOffTimeoutChangedPayload))]
 [JsonSerializable(typeof(Nexus.Service.Helper.Domains.KeyWatchPayload))]
 [JsonSerializable(typeof(Nexus.Service.Helper.Domains.KeyPressedPayload))]
 // Diagnostics
@@ -1248,6 +1254,10 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Routes.CorsairStateResponse))]
 [JsonSerializable(typeof(Nexus.Service.Routes.CorsairDeviceDto))]
 [JsonSerializable(typeof(Nexus.Service.Routes.CorsairDeviceDto[]))]
+[JsonSerializable(typeof(Nexus.Service.Routes.CorsairHubDto))]
+[JsonSerializable(typeof(Nexus.Service.Routes.CorsairHubDto[]))]
+[JsonSerializable(typeof(Nexus.Service.Routes.CorsairRescanRequest))]
+[JsonSerializable(typeof(Nexus.Service.Routes.CorsairRescanResponse))]
 // Corsair iCUE LINK LCD.
 [JsonSerializable(typeof(Nexus.Service.Peripherals.CorsairLink.LcdMediaItem))]
 [JsonSerializable(typeof(Nexus.Service.Peripherals.CorsairLink.LcdMediaItem[]))]
@@ -1255,6 +1265,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Routes.LcdUploadResponse))]
 [JsonSerializable(typeof(Nexus.Service.Routes.LcdSettingsRequest))]
 [JsonSerializable(typeof(Nexus.Service.Routes.LcdStateResponse))]
+[JsonSerializable(typeof(Nexus.Service.Routes.LcdDeviceScreenRequest))]
 [JsonSerializable(typeof(int[]))]
 [JsonSerializable(typeof(bool[]))]
 // Lian Li Strimer Plus.

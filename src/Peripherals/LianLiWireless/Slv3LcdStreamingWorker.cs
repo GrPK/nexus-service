@@ -135,6 +135,7 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
         string? loadedMediaId = null;
         Slv3LcdImageData? loadedImage = null;
         var appliedBrightness = -1;
+        var lockSlept = false;
         var appliedRotation = -1;
         var appliedContentType = "";
         var pushedStatic = false;
@@ -156,11 +157,7 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
                     ? s
                     : new LianLiWirelessScreenSettings();
 
-                if (settings.Brightness != appliedBrightness)
-                {
-                    _hub.SetBrightness(serial, settings.Brightness);
-                    appliedBrightness = settings.Brightness;
-                }
+                _hub.SyncBrightness(serial, settings, ref appliedBrightness, ref lockSlept);
                 if (settings.Rotation != appliedRotation)
                 {
                     _hub.SetRotation(serial, settings.Rotation);

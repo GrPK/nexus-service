@@ -17,6 +17,8 @@ public sealed class DxgiScreenCapture : IDisposable
     private bool _frameAcquired, _disposed;
 
     public bool IsInitialized => _duplication is not null;
+    /// <summary>A non-timeout AcquireNextFrame failure (ACCESS_LOST); the instance never recovers and must be re-created.</summary>
+    public bool IsLost { get; private set; }
     public int ScreenWidth => _screenW;
     public int ScreenHeight => _screenH;
 
@@ -55,7 +57,11 @@ public sealed class DxgiScreenCapture : IDisposable
         try
         {
             var result = _duplication.AcquireNextFrame(timeoutMs, out _, out var resource);
-            if (result.Failure) return false;
+            if (result.Failure)
+            {
+                if (result.Code != Vortice.DXGI.ResultCode.WaitTimeout.Code) IsLost = true;
+                return false;
+            }
             using var tex = resource!.QueryInterface<ID3D11Texture2D>();
             _context.CopyResource(_stagingTexture, tex);
             _context.Flush();
@@ -64,7 +70,7 @@ public sealed class DxgiScreenCapture : IDisposable
             _frameAcquired = true;
             return true;
         }
-        catch { return false; }
+        catch { IsLost = true; return false; }
     }
 
     public byte[]? ReadRegion(int x, int y, int w, int h)

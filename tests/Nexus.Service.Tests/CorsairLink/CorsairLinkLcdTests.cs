@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Nexus.Service.Peripherals.CorsairLink;
@@ -165,11 +166,105 @@ public class CorsairLinkLcdTests
         lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF });
         lcd.Detach();
 
-        Assert.Equal(3, device.Features.Count);
-        Assert.Equal(new byte[] { 0x03, 0x1e, 0x01, 0x01 }, device.Features[0]);
-        Assert.Equal(new byte[] { 0x03, 0x1d, 0x00, 0x01 }, device.Features[1]);
-        Assert.Equal(new byte[] { 0x03, 0x0b, 0x64, 0x01 }, device.Features[2]);
+        // Host mode on before the first frame, then the hand-back to the coolant screen.
+        Assert.Equal(4, device.Features.Count);
+        Assert.Equal(new byte[] { 0x03, 0x1d, 0x01, 0x01 }, device.Features[0]);
+        Assert.Equal(new byte[] { 0x03, 0x1e, 0x01, 0x01 }, device.Features[1]);
+        Assert.Equal(new byte[] { 0x03, 0x1d, 0x00, 0x01 }, device.Features[2]);
+        Assert.Equal(new byte[] { 0x03, 0x0b, 0x64, 0x01 }, device.Features[3]);
         Assert.False(lcd.HasDevice);
+    }
+
+    [Fact]
+    public void ReleaseForShutdown_hands_back_and_refuses_a_late_reattach()
+    {
+        var (lcd, device) = AttachLcd();
+        lcd.ShowsStoredImage = true;
+        lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF });
+
+        lcd.ReleaseForShutdown(handBack: true);
+
+        Assert.Equal(new byte[] { 0x03, 0x1e, 0x00, 0x01 }, device.Features[1]);
+        Assert.Equal(new byte[] { 0x03, 0x1d, 0x00, 0x01 }, device.Features[2]);
+        var hid = new RecordingHidEnumerator(new[]
+        {
+            new HidDeviceInfo { VendorId = CorsairLinkLcd.LcdVendorId, ProductId = CorsairLinkLcd.AioPid, Path = "/dev/hid-lcd", Serial = "S1", OutputReportByteLength = 1024 },
+        }, device);
+        lcd.DiscoverAndAttach(new CorsairLinkDevice[] { new() { Channel = 1, Type = 6, Serial = "S1" } }, hid);
+        Assert.False(lcd.HasDevice);
+    }
+
+    [Fact]
+    public void Detach_hands_back_to_the_stored_image_when_one_is_selected()
+    {
+        var (lcd, device) = AttachLcd();
+        lcd.ShowsStoredImage = true;
+        lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF });
+        lcd.Detach();
+
+        Assert.Equal(new byte[] { 0x03, 0x1e, 0x00, 0x01 }, device.Features[1]);
+        Assert.Equal(new byte[] { 0x03, 0x1d, 0x00, 0x01 }, device.Features[2]);
+    }
+
+    [Fact]
+    public void Host_mode_is_entered_once_and_again_after_a_screen_select()
+    {
+        var (lcd, device) = AttachLcd();
+        lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF });
+        lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF });
+        Assert.Single(device.Features);
+
+        Assert.True(lcd.SelectHandBackScreen(storedImage: true));
+
+        // iCUE's select sequence, then host mode back on because Nexus paints the glass.
+        Assert.Equal(
+            new[] { "031d0101", "031d0101", "031b0001", "031e0001", "031d0001", "031d0101" },
+            device.Features.Select(f => Convert.ToHexString(f).ToLowerInvariant()));
+        lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF });
+        Assert.Equal(6, device.Features.Count);
+    }
+
+    [Fact]
+    public void A_screen_select_asks_the_owning_stream_to_repaint_once()
+    {
+        var (lcd, _) = AttachLcd();
+        var owner = new object();
+        lcd.ClaimStream(owner);
+        lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF });
+        Assert.False(lcd.TakeRepaintRequest(owner));
+
+        lcd.SelectHandBackScreen(storedImage: true);
+
+        Assert.False(lcd.TakeRepaintRequest(new object()));
+        Assert.True(lcd.TakeRepaintRequest(owner));
+        Assert.False(lcd.TakeRepaintRequest(owner));
+    }
+
+    [Fact]
+    public void A_run_of_failed_writes_drops_the_screen_so_the_next_discovery_reopens_it()
+    {
+        var (lcd, device) = AttachLcd();
+        Assert.True(lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF }));
+
+        // One miss keeps the handle; a run of them drops it.
+        device.Gone = true;
+        Assert.False(lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF }));
+        Assert.True(lcd.HasDevice);
+        Assert.False(lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF }));
+        Assert.False(lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF }));
+        Assert.False(lcd.HasDevice);
+
+        // Re-enumerated: attach again, and the first frame turns host mode back on.
+        device.Gone = false;
+        var hid = new RecordingHidEnumerator(new[]
+        {
+            new HidDeviceInfo { VendorId = CorsairLinkLcd.LcdVendorId, ProductId = CorsairLinkLcd.AioPid, Path = "/dev/hid-lcd", Serial = "S1", OutputReportByteLength = 1024 },
+        }, device);
+        lcd.DiscoverAndAttach(new CorsairLinkDevice[] { new() { Channel = 1, Type = 6, Serial = "S1" } }, hid);
+        Assert.True(lcd.HasDevice);
+        device.Features.Clear();
+        Assert.True(lcd.SendFrame(new byte[] { 0xFF, 0xD8, 0xFF }));
+        Assert.Equal(new[] { new byte[] { 0x03, 0x1d, 0x01, 0x01 } }, device.Features);
     }
 
     [Fact]
@@ -180,7 +275,7 @@ public class CorsairLinkLcdTests
 
         lcd.Detach(handBack: false);
 
-        Assert.Empty(device.Features);
+        Assert.Equal(new[] { new byte[] { 0x03, 0x1d, 0x01, 0x01 } }, device.Features);
         Assert.False(lcd.HasDevice);
     }
 
@@ -226,6 +321,46 @@ public class CorsairLinkLcdTests
 
         lcd.Detach();
         Assert.False(lcd.HasDevice);
+    }
+
+    [Fact]
+    public void LcdDiscovery_takes_the_sole_lcd_when_serials_differ()
+    {
+        // TITAN RX LCD on the Y70: chain serial and USB serial never match.
+        var chain = new CorsairLinkDevice[]
+        {
+            new() { Channel = 13, Type = 6, Serial = "4E0CF5679521C109ED49AD3D" },
+        };
+        var lcdHid = new HidDeviceInfo
+        {
+            VendorId = CorsairLinkLcd.LcdVendorId, ProductId = CorsairLinkLcd.AioPid,
+            Path = "/dev/titan-lcd", Serial = "A9IHT509000CJJ", OutputReportByteLength = 1024,
+        };
+
+        var hid = new RecordingHidEnumerator(new[] { lcdHid }, new RecordingHidDevice());
+        var lcd = new CorsairLinkLcd();
+        lcd.DiscoverAndAttach(chain, hid);
+
+        Assert.True(lcd.HasDevice);
+        Assert.Equal("/dev/titan-lcd", hid.LastOpenedPath);
+    }
+
+    [Fact]
+    public void LcdDiscovery_does_not_guess_between_two_unmatched_lcds()
+    {
+        var chain = new CorsairLinkDevice[] { new() { Channel = 13, Type = 6, Serial = "CHAIN" } };
+        HidDeviceInfo Lcd(string path, string serial) => new()
+        {
+            VendorId = CorsairLinkLcd.LcdVendorId, ProductId = CorsairLinkLcd.AioPid,
+            Path = path, Serial = serial, OutputReportByteLength = 1024,
+        };
+
+        var hid = new RecordingHidEnumerator(new[] { Lcd("/dev/a", "A"), Lcd("/dev/b", "B") }, new RecordingHidDevice());
+        var lcd = new CorsairLinkLcd();
+        lcd.DiscoverAndAttach(chain, hid);
+
+        Assert.False(lcd.HasDevice);
+        Assert.Null(hid.LastOpenedPath);
     }
 
     // -------------------------------------------------------------------------
@@ -383,6 +518,7 @@ public class CorsairLinkLcdTests
     {
         public List<byte[]> Features { get; } = new();
         public List<byte[]> Writes { get; } = new();
+        public bool Gone { get; set; }
 
         public int VendorId => 0x1B1C;
         public int ProductId => CorsairLinkLcd.AioPid;
@@ -399,6 +535,7 @@ public class CorsairLinkLcdTests
 
         public bool Write(ReadOnlySpan<byte> report)
         {
+            if (Gone) return false;
             Writes.Add(report.ToArray());
             return true;
         }

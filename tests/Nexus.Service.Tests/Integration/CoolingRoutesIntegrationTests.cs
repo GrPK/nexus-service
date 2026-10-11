@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Nexus.Service.Auth;
 using Nexus.Service.Cooling;
 using Nexus.Service.Models.Cooling;
+using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Tests.Integration;
 
@@ -30,7 +31,22 @@ public sealed class CoolingRoutesIntegrationTests
             new() { Id = "/np50/port-2", Name = "Port 2", DeviceId = "np50:1", DeviceName = "HYTE NP50" },
         };
 
-        public IReadOnlyList<FanChannel> GetFanChannels() => Channels;
+        // Set to read the settings from another thread inside GetFanChannels, as
+        // LhmComputer.Update does under its own lock.
+        public IConfigStore? StoreReadDuringFanRead;
+        public bool StoreLockedDuringFanRead;
+
+        public IReadOnlyList<FanChannel> GetFanChannels()
+        {
+            if (StoreReadDuringFanRead is { } store)
+            {
+                // A dedicated thread, so a starved pool on a busy run cannot fake a held lock.
+                var reader = new Thread(() => store.Load());
+                reader.Start();
+                if (!reader.Join(TimeSpan.FromSeconds(2))) StoreLockedDuringFanRead = true;
+            }
+            return Channels;
+        }
         public IReadOnlyList<TemperatureSource> GetTemperatureSources() => new List<TemperatureSource>();
         public float? ReadTemperature(string sensorId) => null;
         public int SetFanSpeed(string channelId, int dutyPercent) => dutyPercent;
@@ -44,13 +60,13 @@ public sealed class CoolingRoutesIntegrationTests
             => Task.FromResult<IReadOnlyList<FanCalibration>>(Array.Empty<FanCalibration>());
     }
 
-    private (WebApplicationFactory<Program> factory, HttpClient client) Boot()
+    private (WebApplicationFactory<Program> factory, HttpClient client) Boot(FakeFanProvider? fans = null)
     {
         var factory = new NexusAppFactory().WithWebHostBuilder(b =>
             b.ConfigureTestServices(s =>
             {
                 s.RemoveAll<IFanControlProvider>();
-                s.AddSingleton<IFanControlProvider>(new FakeFanProvider());
+                s.AddSingleton<IFanControlProvider>(fans ?? new FakeFanProvider());
             }));
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
@@ -294,6 +310,25 @@ public sealed class CoolingRoutesIntegrationTests
                 .First(c => c.GetProperty("id").GetString() == "gpufan");
             Assert.Equal("Main card", gpu.GetProperty("deviceName").GetString());
             Assert.Equal("RTX 3070", gpu.GetProperty("originalDeviceName").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task UpdatePreset_SaveCurrent_ReadsFansOutsideTheSettingsLock()
+    {
+        var fans = new FakeFanProvider();
+        var (factory, client) = Boot(fans);
+        using (factory)
+        {
+            var created = await client.PostAsJsonAsync("/cooling/presets", new { name = "Quiet" });
+            using var doc = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+            var id = doc.RootElement.GetProperty("preset").GetProperty("id").GetString();
+
+            fans.StoreReadDuringFanRead = factory.Services.GetRequiredService<IConfigStore>();
+            var res = await client.PutAsJsonAsync($"/cooling/presets/{id}", new { saveCurrent = true });
+
+            Assert.True(res.IsSuccessStatusCode);
+            Assert.False(fans.StoreLockedDuringFanRead);
         }
     }
 }

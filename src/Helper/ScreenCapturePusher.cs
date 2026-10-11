@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Nexus.Service.Helper.Domains;
 using Nexus.Service.Lighting.Capture;
+using Nexus.Service.Platform;
 using Nexus.Service.Serialization;
 
 namespace Nexus.Service.Helper;
@@ -23,6 +24,8 @@ namespace Nexus.Service.Helper;
 [SupportedOSPlatform("windows")]
 public sealed class ScreenCapturePusher : IDisposable
 {
+    private const int MinRetryMs = 250;
+    private const int MaxRetryMs = 4000;
     private readonly HelperOutbound _outbound;
     private readonly object _lock = new();
     private CancellationTokenSource? _cts;
@@ -60,15 +63,10 @@ public sealed class ScreenCapturePusher : IDisposable
     private async Task RunLoop(string monitorId, int width, int height, CancellationToken ct)
     {
         var outputIdx = uint.TryParse(monitorId, out var idx) ? idx : 0u;
-        var dxgi = new DxgiScreenCapture();
-        if (!dxgi.Initialize(outputIdx))
-        {
-            Console.Error.WriteLine("[screen-capture-pusher] DXGI init failed");
-            dxgi.Dispose();
-            return;
-        }
-        lock (_lock) { _dxgi = dxgi; }
         var buffer = new byte[width * height * 3];
+        DxgiScreenCapture? dxgi = null;
+        var retryMs = MinRetryMs;
+        var recovering = false;
         try
         {
             // ~30 fps push rate. The service's render loop runs at the engine
@@ -77,9 +75,50 @@ public sealed class ScreenCapturePusher : IDisposable
             var period = TimeSpan.FromMilliseconds(33);
             while (!ct.IsCancellationRequested)
             {
+                var backoff = false;
+                if (dxgi is not null && dxgi.IsLost)
+                {
+                    lock (_lock) { _dxgi = null; }
+                    dxgi.Dispose();
+                    dxgi = null;
+                    if (!recovering) HelperLog.Write("[screen-capture-pusher] duplication lost; re-creating");
+                    // Lost again before delivering a frame: back off instead of rebuilding every tick.
+                    backoff = recovering;
+                    recovering = true;
+                }
+                if (dxgi is null && !backoff)
+                {
+                    var next = new DxgiScreenCapture();
+                    if (next.Initialize(outputIdx))
+                    {
+                        dxgi = next;
+                        lock (_lock) { _dxgi = dxgi; }
+                    }
+                    else
+                    {
+                        next.Dispose();
+                        if (retryMs == MinRetryMs) HelperLog.Write("[screen-capture-pusher] DXGI init failed; retrying");
+                        recovering = true;
+                        backoff = true;
+                    }
+                }
+                if (backoff || dxgi is null)
+                {
+                    // DXGI raises no event when duplication becomes possible again, so poll with backoff.
+                    try { await Task.Delay(retryMs, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                    retryMs = Math.Min(retryMs * 2, MaxRetryMs);
+                    continue;
+                }
                 var deadline = DateTime.UtcNow + period;
                 if (dxgi.AcquireFrame(timeoutMs: 16))
                 {
+                    if (recovering)
+                    {
+                        HelperLog.Write("[screen-capture-pusher] capture resumed");
+                        recovering = false;
+                        retryMs = MinRetryMs;
+                    }
                     if (dxgi.BlitToBuffer(buffer, width, height))
                     {
                         var copy = new byte[buffer.Length];
@@ -109,7 +148,7 @@ public sealed class ScreenCapturePusher : IDisposable
         finally
         {
             lock (_lock) { _dxgi = null; }
-            try { dxgi.Dispose(); } catch { }
+            try { dxgi?.Dispose(); } catch { }
         }
     }
 

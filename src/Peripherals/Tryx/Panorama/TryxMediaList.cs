@@ -125,6 +125,16 @@ public static class TryxMediaList
         return Encoding.UTF8.GetString(serial);
     }
 
+    /// <summary>Panel firmware_version from the same device_info reply: DeviceInfo.firmware_version =
+    /// field 3. Null if the buffer is not a device_info frame or the panel sent no version.</summary>
+    public static string? ParseFirmwareVersion(ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty) return null;
+        if (!TryGetLenField(data, fieldNumber: 500, out var deviceInfo)) return null;
+        if (!TryGetLenField(deviceInfo, fieldNumber: 3, out var version)) return null;
+        return Encoding.UTF8.GetString(version);
+    }
+
     /// <summary>One file_pull_response chunk; <paramref name="Data"/> is still masked.</summary>
     public readonly record struct FilePullChunk(bool Ok, ulong SessionId, long Offset, long FileSize, byte[] Data);
 
@@ -218,6 +228,62 @@ public static class TryxMediaList
             if (!TrySkipField(body, ref pos, wt)) return null;
         }
         return new DecryptJobStatus((int)job, (int)progress, (int)decrypt);
+    }
+
+    /// <summary>cooler_status (RspPackagePb 507) { fans_speed = 1, pump_speed = 2 }, both rpm. A zero
+    /// reading is absent on the wire, so a stopped fan reads 0. Field ids from Kanali's UDB.exe
+    /// descriptor (cooler.proto CoolerStatusPb).</summary>
+    public readonly record struct CoolerStatus(int FanRpm, int PumpRpm);
+
+    public static CoolerStatus? ParseCoolerStatus(ReadOnlySpan<byte> payload)
+    {
+        if (!TryGetLenField(payload, fieldNumber: 507, out var body)) return null;
+        ulong fan = 0, pump = 0;
+        var pos = 0;
+        while (pos < body.Length)
+        {
+            if (!TryReadVarint(body, ref pos, out var tag)) return null;
+            var fn = (int)(tag >> 3);
+            var wt = (int)(tag & 7);
+            if (wt == WireVarint)
+            {
+                if (!TryReadVarint(body, ref pos, out var v)) return null;
+                if (fn == 1) fan = v;
+                else if (fn == 2) pump = v;
+                continue;
+            }
+            if (!TrySkipField(body, ref pos, wt)) return null;
+        }
+        return new CoolerStatus((int)Math.Min(fan, int.MaxValue), (int)Math.Min(pump, int.MaxValue));
+    }
+
+    /// <summary>The fan_config (FunConfigPb { mode = 1, fun_power_level = 2, fix_power = 3 }) of a
+    /// cooler_config reply (RspPackagePb 506 { fan_config = 1, pump_config = 2 }). <c>Raw</c> is the
+    /// body as received, for writing back verbatim; <c>FixedPower</c> is its fix_power when the mode
+    /// is FixMode (1), else null.</summary>
+    public readonly record struct CoolerFanConfig(byte[] Raw, int? FixedPower);
+
+    public static CoolerFanConfig? ParseCoolerFanConfig(ReadOnlySpan<byte> payload)
+    {
+        if (!TryGetLenField(payload, fieldNumber: 506, out var cooler)) return null;
+        if (!TryGetLenField(cooler, fieldNumber: 1, out var fan)) return null;
+        ulong mode = 0, power = 0;
+        var pos = 0;
+        while (pos < fan.Length)
+        {
+            if (!TryReadVarint(fan, ref pos, out var tag)) return null;
+            var fn = (int)(tag >> 3);
+            var wt = (int)(tag & 7);
+            if (wt == WireVarint)
+            {
+                if (!TryReadVarint(fan, ref pos, out var v)) return null;
+                if (fn == 1) mode = v;
+                else if (fn == 3) power = v;
+                continue;
+            }
+            if (!TrySkipField(fan, ref pos, wt)) return null;
+        }
+        return new CoolerFanConfig(fan.ToArray(), mode == 1 ? (int)Math.Min(power, 100) : null);
     }
 
     /// <summary>Non-zero ErrorPb code of a reply (RspPackagePb field 2 { code = 1, why = 2 }), e.g.

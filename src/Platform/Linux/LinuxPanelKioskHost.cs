@@ -22,9 +22,9 @@ namespace Nexus.Service.Platform.Linux;
 /// Also hosts the Y70's own kiosk (via <see cref="LinuxOverlayHost"/>) the way
 /// the Windows overlay does: opened from hardware detection, not a display
 /// assignment, and loading <c>/panel</c> with no device id so the kiosk
-/// self-registers a <c>y70</c> record from its own viewport and re-reports it on
-/// resize. That keeps compositor rotation and scale authoritative - DRM sysfs
-/// only knows the panel's native scanout mode.
+/// self-registers a <c>y70</c> record and reports its own viewport on resize.
+/// That keeps compositor rotation and scale authoritative - DRM sysfs only
+/// knows the panel's native scanout mode.
 ///
 /// Placement caveat: Wayland gives clients no protocol to target a specific
 /// output, so the kiosk fullscreens on the compositor-chosen monitor -
@@ -55,10 +55,11 @@ public sealed class LinuxPanelKioskHost : IDisposable
     private readonly object _lock = new();
     private readonly Dictionary<string, Kiosk> _running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _rapidFailures = new(StringComparer.Ordinal);
-    // Reconcile ticks every few seconds; without this the cap logs every tick.
+    // Reconcile runs on each assignment, launch and session change; without this the cap logs on each one.
     private readonly HashSet<string> _cappedLogged = new(StringComparer.Ordinal);
     private bool _disposed;
     private bool _noBrowserLogged;
+    private bool _noSessionLogged;
 
     private sealed class Kiosk
     {
@@ -84,6 +85,7 @@ public sealed class LinuxPanelKioskHost : IDisposable
         _store = store;
         _topology = topology;
         _dbus = dbus;
+        LinuxSession.SessionAdopted += Reconcile;
     }
 
     /// <summary>Same predicate as the Windows overlay's PanelDisplay auto-launch.</summary>
@@ -116,6 +118,17 @@ public sealed class LinuxPanelKioskHost : IDisposable
         {
             if (_disposed)
                 return;
+            // A root daemon started before login has no display: every spawn exits
+            // at once and trips the rapid-failure cap. SessionAdopted reconciles.
+            if (LinuxSession.IsRootDaemon && LinuxSession.SessionUid is null)
+            {
+                if (!_noSessionLogged)
+                {
+                    _noSessionLogged = true;
+                    Console.Error.WriteLine("[panel-kiosk] no graphical session yet; kiosks open at login");
+                }
+                return;
+            }
             var assignments = _registry.ListAssignments()
                 .Select(a => (a.DisplayId, a.PanelDeviceId))
                 .ToList();
@@ -157,13 +170,15 @@ public sealed class LinuxPanelKioskHost : IDisposable
     /// <summary>
     /// The Y70 slot loads <c>/panel</c> with no device id: the SPA allocates (or
     /// re-touches, via the profile's localStorage) a self-registered y70 record.
+    /// <c>surface=y70</c> names it, because the window maps on the primary
+    /// monitor before KWin moves it and that viewport classifies as a phone.
     /// Promoted monitors load their bound record directly.
     /// </summary>
     internal static string KioskUrl(int port, string deviceId, string token)
     {
         var t = Uri.EscapeDataString(token);
         return string.Equals(deviceId, Y70Slot, StringComparison.Ordinal)
-            ? $"http://localhost:{port}/panel?token={t}"
+            ? $"http://localhost:{port}/panel?surface=y70&token={t}"
             : $"http://localhost:{port}/panel/{Uri.EscapeDataString(deviceId)}?token={t}";
     }
 
@@ -327,7 +342,7 @@ public sealed class LinuxPanelKioskHost : IDisposable
         var flatpakApp = LinuxBrowsers.FlatpakAppId(browser);
         var args = isFirefox
             ? FirefoxKioskArgs(url, PrepareFirefoxProfile(FirefoxProfileDir(deviceId, flatpakApp)), isY70)
-            : ChromiumKioskArgs(url, deviceId, displayId);
+            : ChromiumKioskArgs(url, ProfileDir(deviceId, flatpakApp), displayId);
 
         var (file, wrapped) = LinuxSession.WrapSpawnAsSessionUser(browser, args);
         // No stream redirection: Chromium logs to stderr for its whole
@@ -368,7 +383,7 @@ public sealed class LinuxPanelKioskHost : IDisposable
         }
     }
 
-    private List<string> ChromiumKioskArgs(string url, string deviceId, string displayId)
+    private List<string> ChromiumKioskArgs(string url, string profileDir, string displayId)
     {
         var args = new List<string>();
         // Follows the session: wayland forced on an X11 login kills the kiosk on
@@ -391,7 +406,7 @@ public sealed class LinuxPanelKioskHost : IDisposable
         // document load aborts, so the kiosk sits on Chromium's blank grey. A
         // kiosk stores no credentials: opt out of the keyring entirely.
         args.Add("--password-store=basic");
-        args.Add($"--user-data-dir={ProfileDir(deviceId)}");
+        args.Add($"--user-data-dir={profileDir}");
         args.Add("--no-first-run");
         args.Add("--noerrdialogs");
         args.Add("--disable-session-crashed-bubble");
@@ -527,12 +542,19 @@ user_pref("browser.tabs.warnOnClose", false);
     // HOME is read per call: the root daemon adopts the session user's after
     // start, so a cached value would point at /root. Not pre-created - the
     // browser makes it as the session user, and a root-owned dir is unwritable.
-    internal static string ProfileDir(string deviceId) => Path.Combine(KioskHome(), "nexus-kiosk", deviceId);
+    internal static string ProfileDir(string deviceId, string? flatpakApp) => flatpakApp is null
+        ? Path.Combine(KioskHome(), "nexus-kiosk", deviceId)
+        : FlatpakProfileDir(deviceId, flatpakApp);
 
-    /// <summary>A flatpak Firefox has no home access (no --filesystem=home), only its own ~/.var/app/&lt;id&gt;.</summary>
     internal static string FirefoxProfileDir(string deviceId, string? flatpakApp) => flatpakApp is null
         ? Path.Combine(KioskHome(), "nexus-kiosk", "firefox", deviceId)
-        : Path.Combine(KioskHome(), ".var", "app", flatpakApp, "nexus-kiosk", deviceId);
+        : FlatpakProfileDir(deviceId, flatpakApp);
+
+    // Flathub's Brave, Chrome and Firefox get no --filesystem=home: a profile
+    // elsewhere in $HOME does not persist across launches, and with it goes the
+    // localStorage that holds the kiosk's record id. ~/.var/app/<id> always does.
+    private static string FlatpakProfileDir(string deviceId, string flatpakApp)
+        => Path.Combine(KioskHome(), ".var", "app", flatpakApp, "nexus-kiosk", deviceId);
 
     private static string KioskHome()
     {
@@ -547,6 +569,7 @@ user_pref("browser.tabs.warnOnClose", false);
 
     public void Dispose()
     {
+        LinuxSession.SessionAdopted -= Reconcile;
         lock (_lock)
         {
             if (_disposed)

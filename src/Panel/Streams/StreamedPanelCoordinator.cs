@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
 using Nexus.Service.Devices;
+using Nexus.Service.Lighting;
 using Nexus.Service.Models.Panel;
 using Nexus.Service.Platform;
 
@@ -53,6 +54,16 @@ public sealed class StreamedPanelCoordinator : BackgroundService
     private readonly Action<string>? _notifyPanelChanged;
     private readonly Func<long> _nowMs;
     private readonly SemaphoreSlim _wake = new(0, 1);
+    private readonly LcdLockState? _lockState;
+    // Lock fades in flight, per panel record id. A leaf lock: the brightness getter reads it
+    // from frame threads, so nothing else is ever taken while holding it.
+    private readonly object _fadeGate = new();
+    private readonly Dictionary<string, LcdFade> _fades = new(StringComparer.Ordinal);
+    internal LcdFadeRunner FadeRunner { get; }
+    private readonly LcdLockSleepSet? _lockSleep;
+
+    /// <summary>Backlight percent used only when a panel with no stored value never revealed its pre-lock level.</summary>
+    internal const int UnlockDefaultBrightness = 100;
 
     public StreamedPanelCoordinator(
         IEnumerable<IStreamedPanelDiscovery> discoveries,
@@ -61,7 +72,8 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         DeviceControlGate gate,
         Action? notifyOverlay = null,
         Func<long>? nowMs = null,
-        Action<string>? notifyPanelChanged = null)
+        Action<string>? notifyPanelChanged = null,
+        LcdLockState? lockState = null)
     {
         _discoveries = discoveries.ToList();
         _store = store;
@@ -70,6 +82,319 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         _notifyOverlay = notifyOverlay;
         _notifyPanelChanged = notifyPanelChanged;
         _nowMs = nowMs ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        FadeRunner = new LcdFadeRunner(StepFades, onFault: FaultAllFades);
+        if (lockState is not null)
+        {
+            _lockState = lockState;
+            _lockSleep = new LcdLockSleepSet(lockState);
+            lockState.Changed += OnLockChanged;
+        }
+    }
+
+    public override void Dispose()
+    {
+        _lockState?.Changed -= OnLockChanged;
+        base.Dispose();
+    }
+
+    /// <summary>
+    /// True while the session lock holds this panel dark. Decided once per lock from the
+    /// record's SleepWhenLocked (null = on), only for panels whose profile can dim.
+    /// </summary>
+    public bool IsLockSleeping(string panelDeviceId)
+    {
+        if (_lockSleep is null)
+        {
+            return false;
+        }
+        // The decision callback runs on frame threads holding a transport's brightness lock,
+        // so it must never take the coordinator lock: ApplyBrightness takes that lock first
+        // and the transport's second.
+        return _lockSleep.IsSleeping(panelDeviceId, () =>
+        {
+            var record = _registry.Get(panelDeviceId);
+            var on = record?.SleepWhenLocked != false && record?.Capabilities?.SupportsBrightness == true;
+            if (on)
+            {
+                ServiceLog.Info($"[lcd-lock] streamed panel {panelDeviceId} sleeping");
+            }
+            return on;
+        });
+    }
+
+    // Takes no coordinator lock; see IsLockSleeping.
+    private int? EffectiveBrightness(string panelDeviceId)
+    {
+        // A fade in flight answers with its stepped level; a finished one falls through to the
+        // settled answer, which is the same number.
+        lock (_fadeGate)
+        {
+            if (_fades.TryGetValue(panelDeviceId, out var fade))
+            {
+                var now = _nowMs();
+                if (!fade.IsDoneAt(now))
+                {
+                    return fade.LevelAt(now);
+                }
+            }
+        }
+        if (IsLockSleeping(panelDeviceId))
+        {
+            return 0;
+        }
+        var record = _registry.Get(panelDeviceId);
+        return record?.LcdBrightness ?? record?.LockRestoreBrightness;
+    }
+
+    private IBrightnessPanelTransport? DimmableTransport(string panelDeviceId)
+    {
+        lock (_lock)
+        {
+            foreach (var ds in _bySerial.Values)
+            {
+                if (!ds.Session.Closed && string.Equals(ds.Session.PanelDeviceId, panelDeviceId, StringComparison.Ordinal))
+                {
+                    return ds.Transport as IBrightnessPanelTransport;
+                }
+            }
+        }
+        return null;
+    }
+
+    private LcdFade? ActiveFade(string panelDeviceId)
+    {
+        lock (_fadeGate)
+        {
+            return _fades.TryGetValue(panelDeviceId, out var fade) && !fade.IsDoneAt(_nowMs()) ? fade : null;
+        }
+    }
+
+    private void RemoveFade(string panelDeviceId)
+    {
+        lock (_fadeGate) { _fades.Remove(panelDeviceId); }
+    }
+
+    private void BeginFade(string panelDeviceId, int from, int to, TimeSpan duration)
+    {
+        if (from == to)
+        {
+            RemoveFade(panelDeviceId);
+            return;
+        }
+        lock (_fadeGate) { _fades[panelDeviceId] = new LcdFade(from, to, duration, _nowMs()); }
+        FadeRunner.Kick();
+    }
+
+    /// <summary>True while the lock holds this panel dark and its fade down has finished: rendering stops only then.</summary>
+    public bool IsLockDark(string panelDeviceId) =>
+        IsLockSleeping(panelDeviceId) && ActiveFade(panelDeviceId) is not { Down: true };
+
+    /// <summary>One sample of every fade: applies each panel's stepped level, finishes the ones that landed.</summary>
+    internal bool StepFades()
+    {
+        var now = _nowMs();
+        List<(string Id, bool Up)> finished = new();
+        List<string> ids;
+        lock (_fadeGate)
+        {
+            ids = _fades.Keys.ToList();
+            foreach (var id in ids)
+            {
+                if (_fades[id].IsDoneAt(now))
+                {
+                    finished.Add((id, !_fades[id].Down));
+                    _fades.Remove(id);
+                }
+            }
+        }
+        foreach (var id in ids)
+        {
+            try
+            {
+                var applied = ApplyBrightness(id);
+                foreach (var (doneId, up) in finished)
+                {
+                    // Cleared only once the panel confirmed the level it was returning to.
+                    if (doneId == id && up && applied && !IsLockSleeping(id))
+                    {
+                        SetMarker(id, null);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // One panel's failure drops only its own ramp.
+                ServiceLog.Warn($"[lcd-lock] fade step failed for panel {id}: {ex.GetType().Name}: {ex.Message}");
+                FaultPanelFade(id);
+            }
+        }
+        if (finished.Any(f => !f.Up))
+        {
+            _notifyOverlay?.Invoke();
+        }
+        lock (_fadeGate) { return _fades.Count > 0; }
+    }
+
+    // The ramp is dropped and the panel gets its settled level (dark while the lock holds it, else the
+    // level it was returning to), so a failed step does not leave it lit mid-ramp.
+    private void FaultPanelFade(string panelDeviceId)
+    {
+        RemoveFade(panelDeviceId);
+        try
+        {
+            if (ApplyBrightness(panelDeviceId) && !IsLockSleeping(panelDeviceId))
+            {
+                SetMarker(panelDeviceId, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warn($"[lcd-lock] settling panel {panelDeviceId} after a failed fade: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void FaultAllFades()
+    {
+        List<string> ids;
+        lock (_fadeGate) { ids = _fades.Keys.ToList(); }
+        foreach (var id in ids)
+        {
+            FaultPanelFade(id);
+        }
+    }
+
+    // A panel with no stored backlight has no value to return to after the lock, so the
+    // level it had before is recorded on its record: restored on unlock, and still there
+    // if the service restarts while the glass is dark.
+    private readonly object _markerGate = new();
+
+    /// <summary>Test seam: runs between the lock path's dark apply and its marker write.</summary>
+    internal Action? TestHookBeforeMarkerWrite { get; set; }
+
+    // Read BEFORE the dark apply, from what the transport last put on the glass. Previous is
+    // only a fallback for a decision a frame thread already acted on, and a zero never
+    // becomes a restore level.
+    private int? CaptureRestoreLevel(string panelDeviceId)
+    {
+        var record = _registry.Get(panelDeviceId);
+        if (record is null || record.LcdBrightness is not null || record.LockRestoreBrightness is not null)
+        {
+            return null;
+        }
+        var transport = DimmableTransport(panelDeviceId);
+        if (transport?.CurrentBrightness is > 0 and var current)
+        {
+            return current;
+        }
+        if (transport?.PreviousBrightness is > 0 and var previous)
+        {
+            return previous;
+        }
+        return UnlockDefaultBrightness;
+    }
+
+    private void SetMarker(string panelDeviceId, int? level)
+    {
+        lock (_markerGate)
+        {
+            _registry.SetLockRestoreBrightness(panelDeviceId, level);
+        }
+    }
+
+    // The lock path writes only while the lock it started under is still the current one.
+    private void WriteMarkerForLock(string panelDeviceId, int? level, int epoch)
+    {
+        if (level is not > 0)
+        {
+            return;
+        }
+        TestHookBeforeMarkerWrite?.Invoke();
+        lock (_markerGate)
+        {
+            if (_lockState is { IsLocked: true } state && state.Epoch == epoch)
+            {
+                _registry.SetLockRestoreBrightness(panelDeviceId, level);
+            }
+        }
+    }
+
+    internal void OnLockChanged(bool locked)
+    {
+        List<string> panels;
+        lock (_lock)
+        {
+            panels = _bySerial.Values
+                .Where(ds => !ds.Session.Closed && ds.Info.Profile.SupportsBrightness)
+                .Select(ds => ds.Session.PanelDeviceId)
+                .ToList();
+        }
+        if (locked)
+        {
+            foreach (var id in panels)
+            {
+                if (IsLockSleeping(id))
+                {
+                    var epoch = _lockState?.Epoch ?? 0;
+                    var level = CaptureRestoreLevel(id);
+                    // The level to come back to is fixed here, before the first step: an up-fade
+                    // caught mid-way reverses from where it is, never from an intermediate level.
+                    var record = _registry.Get(id);
+                    var remembered = record?.LcdBrightness ?? record?.LockRestoreBrightness ?? level ?? UnlockDefaultBrightness;
+                    var from = ActiveFade(id) is { Down: false } rising ? rising.LevelAt(_nowMs()) : remembered;
+                    WriteMarkerForLock(id, level, epoch);
+                    if (_lockState is { IsLocked: true } current && current.Epoch == epoch)
+                    {
+                        BeginFade(id, from, 0, SleepBlackoutCoordinator.LockFadeDuration);
+                    }
+                    ApplyBrightness(id);
+                }
+            }
+        }
+        else
+        {
+            var woken = _lockSleep?.Drain() ?? new List<string>();
+            if (woken.Count > 0)
+            {
+                ServiceLog.Info($"[lcd-lock] unlocked; waking {woken.Count} streamed panel(s)");
+            }
+            foreach (var id in woken)
+            {
+                // A panel that attached mid-lock has no marker yet.
+                if (CaptureRestoreLevel(id) is int level)
+                {
+                    SetMarker(id, level);
+                }
+            }
+            // Only panels this lock slept come back; one it left alone is not touched.
+            foreach (var id in woken)
+            {
+                var record = _registry.Get(id);
+                var target = record?.LcdBrightness ?? record?.LockRestoreBrightness;
+                var current = DimmableTransport(id)?.CurrentBrightness;
+                // Up from 0, or from wherever a fade down was caught; a panel the lock never dimmed
+                // stays where it is.
+                var from = ActiveFade(id) is { Down: true } falling ? falling.LevelAt(_nowMs()) : current ?? 0;
+                if (target is int wanted && wanted > 0 && from != wanted)
+                {
+                    BeginFade(id, from, wanted, SleepBlackoutCoordinator.UnlockFadeDuration);
+                }
+                else
+                {
+                    RemoveFade(id);
+                }
+                // Cleared only after the panel confirmed the write; a failed one keeps the marker
+                // for the next apply or connect to retry. A fade up clears it when it lands.
+                if (ActiveFade(id) is null && ApplyBrightness(id) && !IsLockSleeping(id))
+                {
+                    SetMarker(id, null);
+                }
+                else if (ActiveFade(id) is not null)
+                {
+                    ApplyBrightness(id);
+                }
+            }
+        }
+        _notifyOverlay?.Invoke();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -226,7 +551,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
     }
 
     /// <summary>Applies a persisted panel backlight change without waiting for a frame.</summary>
-    public void ApplyBrightness(string panelDeviceId)
+    public bool ApplyBrightness(string panelDeviceId)
     {
         lock (_lock)
         {
@@ -234,10 +559,12 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             {
                 if (ds.Session.Closed || !string.Equals(ds.Session.PanelDeviceId, panelDeviceId, StringComparison.Ordinal))
                     continue;
-                (ds.Transport as IBrightnessPanelTransport)?.ApplyBrightness();
-                return;
+                if (ds.Transport is not IBrightnessPanelTransport dimmable)
+                    return false;
+                return dimmable.ApplyBrightness();
             }
         }
+        return false;
     }
 
     /// <summary>
@@ -308,6 +635,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             foreach (var ds in _bySerial.Values)
             {
                 if (ds.Session.Closed || ShowsSecondaryMonitor(ds)) continue;
+                if (IsLockDark(ds.Session.PanelDeviceId)) continue;
                 var p = ds.Info.Profile;
                 response.Assignments.Add(new StreamAssignmentDto
                 {
@@ -512,7 +840,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             // setting leaves the panel on whatever it powered up with.
             if (transport is IBrightnessPanelTransport dimmable)
             {
-                dimmable.BindBrightness(() => _registry.Get(panelId)?.LcdBrightness);
+                dimmable.BindBrightness(() => EffectiveBrightness(panelId));
             }
             if (transport is ISecondaryMonitorTransport monitorable)
             {
@@ -539,6 +867,31 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             }
             ds.Session.SetTransportUp(true);
             ds.Writer.SetTransport(transport);
+            // No frames flow to a panel held dark, so nothing else would carry the dark value to a
+            // glass that attached or reconnected mid-lock.
+            if (transport is IBrightnessPanelTransport lockDimmable)
+            {
+                var sleeping = IsLockSleeping(panelId);
+                if (sleeping)
+                {
+                    // Attached mid-lock: dark at once, no ramp.
+                    RemoveFade(panelId);
+                    var epoch = _lockState?.Epoch ?? 0;
+                    var level = CaptureRestoreLevel(panelId);
+                    lockDimmable.ApplyBrightness();
+                    WriteMarkerForLock(panelId, level, epoch);
+                }
+                else if (_registry.Get(panelId)?.LockRestoreBrightness is not null)
+                {
+                    // Left over from a lock that ended while this panel was away, or from a restart.
+                    // While a fade up is still running the getter answers with its current step, which
+                    // is not the level to keep: the fade clears the marker itself when it lands.
+                    if (lockDimmable.ApplyBrightness() && ActiveFade(panelId) is null)
+                    {
+                        SetMarker(panelId, null);
+                    }
+                }
+            }
             ServiceLog.Info($"[streamed-panel] transport open serial={ds.Info.Serial}");
         }
         catch (Exception ex)

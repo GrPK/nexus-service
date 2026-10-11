@@ -63,7 +63,14 @@ public sealed class PanelDeviceRegistry
                 if (existing is not null)
                 {
                     existing.LastSeenAt = now;
-                    existing.Capabilities = capabilities ?? existing.Capabilities;
+                    // A Y70 kiosk not yet on its panel sends the surface alone. Streamed
+                    // panels encode "unsupported" as null, so a merge would keep a swapped-out
+                    // model's flags: they replace.
+                    existing.Capabilities = capabilities is null
+                        ? existing.Capabilities
+                        : surface == PanelSurfaces.Y70
+                            ? MergeCapabilities(existing.Capabilities, capabilities)
+                            : capabilities;
                     result = Clone(existing);
                     return;
                 }
@@ -487,6 +494,18 @@ public sealed class PanelDeviceRegistry
         };
     }
 
+    /// <summary>Sets or clears the service-internal lock restore level without bumping LastSeenAt.</summary>
+    public void SetLockRestoreBrightness(string id, int? value)
+    {
+        if (string.IsNullOrWhiteSpace(id) || _store.Load().PanelDevices.GetValueOrDefault(id)?.LockRestoreBrightness == value)
+            return;
+        _store.Update(s =>
+        {
+            if (s.PanelDevices.TryGetValue(id, out var record))
+                record.LockRestoreBrightness = value;
+        });
+    }
+
     public PanelDeviceRecord? Touch(string id)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -607,12 +626,16 @@ public sealed class PanelDeviceRegistry
             // cannot dim never read it.
             if (patch.LcdBrightness.HasValue)
                 record.LcdBrightness = Math.Clamp(patch.LcdBrightness.Value, 0, 100);
+            if (patch.SleepWhenLocked.HasValue)
+                record.SleepWhenLocked = patch.SleepWhenLocked.Value;
             if (patch.SecondaryMonitor.HasValue)
                 record.SecondaryMonitor = patch.SecondaryMonitor.Value;
             if (patch.Portrait.HasValue)
                 record.Portrait = patch.Portrait.Value;
             if (patch.HighResolution.HasValue)
                 record.HighResolution = patch.HighResolution.Value;
+            if (patch.WidgetSize is PanelWidgetSizes.Large or PanelWidgetSizes.Small)
+                record.WidgetSize = patch.WidgetSize;
             // Capabilities on display-bound records are owned by the topology
             // sync (rebuilt from OS facts); a client value would ping-pong
             // with the next sync pass.
@@ -727,6 +750,8 @@ public sealed class PanelDeviceRegistry
             record.Flip180 = null;
             record.Mirror = null;
             record.LcdBrightness = null;
+            record.SleepWhenLocked = null;
+            record.LockRestoreBrightness = null;
             record.SecondaryMonitor = null;
             record.Portrait = null;
             record.HighResolution = null;
@@ -1010,9 +1035,12 @@ public sealed class PanelDeviceRegistry
             Flip180 = r.Flip180,
             Mirror = r.Mirror,
             LcdBrightness = r.LcdBrightness,
+            SleepWhenLocked = r.SleepWhenLocked,
+            LockRestoreBrightness = r.LockRestoreBrightness,
             SecondaryMonitor = r.SecondaryMonitor,
             Portrait = r.Portrait,
             HighResolution = r.HighResolution,
+            WidgetSize = r.WidgetSize,
             XeneonEdgeSettings = r.XeneonEdgeSettings is null
                 ? null
                 : new XeneonEdgeSettingsDto

@@ -32,6 +32,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
     private readonly IConfigStore _store;
     private readonly PanelDeviceRegistry _registry;
     private readonly SemaphoreSlim _wake = new(0, 1);
+    private readonly Func<string, bool>? _lockSleeping;
 
     private volatile bool _ownsGlass;
     private volatile string? _playing;
@@ -44,8 +45,10 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
     private long _wokenAt;
 
     public HydroShift2CurvePlayer(
-        BulkPanelHub hub, HydroShift2CurveLcdDriver driver, HydroShift2CurveMedia media, IConfigStore store, PanelDeviceRegistry registry)
+        BulkPanelHub hub, HydroShift2CurveLcdDriver driver, HydroShift2CurveMedia media, IConfigStore store, PanelDeviceRegistry registry,
+        Func<string, bool>? lockSleeping = null)
     {
+        _lockSleeping = lockSleeping;
         _hub = hub;
         _driver = driver;
         _media = media;
@@ -161,6 +164,11 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
         }
 
         var record = Record();
+        if (LockSleeping(record?.Id))
+        {
+            // The streamed panel holds the backlight at zero; a video would only run unseen.
+            return;
+        }
         if (settings.ScreenMode == HydroShift2CurveSettings.ScreenVideo && settings.Video is { } video && _media.Exists(video))
         {
             await PlayAsync(video, loop: true, saverBacklight: null, record,
@@ -188,7 +196,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             return false;
         }
         var settings = _store.Load().Devices.HydroShift2Curve;
-        if (!settingsAllow(settings))
+        if (!settingsAllow(settings) || LockSleeping(recordId))
         {
             return false;
         }
@@ -199,6 +207,8 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
         }
         return recordId is null || MountOf(_registry.Get(recordId)) == mount;
     }
+
+    private bool LockSleeping(string? recordId) => recordId is not null && _lockSleeping?.Invoke(recordId) == true;
 
     private void ScheduleSaver(int minutes, bool force)
     {

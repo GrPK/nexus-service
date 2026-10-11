@@ -19,12 +19,12 @@ public sealed class CorsairLinkPanelDiscovery : IStreamedPanelDiscovery
     /// <summary>Persisted per-serial override key; changing it resets user overrides.</summary>
     internal const string ProfileKind = CorsairLinkLcd.DeviceId;
 
-    private readonly CorsairLinkHub _hub;
+    private readonly CorsairLinkHubs _hubs;
     private readonly CorsairLinkLcd _lcd;
 
-    public CorsairLinkPanelDiscovery(CorsairLinkHub hub, CorsairLinkLcd lcd)
+    public CorsairLinkPanelDiscovery(CorsairLinkHubs hubs, CorsairLinkLcd lcd)
     {
-        _hub = hub;
+        _hubs = hubs;
         _lcd = lcd;
     }
 
@@ -36,7 +36,7 @@ public sealed class CorsairLinkPanelDiscovery : IStreamedPanelDiscovery
 
     public IReadOnlyList<StreamedPanelDeviceInfo> Discover()
     {
-        if (!_hub.State.IsConnected || !_hub.State.HasLcd || !_lcd.HasDevice)
+        if (_hubs.LcdHub is null || !_lcd.HasDevice)
         {
             return Array.Empty<StreamedPanelDeviceInfo>();
         }
@@ -48,7 +48,7 @@ public sealed class CorsairLinkPanelDiscovery : IStreamedPanelDiscovery
                 Profile = new StreamedPanelProfile
                 {
                     Kind = ProfileKind,
-                    DisplayName = "iCUE LINK LCD",
+                    DisplayName = _hubs.LcdProductName,
                     Surface = PanelSurfaces.LcdRound,
                     // Shares 'lcd-round' with the XC7, so the sidebar brands from this
                     // rather than the surface name.

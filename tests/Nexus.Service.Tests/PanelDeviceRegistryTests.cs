@@ -70,6 +70,22 @@ public sealed class PanelDeviceRegistryTests : IDisposable
         Assert.Equal("#78350f", reused.BackgroundColor);
     }
 
+    // A Y70 kiosk still on the desktop monitor registers with its surface alone.
+    [Fact]
+    public void Allocate_Reuse_KeepsViewportFactsTheCallerOmits()
+    {
+        var first = _registry.Allocate(null, new PanelDeviceCapabilities
+        {
+            Surface = PanelSurfaces.Y70, CssWidth = 1100, CssHeight = 3840, Dpr = 1,
+        });
+
+        var reused = _registry.Allocate(null, Caps(PanelSurfaces.Y70));
+
+        Assert.Equal(first.Id, reused.Id);
+        Assert.Equal(1100, reused.Capabilities?.CssWidth);
+        Assert.Equal(3840, reused.Capabilities?.CssHeight);
+    }
+
     [Fact]
     public void Allocate_SingleInstance_DoesNotHijackDisplayBoundRecord()
     {
@@ -522,6 +538,20 @@ public sealed class PanelDeviceRegistryTests : IDisposable
         Assert.True(_registry.Patch(record.Id, new PanelDevicePatch { DisplayName = "Renamed" })!.HighResolution);
 
         Assert.Null(_registry.ResetHardwareSettings(record.Id)!.HighResolution);
+    }
+
+    [Fact]
+    public void WidgetSize_takes_only_known_values_and_survives_a_hardware_reset()
+    {
+        var record = _registry.Allocate("Q-series", Caps(PanelSurfaces.Q60));
+
+        Assert.Equal("small", _registry.Patch(record.Id, new PanelDevicePatch { WidgetSize = "small" })!.WidgetSize);
+        Assert.Equal("small", _registry.Patch(record.Id, new PanelDevicePatch { WidgetSize = "huge" })!.WidgetSize);
+        Assert.Equal("small", _registry.Patch(record.Id, new PanelDevicePatch { DisplayName = "Renamed" })!.WidgetSize);
+        Assert.Equal("large", _registry.Patch(record.Id, new PanelDevicePatch { WidgetSize = "large" })!.WidgetSize);
+
+        // A layout choice: the hardware reset leaves the layout, so it leaves the size too.
+        Assert.Equal("large", _registry.ResetHardwareSettings(record.Id)!.WidgetSize);
     }
 
     [Fact]

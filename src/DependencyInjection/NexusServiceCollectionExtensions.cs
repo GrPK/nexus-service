@@ -240,7 +240,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #elif MACOS
         services.AddSingleton<MacFanControlProvider>();
@@ -271,7 +273,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #elif LINUX
         // hwmon (motherboard + AMD GPU via amdgpu) + liquidctl USB coolers
@@ -310,7 +314,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #else
         services.AddSingleton<IFanControlProvider>(sp => new CompositeFanControlProvider(
@@ -340,7 +346,9 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
-                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>())));
+                Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.TryxCoolingProvider.IsTryxId, sp.GetRequiredService<Nexus.Service.Cooling.TryxCoolingProvider>())));
         services.AddSingleton<ICoolingProvider>(sp => (ICoolingProvider)sp.GetRequiredService<IFanControlProvider>());
 #endif
         services.AddSingleton<Np50CoolingProvider>();
@@ -626,6 +634,12 @@ public static class NexusServiceCollectionExtensions
             sp.GetService<Nexus.Service.Lighting.Rgb.RgbBridge>(),
             sp.GetRequiredService<Nexus.Service.Lifecycle.FeatureGates>()));
 
+        // Idle dim: the ramp is the one MasterBrightness reads on every frame;
+        // the platform bootstrap binds the controller's watch.
+        services.AddSingleton(Nexus.Service.Lighting.MasterBrightness.IdleRamp);
+        services.AddSingleton<Nexus.Service.Lighting.IdleDim.IdleDimController>();
+        services.AddHostedService<Nexus.Service.Lighting.IdleDim.IdleDimHost>();
+
         if (OperatingSystem.IsWindows())
             services.AddHostedService<Nexus.Service.Lighting.Rgb.PowerEventListener>();
 
@@ -636,9 +650,36 @@ public static class NexusServiceCollectionExtensions
             // Singleton so the Stream Deck worker can subscribe to LockChanged.
             services.AddSingleton<Nexus.Service.Lighting.SessionLockListener>();
             services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Lighting.SessionLockListener>());
+            services.AddHostedService<Nexus.Service.Lighting.LcdLockBridge>();
         }
 
+        // The lock as cooler / AIO LCD drivers see it; inert where no listener exists.
+        services.AddSingleton<Nexus.Service.Lighting.LcdLockState>();
+
         return services;
+    }
+
+    private static Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub BindTryxLock(IServiceProvider sp, Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub hub)
+    {
+        if (sp.GetService<Nexus.Service.Lighting.LcdLockState>() is { } lockState)
+        {
+            hub.BindLockSleep(lockState);
+        }
+        return hub;
+    }
+
+    private static Nexus.Service.Peripherals.Nzxt.KrakenHub BindKrakenLock(IServiceProvider sp, Nexus.Service.Peripherals.Nzxt.KrakenHub hub)
+    {
+        var store = sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>();
+        if (sp.GetService<Nexus.Service.Lighting.LcdLockState>() is { } lockState)
+        {
+            hub.BindLockSleep(
+                lockState,
+                () => store.Load().Devices.KrakenLcdSleepWhenLocked,
+                () => store.Load().Devices.KrakenLcdLockRestore,
+                level => store.Update(st => st.Devices.KrakenLcdLockRestore = level));
+        }
+        return hub;
     }
 
     public static IServiceCollection AddNexusWebcam(this IServiceCollection services)
@@ -891,10 +932,16 @@ public static class NexusServiceCollectionExtensions
                 recentAppsActivator: sp.GetRequiredService<Nexus.Service.Deck.RecentAppsActivator>(),
                 dialValues: sp.GetRequiredService<Nexus.Service.Deck.IDeckDialValues>());
 #if WINDOWS
-            // App icons come from the user-session helper; keys painted before
-            // it connects carry the generic fallback until this repaint.
+            // App icons come from the user-session helper; keys painted and
+            // Deck widget icons fetched before it connects carry the generic
+            // fallback until this repaint and the "icons" refetch.
             var helperRegistry = sp.GetService<Nexus.Service.Helper.HelperRegistry>();
-            helperRegistry?.Connected += _ => worker.OnHelperConnected();
+            var deckHub = sp.GetRequiredService<Nexus.Service.Sockets.MultiplexHub>();
+            helperRegistry?.Connected += _ =>
+            {
+                worker.OnHelperConnected();
+                Nexus.Service.Sockets.PanelTopics.BroadcastDeck(deckHub, new Nexus.Service.Models.Deck.DeckChangedFrame { Kind = "icons" });
+            };
 #endif
             return worker;
         });
@@ -987,10 +1034,11 @@ public static class NexusServiceCollectionExtensions
             new Nexus.Service.Peripherals.LianLiWireless.Slv3Hub(
                 sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.ISlv3Discovery>(),
 #if LINUX
-                port => new Nexus.Service.Peripherals.LianLiWireless.LinuxSlv3Transport(port.PortName, port.Role)));
+                port => new Nexus.Service.Peripherals.LianLiWireless.LinuxSlv3Transport(port.PortName, port.Role),
 #else
-                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3Transport(port.PortName, port.Role)));
+                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3Transport(port.PortName, port.Role),
 #endif
+                lockState: sp.GetService<Nexus.Service.Lighting.LcdLockState>()));
         services.AddSingleton<Nexus.Service.Cooling.Slv3CoolingProvider>(sp =>
         {
             var hub = sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.Slv3Hub>();
@@ -1012,10 +1060,14 @@ public static class NexusServiceCollectionExtensions
                 {
                     screens[mac] = Nexus.Service.Peripherals.LianLiWireless.Slv3Protocol.AioScreenFrom(
                         s.Brightness, s.Theme, s.LabelColor, s.ValueColor, s.UnitColor,
-                        s.ShowCpuTemp, s.ShowCpuLoad, s.ShowGpuTemp, s.ShowGpuLoad, s.ShowFanSpeed, s.LoopInterval);
+                        s.ShowCpuTemp, s.ShowCpuLoad, s.ShowGpuTemp, s.ShowGpuLoad, s.ShowFanSpeed, s.LoopInterval,
+                        s.SleepWhenLocked, s.NexusWidgets);
                 }
                 return screens;
             };
+            hub.OwnedDevicesLoad = () => store.Load().Devices.LianLiWireless.OwnedDevices;
+            hub.OwnedDevicesSave = owned => store.Update(settings =>
+                settings.Devices.LianLiWireless.OwnedDevices = new Dictionary<string, int>(owned, StringComparer.Ordinal));
             // Resolved on first use: the USB AIO service itself depends on this hub.
             var usbAio = new Lazy<Nexus.Service.Peripherals.BulkPanels.HydroShift2Aio?>(
                 () => sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2Aio>());
@@ -1037,7 +1089,8 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdHub>(sp =>
             new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdHub(
                 sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.ISlv3LcdDiscovery>(),
-                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdTransport(port.PortName)));
+                port => new Nexus.Service.Peripherals.LianLiWireless.Slv3LcdTransport(port.PortName),
+                sp.GetService<Nexus.Service.Lighting.LcdLockState>()));
         services.AddHostedService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdConnectionWorker>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdMediaLibrary>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdSensorReader>();
@@ -1076,11 +1129,11 @@ public static class NexusServiceCollectionExtensions
 #if WINDOWS
         services.AddSingleton<Nexus.Service.Peripherals.Nzxt.IKrakenLcdTransportFactory,
                               Nexus.Service.Peripherals.Nzxt.WindowsKrakenLcdTransportFactory>();
-        services.AddSingleton(sp => new Nexus.Service.Peripherals.Nzxt.KrakenHub(
-            sp.GetRequiredService<Nexus.Service.Peripherals.Nzxt.IKrakenLcdTransportFactory>()));
+        services.AddSingleton(sp => BindKrakenLock(sp, new Nexus.Service.Peripherals.Nzxt.KrakenHub(
+            sp.GetRequiredService<Nexus.Service.Peripherals.Nzxt.IKrakenLcdTransportFactory>())));
 #else
         // No bulk pipe off Windows: HID control still works, LCD upload reports unavailable.
-        services.AddSingleton(_ => new Nexus.Service.Peripherals.Nzxt.KrakenHub(null));
+        services.AddSingleton(sp => BindKrakenLock(sp, new Nexus.Service.Peripherals.Nzxt.KrakenHub(null)));
 #endif
         services.AddSingleton<Nexus.Service.Cooling.KrakenCoolingProvider>();
         services.AddSingleton<Nexus.Service.Lighting.KrakenLightingDeviceProvider>();
@@ -1205,7 +1258,7 @@ public static class NexusServiceCollectionExtensions
 
         // Corsair iCUE LINK System Hub: HID connection worker + lighting + cooling.
         // Auto-detects the daisy chain; no composition (each device is one fixed zone).
-        services.AddSingleton<Nexus.Service.Peripherals.CorsairLink.CorsairLinkHub>();
+        services.AddSingleton<Nexus.Service.Peripherals.CorsairLink.CorsairLinkHubs>();
         services.AddSingleton<Nexus.Service.Cooling.CorsairLinkCoolingProvider>();
         services.AddSingleton<Nexus.Service.Lighting.CorsairLinkLightingDeviceProvider>();
         services.AddSingleton<Nexus.Service.Lighting.ILightingFrameContributor>(
@@ -1222,12 +1275,13 @@ public static class NexusServiceCollectionExtensions
         // switch the hub's fans and RGB do not carry with them.
         services.AddSingleton<IDeviceHandler>(sp =>
             new Nexus.Service.Devices.Handlers.CorsairLinkLcdHandler(
-                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkLcd>()));
+                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkLcd>(),
+                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkHubs>()));
         // The cooler's LCD is a panel like the Kraken's: widgets stream to it, and the
         // still/GIF worker above takes it back whenever no panel session holds it.
         services.AddSingleton<Nexus.Service.Panel.Streams.IStreamedPanelDiscovery>(sp =>
             new Nexus.Service.Panel.Streams.CorsairLinkPanelDiscovery(
-                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkHub>(),
+                sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkHubs>(),
                 sp.GetRequiredService<Nexus.Service.Peripherals.CorsairLink.CorsairLinkLcd>()));
 
         // Lian Li Strimer Plus: HID connection worker + lighting.
@@ -1507,7 +1561,7 @@ public static class NexusServiceCollectionExtensions
                               Nexus.Service.Peripherals.Tryx.Panorama.StubTryxPanoramaPortDiscovery>();
 #endif
         services.AddSingleton<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub>(sp =>
-            new Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub(
+            BindTryxLock(sp, new Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHub(
                 sp.GetRequiredService<Nexus.Service.Peripherals.Tryx.Panorama.ITryxPanoramaPanelDiscovery>(),
 #if WINDOWS
                 port => new Nexus.Service.Peripherals.Tryx.Panorama.WindowsTryxRkTransport(port.PortName, port.Serial),
@@ -1516,7 +1570,8 @@ public static class NexusServiceCollectionExtensions
 #endif
                 sp.GetRequiredService<Nexus.Service.Sensors.ISensorProvider>(),
                 sp.GetRequiredService<Nexus.Service.Fps.IFpsProvider>(),
-                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>()));
+                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>())));
+        services.AddSingleton<Nexus.Service.Cooling.TryxCoolingProvider>();
         services.AddSingleton<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHeartbeatWorker>();
         services.AddHostedService(sp =>
             sp.GetRequiredService<Nexus.Service.Peripherals.Tryx.Panorama.TryxPanoramaHeartbeatWorker>());
@@ -1650,7 +1705,9 @@ public static class NexusServiceCollectionExtensions
                 hub, driver,
                 sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveMedia>(),
                 sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
-                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>());
+                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>(),
+                lockSleeping: id => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.IsLockDark(id) == true);
+            sp.GetService<Nexus.Service.Lighting.LcdLockState>()?.Changed += _ => player.Wake();
             player.GlassOwnerChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
             return player;
         });
@@ -2246,7 +2303,8 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>(),
                 sp.GetRequiredService<Nexus.Service.Devices.DeviceControlGate>(),
                 notifyOverlay,
-                notifyPanelChanged: id => Nexus.Service.Sockets.PanelTopics.BroadcastPanelDevice(sockets, id));
+                notifyPanelChanged: id => Nexus.Service.Sockets.PanelTopics.BroadcastPanelDevice(sockets, id),
+                lockState: sp.GetService<Nexus.Service.Lighting.LcdLockState>());
         });
         services.AddHostedService(sp =>
             sp.GetRequiredService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>());
@@ -2282,6 +2340,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Platform.Linux.DBus.DBusConnection>();
         services.AddHostedService<Nexus.Service.Platform.Linux.LinuxTrayService>();
         services.AddHostedService<Nexus.Service.Platform.Linux.LinuxResumeListener>();
+        services.AddHostedService<Nexus.Service.Platform.Linux.LinuxIdleDimWatch>();
 #endif
         return services;
     }
