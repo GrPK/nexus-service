@@ -204,26 +204,41 @@ public sealed class TryxPanoramaHub : IDisposable
         var now = FadeClock();
         var level = fade.LevelAt(now);
         TestHookBeforeStepSend?.Invoke();
-        // The frames carry the user's own enabled choice, so a screen switched off during the ramp
-        // is never relit by it.
-        var screenOn = State.ScreenEnabled;
         if (!fade.IsDoneAt(now))
         {
-            if (level != lastSent && IsConnected && SendOnly(TryxRkProtocol.BuildConfig(screenOn, level)))
+            if (level != lastSent && IsConnected)
             {
-                lock (_fadeGate)
+                bool sent;
+                // Under the send gate, with the ramp and the screen choice read again inside it: a
+                // step that was decided before an explicit change must not land after that change.
+                lock (_txGate)
                 {
-                    if (ReferenceEquals(_fade, fade)) { _fadeLastSent = level; }
+                    sent = IsCurrentFade(fade) && SendOnly(TryxRkProtocol.BuildConfig(State.ScreenEnabled, level));
                 }
-                ResendSettledIfCancelled(fade);
+                if (sent)
+                {
+                    lock (_fadeGate)
+                    {
+                        if (ReferenceEquals(_fade, fade)) { _fadeLastSent = level; }
+                    }
+                    ResendSettledIfCancelled(fade);
+                }
             }
             return true;
         }
         // The end of the ramp: off for a fade down, the user's brightness for a fade up. Reliable,
-        // because this is the state the panel keeps.
-        var sent = IsConnected && SendReliable(fade.Down
-            ? TryxRkProtocol.BuildConfig(false, State.Brightness)
-            : TryxRkProtocol.BuildConfig(screenOn, State.Brightness));
+        // because this is the state the panel keeps. The frames carry the user's own enabled choice,
+        // so a screen switched off during the ramp is never relit by it.
+        bool endSent;
+        bool screenOn;
+        lock (_txGate)
+        {
+            screenOn = State.ScreenEnabled;
+            endSent = IsConnected && IsCurrentFade(fade) && SendReliable(fade.Down
+                ? TryxRkProtocol.BuildConfig(false, State.Brightness)
+                : TryxRkProtocol.BuildConfig(screenOn, State.Brightness));
+        }
+        var sentFinal = endSent;
         bool resend;
         bool more;
         lock (_fadeGate)
@@ -239,7 +254,7 @@ public sealed class TryxPanoramaHub : IDisposable
             else
             {
                 _fade = null;
-                if (sent)
+                if (sentFinal)
                 {
                     _offOnWire = fade.Down || !screenOn;
                 }
@@ -289,11 +304,31 @@ public sealed class TryxPanoramaHub : IDisposable
         ResendSettled();
     }
 
+    private bool IsCurrentFade(LcdFade fade)
+    {
+        lock (_fadeGate) { return ReferenceEquals(_fade, fade); }
+    }
+
+    /// <summary>Test seam: runs in a resend after the frame is built, inside the send gate.</summary>
+    internal Action? TestHookInResend { get; set; }
+
+    // Built and sent under the send gate, so an explicit screen change cannot slip between reading
+    // the state and the write and then be overwritten by it.
     private void ResendSettled()
     {
-        if (IsConnected)
+        lock (_txGate)
         {
-            SendOnly(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), State.Brightness));
+            if (!IsConnected)
+            {
+                return;
+            }
+            var screenOn = Wire(State.ScreenEnabled);
+            var frame = TryxRkProtocol.BuildConfig(screenOn, State.Brightness);
+            TestHookInResend?.Invoke();
+            if (SendOnly(frame))
+            {
+                _offOnWire = !screenOn;
+            }
         }
     }
 
@@ -862,16 +897,21 @@ public sealed class TryxPanoramaHub : IDisposable
         // Screen on/off rides the same f200.f5 config as brightness (f5.f1 = enable);
         // carry the current brightness so turning the screen back on restores it.
         // An explicit choice ends any lock ramp: its next step must not undo it.
-        CancelFade();
-        var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(enable), State.Brightness));
-        if (ok)
+        // The send and the state update stay under the send gate, so a ramp step or a resend cannot
+        // land between them and undo the choice.
+        lock (_txGate)
         {
-            _offOnWire = !Wire(enable);
-            State.ScreenEnabled = enable;
-            // The clip that comes back with the screen gets a full hold.
-            if (enable) _slideshow.Rearm(State.CurrentMedia, NowMs());
+            CancelFade();
+            var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(enable), State.Brightness));
+            if (ok)
+            {
+                _offOnWire = !Wire(enable);
+                State.ScreenEnabled = enable;
+                // The clip that comes back with the screen gets a full hold.
+                if (enable) _slideshow.Rearm(State.CurrentMedia, NowMs());
+            }
+            return ok;
         }
-        return ok;
     }
 
     public bool SetBrightness(int brightness)

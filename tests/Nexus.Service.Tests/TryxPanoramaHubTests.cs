@@ -2215,4 +2215,50 @@ public class TryxPanoramaHubTests
         Assert.False(hub.FadeActive);
         Assert.Equal(-1, ConfigFrames(recording)[^1]);
     }
+
+    [Fact]
+    public async System.Threading.Tasks.Task A_screen_switched_off_while_a_resend_is_built_is_not_relit_by_it()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Step(hub, time, 5000);
+        state.Set(false);
+        Run(hub, time, 450);
+        System.Threading.Tasks.Task<bool>? off = null;
+        hub.TestHookInResend = () =>
+        {
+            hub.TestHookInResend = null;
+            // The user turns the screen off after the resend frame was built from the lit state. With
+            // the send gate it waits behind the resend and its OFF is the last word; without, it
+            // completes here and the stale ON then lands on top of it.
+            off = System.Threading.Tasks.Task.Run(() => hub.SetEnabled(false));
+            off.Wait(500);
+        };
+        recording.Writes.Clear();
+
+        hub.FaultFade();
+        Assert.True(await off!.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.False(hub.State.ScreenEnabled);
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+    }
+
+    [Fact]
+    public void A_faulted_fade_down_still_fades_the_unlock_in_instead_of_popping_on()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 750);
+        hub.FaultFade();
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+        recording.Writes.Clear();
+
+        state.Set(false);
+        Run(hub, time, 1100);
+
+        var frames = ConfigFrames(recording);
+        Assert.Equal(0, frames[0]);
+        Assert.True(frames.Count >= 4, "a ramp, not a single frame: " + string.Join(",", frames));
+        Assert.Equal(70, frames[^1]);
+    }
 }
