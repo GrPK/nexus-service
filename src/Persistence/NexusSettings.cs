@@ -589,6 +589,9 @@ public sealed class LightingSettings
     /// preference rather than a look, so unlike the slider it is not captured
     /// into presets.</summary>
     public BrightnessSchedule BrightnessSchedule { get; set; } = new();
+    /// <summary>Dims to <see cref="IdleDimSettings.Level"/> percent while the PC is idle, see
+    /// <see cref="Nexus.Service.Lighting.IdleDim.IdleDimController"/>. Not captured into presets.</summary>
+    public IdleDimSettings IdleDim { get; set; } = new();
     public Dictionary<string, int> SpeedScale { get; set; } = new();
     public bool SpeedEnabled { get; set; } = InstallDefaults.Lighting.SpeedEnabled;
     public int FrameRate { get; set; } = InstallDefaults.Lighting.FrameRate;
@@ -690,6 +693,16 @@ public sealed class BrightnessSchedule
 {
     public bool Enabled { get; set; }
     public List<BrightnessSchedulePoint> Points { get; set; } = Nexus.Service.Lighting.MasterBrightness.DefaultSchedule();
+}
+
+public sealed class IdleDimSettings
+{
+    public bool Enabled { get; set; }
+    /// <summary>0 follows the OS screen-off; otherwise seconds of input idle, within the controller's timeout range.</summary>
+    public int TimeoutSeconds { get; set; }
+    /// <summary>Master brightness cap while idle, percent 0..100.</summary>
+    public int Level { get; set; } = DefaultLevel;
+    public const int DefaultLevel = 10;
 }
 
 public sealed class BrightnessSchedulePoint
@@ -1603,6 +1616,9 @@ public sealed class LianLiWirelessSettings
 
     /// <summary>HydroShift II screen settings, keyed by the AIO's MAC hex (uppercase).</summary>
     public Dictionary<string, LianLiAioScreenSettings> AioScreens { get; set; } = new();
+
+    /// <summary>Devices Nexus bound to its dongle, by MAC hex (uppercase), with the slot each last held; an unbound one is bound back.</summary>
+    public Dictionary<string, int> OwnedDevices { get; set; } = new();
 }
 
 /// <summary>What a HydroShift II's screen shows while Nexus drives its pump.</summary>

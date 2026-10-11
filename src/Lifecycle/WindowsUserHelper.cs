@@ -184,9 +184,13 @@ internal static class WindowsUserHelper
         // Idle until the service arms it, which it does only while a lock
         // blackout is engaged.
         using var lockInput = new Helper.LockInputPoller(outbound);
+        // Idle until the service arms it, which it does only while idle dim is on with a fixed timeout.
+        using var idleDimPoller = new Helper.IdleDimPoller(outbound);
         // Idle until the service arms it, which it does only while a keyboard has key reactions on.
         using var keyPresses = new Helper.KeyPressWatcher(outbound);
         var brightness = new Platform.Displays.WindowsDisplayBrightnessProvider();
+        Platform.Windows.TrayIcon.SessionLockChanged += Platform.Displays.DdcGate.OnSessionLockChanged;
+        Platform.Displays.DdcGate.Start(() => Platform.Windows.TrayIcon.SessionLockWatchActive);
 
         // Each domain registers its own envelope handler against this
         // registry. Adding a new domain = create the handler class in
@@ -211,6 +215,21 @@ internal static class WindowsUserHelper
         // user actually pastes from (the service's Session-0 one is invisible).
         new ClipboardHandler(new Platform.Clipboard.WindowsClipboardProvider().SetText).Register(handlerRegistry);
         new LockLightingHandler(lockInput.SetArmed).Register(handlerRegistry);
+        // Idle dim: the input poll arms with the threshold; the display power-state
+        // notification rides the tray window, which already pumps messages.
+        new IdleDimHandler((threshold, display) =>
+        {
+            idleDimPoller.SetThreshold(threshold);
+            Platform.Windows.TrayIcon.SetDisplayStateWatch(display);
+        }).Register(handlerRegistry);
+        Platform.Windows.TrayIcon.DisplayStateChanged += off => _ = outbound.SendAsync(
+            IdleDimCommands.DisplayStateType,
+            new DisplayStatePayload { Off = off },
+            Nexus.Service.Serialization.AppJsonContext.Default.DisplayStatePayload);
+        Platform.Windows.TrayIcon.ScreenOffTimeoutMayHaveChanged += () => _ = outbound.SendAsync(
+            IdleDimCommands.ScreenOffTimeoutChangedType,
+            new ScreenOffTimeoutChangedPayload(),
+            Nexus.Service.Serialization.AppJsonContext.Default.ScreenOffTimeoutChangedPayload);
         new KeyReactiveHandler(keyPresses.SetArmed).Register(handlerRegistry);
         new LifecycleHandler(
             onShutdown: () =>
