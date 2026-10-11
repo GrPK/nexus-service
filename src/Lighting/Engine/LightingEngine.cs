@@ -1634,7 +1634,7 @@ public sealed class LightingEngine : IDisposable
         buf[pos++] = (byte)Math.Min(devices.Length, 255);
         foreach (var dev in devices)
         {
-            buf[pos++] = (byte)dev.Index;
+            buf[pos++] = DeviceFrameIndex.WireByte(dev);
             var lc = (ushort)dev.LedCount;
             buf[pos++] = (byte)(lc & 0xFF);
             buf[pos++] = (byte)(lc >> 8);

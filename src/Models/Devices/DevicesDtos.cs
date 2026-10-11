@@ -217,6 +217,8 @@ public class CheckFirmwareFunctionResponse : ApiResponse
 public class LightingDevice
 {
     public string Id { get; set; } = "";
+    /// <summary>The device byte the /lighting/output frame tags this device's LEDs with. Null when the engine has no frame for the device. Reassigned when the engine device set is rebuilt, so refetch on the lighting topic.</summary>
+    public int? FrameIndex { get; set; }
     /// <summary>What the UI shows: the user's custom name when the card has been renamed, the hardware name otherwise.</summary>
     public string Name { get; set; } = "";
     /// <summary>The hardware name <see cref="Name"/> replaced, set only on a renamed card. Null means <see cref="Name"/> IS the hardware name.</summary>

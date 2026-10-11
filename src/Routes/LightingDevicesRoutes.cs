@@ -323,6 +323,7 @@ public static partial class DevicesRoutes
             var all = ld.GetAll();
             var lighting = store.Load().Lighting;
             Nexus.Service.Lighting.LightingDeviceNames.Apply(all.Devices, lighting.DeviceNames);
+            Nexus.Service.Lighting.Engine.DeviceFrameIndex.Apply(all.Devices, engine.Devices);
             foreach (var device in all.Devices)
             {
                 device.LedColors = null;
