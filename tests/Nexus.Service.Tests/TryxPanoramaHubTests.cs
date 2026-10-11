@@ -1833,6 +1833,9 @@ public class TryxPanoramaHubTests
     {
         var (hub, recording, state, _, time) = LockRig();
         state.Set(true);
+        Step(hub, time, 5000);
+        // The unlock ramp is due to land; the heartbeat only asks the fade gate while the screen is lit.
+        state.Set(false);
         time.Now += 5000;
         // A reconnect cancels the ramp while its last frame is being decided.
         hub.TestHookBeforeStepSend = () =>
