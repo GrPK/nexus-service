@@ -14,4 +14,11 @@ public sealed class TryxPanoramaState
     public bool CurrentMediaIsCustom { get; set; }
     public long LastConnectedMs { get; set; }
     public long LastFrameMs { get; set; }
+    /// <summary>Small fan on the pump head, rpm, from the panel's last cooler_status reply; null until one arrives this connection.</summary>
+    public int? CoolerFanRpm { get; set; }
+    /// <summary>Pump, rpm, from the same reply; read-only, the pump is not software-controllable.</summary>
+    public int? CoolerPumpRpm { get; set; }
+    /// <summary>Fixed power (percent) the small fan runs at as far as Nexus knows: what it last wrote, else
+    /// the panel's own FixMode power read at connect; null when unknown.</summary>
+    public int? CoolerFanPower { get; set; }
 }

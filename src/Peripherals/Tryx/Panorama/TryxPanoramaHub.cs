@@ -469,6 +469,7 @@ public sealed class TryxPanoramaHub : IDisposable
             // reply, the heartbeat sends get_file_list so the media list + used-bytes populate
             // (a warm reconnect doesn't re-trigger the unprompted cold-boot list push).
             _fileListRequested = false;
+            ResetCoolerSession();
             transport.Write(TryxRkProtocol.BuildGetDeviceInfo());
             // Re-assert the last preset wallpaper so a reconnect (service restart, or the
             // panel's own re-enumeration) restores the picture instead of leaving the panel
@@ -533,6 +534,7 @@ public sealed class TryxPanoramaHub : IDisposable
                     SendOnly(TryxRkProtocol.BuildGetFileList(sn));
                 }
             }
+            if (!_importInProgress) TickCooler();
             State.LastFrameMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
         finally
@@ -922,14 +924,14 @@ public sealed class TryxPanoramaHub : IDisposable
     }
 
     // One request/reply exchange under the send gate; null when the panel does not answer.
-    private T? Request<T>(byte[] frame, int replyField, Func<byte[], T?> parse) where T : struct
+    private T? Request<T>(byte[] frame, int replyField, Func<byte[], T?> parse, int timeoutMs = DecryptReplyTimeoutMs) where T : struct
     {
         var transport = _transport;
         if (transport is not { IsOpen: true }) return null;
         byte[]? reply;
         lock (_txGate)
         {
-            try { reply = transport.Request(frame, replyField, DecryptReplyTimeoutMs); }
+            try { reply = transport.Request(frame, replyField, timeoutMs); }
             catch (Exception ex)
             {
                 ServiceLog.Warn($"[tryx] request {replyField} failed: {ex.GetType().Name}: {ex.Message}");
@@ -1380,6 +1382,142 @@ public sealed class TryxPanoramaHub : IDisposable
             }
         }
         return null;
+    }
+
+    // ── Cooler: the small fan on the pump head ──
+    // Writes ride the heartbeat and go out only when the target changes, as Kanali's Smart Mode
+    // does, so a curve engine driving every second costs one frame per change. The panel's own fan
+    // config is read before Nexus first writes and is written back on release. The cooler fields
+    // below are touched under _txGate, except the target and baseline, which take _coolerLock.
+
+    // Kanali reads the speeds every 1.5 s; one request per 2 s keeps the heartbeat tick short.
+    internal TimeSpan CoolerPollInterval { get; set; } = TimeSpan.FromSeconds(2);
+    // Kanali waits 300 ms for the status notification before reading its cache.
+    private const int CoolerReplyTimeoutMs = 300;
+    // Unanswered status requests before polling stops for this connection, so a firmware without
+    // the cooler does not cost a reply timeout on every poll.
+    private const int CoolerMaxMisses = 3;
+
+    private readonly object _coolerLock = new();
+    private int? _coolerTarget;
+    private TryxMediaList.CoolerFanConfig? _coolerBaseline;
+    private bool _coolerWritten;
+    private bool _coolerRestorePending;
+    private bool _coolerConfigRequested;
+    private int? _coolerSentPower;
+    private int _coolerMisses;
+    private long _coolerPollDueMs;
+
+    /// <summary>True when the connected model has the software-driven small fan.</summary>
+    public bool HasCooler => TryxPanoramaProtocol.HasCoolerFan(State.ProductId);
+
+    /// <summary>The fixed power Nexus drives the small fan at, or null while the panel keeps its own config.</summary>
+    public int? CoolerFanTarget
+    {
+        get { lock (_coolerLock) return _coolerTarget; }
+    }
+
+    /// <summary>Drives the small fan at <paramref name="percent"/> from the next heartbeat tick on.</summary>
+    public void SetCoolerFanTarget(int percent)
+    {
+        lock (_coolerLock) _coolerTarget = Math.Clamp(percent, 0, 100);
+    }
+
+    /// <summary>Hands the small fan back the config the panel had before Nexus drove it. Sent at once
+    /// rather than on the next tick: ReleaseAll also runs at shutdown, after the last tick.</summary>
+    public void ReleaseCoolerFan()
+    {
+        lock (_coolerLock) _coolerTarget = null;
+        if (!IsConnected || !Monitor.TryEnter(_txGate)) return;
+        try { ApplyCoolerTarget(); }
+        finally { Monitor.Exit(_txGate); }
+    }
+
+    // A fresh connection asks for the speeds again and re-sends the target, since the panel may
+    // have reset its fan while it re-enumerated. The last readings stay until new ones arrive.
+    private void ResetCoolerSession()
+    {
+        _coolerConfigRequested = false;
+        _coolerSentPower = null;
+        _coolerMisses = 0;
+        _coolerPollDueMs = 0;
+    }
+
+    private void TickCooler()
+    {
+        if (!HasCooler) return;
+        // Both reads carry the panel serial from the connect-time device_info reply, and no write
+        // goes out before the config read, so the baseline is the panel's own config.
+        var sn = PanelSerial;
+        if (string.IsNullOrEmpty(sn)) return;
+        if (!_coolerConfigRequested)
+        {
+            _coolerConfigRequested = true;
+            bool needBaseline;
+            lock (_coolerLock) needBaseline = _coolerBaseline is null && !_coolerWritten;
+            if (needBaseline) ReadCoolerBaseline(sn);
+        }
+        PollCoolerStatus(sn);
+        ApplyCoolerTarget();
+    }
+
+    private void ReadCoolerBaseline(string sn)
+    {
+        var config = Request(TryxRkProtocol.BuildGetCoolerConfig(sn), TryxRkProtocol.CoolerConfigReplyField,
+            r => TryxMediaList.ParseCoolerFanConfig(r), CoolerReplyTimeoutMs);
+        if (config is not { } c)
+        {
+            ServiceLog.Warn("[tryx] panel did not report its fan config; a released fan keeps the last power Nexus set");
+            return;
+        }
+        lock (_coolerLock) _coolerBaseline = c;
+        State.CoolerFanPower ??= c.FixedPower;
+    }
+
+    private void PollCoolerStatus(string sn)
+    {
+        var now = NowMs();
+        if (_coolerMisses >= CoolerMaxMisses || now < _coolerPollDueMs) return;
+        _coolerPollDueMs = now + (long)CoolerPollInterval.TotalMilliseconds;
+        var status = Request(TryxRkProtocol.BuildGetCoolerStatus(sn), TryxRkProtocol.CoolerStatusReplyField,
+            r => TryxMediaList.ParseCoolerStatus(r), CoolerReplyTimeoutMs);
+        if (status is not { } s)
+        {
+            if (++_coolerMisses == CoolerMaxMisses)
+            {
+                ServiceLog.Warn($"[tryx] panel left {CoolerMaxMisses} cooler status requests unanswered; fan readings stop until it reconnects");
+            }
+            return;
+        }
+        _coolerMisses = 0;
+        if (s.FanRpm <= TryxRkProtocol.CoolerFanRpmCeiling) State.CoolerFanRpm = s.FanRpm;
+        State.CoolerPumpRpm = s.PumpRpm;
+    }
+
+    private void ApplyCoolerTarget()
+    {
+        int? target;
+        TryxMediaList.CoolerFanConfig? baseline;
+        lock (_coolerLock)
+        {
+            target = _coolerTarget;
+            baseline = _coolerBaseline;
+        }
+        if (target is { } t)
+        {
+            if (_coolerSentPower == t || !SendOnly(TryxRkProtocol.BuildCoolerFixedPower(t))) return;
+            _coolerSentPower = t;
+            _coolerRestorePending = true;
+            lock (_coolerLock) _coolerWritten = true;
+            State.CoolerFanPower = t;
+            return;
+        }
+        if (!_coolerRestorePending) return;
+        if (baseline is { } b && !SendOnly(TryxRkProtocol.BuildCoolerConfig(b.Raw))) return;
+        // Without a baseline there is nothing to hand back: the fan keeps the last power Nexus set.
+        _coolerRestorePending = false;
+        _coolerSentPower = null;
+        if (baseline is { } restored) State.CoolerFanPower = restored.FixedPower;
     }
 
     private bool SendOnly(byte[] request)

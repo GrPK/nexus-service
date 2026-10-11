@@ -38,6 +38,9 @@ public sealed class TryxPanoramaHeartbeatWorker : BackgroundService
             try { await timer.WaitForNextTickAsync(stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
+        // Hand the VRM fan back before closing: the curve engine's shutdown release runs
+        // after this worker has stopped, when the panel is no longer connected.
+        _hub.ReleaseCoolerFan();
         _hub.Disconnect();
     }
 
@@ -47,7 +50,12 @@ public sealed class TryxPanoramaHeartbeatWorker : BackgroundService
         // silent (transport closed), not just stop sending new commands.
         if (!_gate.IsEnabled("tryx"))
         {
-            if (_hub.IsConnected) _hub.Disconnect();
+            if (_hub.IsConnected)
+            {
+                // One last write hands the VRM fan back its own config, then silence.
+                _hub.ReleaseCoolerFan();
+                _hub.Disconnect();
+            }
             return;
         }
 

@@ -623,4 +623,63 @@ public class TryxRkProtocolTests
 
         Assert.Equal(Convert.FromHexString("0a021007aa19020801"), frame.AsSpan(8).ToArray());
     }
+
+    // Cooler frames are encoded from the cooler.proto field ids in Kanali's UDB.exe descriptor and
+    // Kanali's own CMD_Set_CoolerConfig body. Bench-verified on a PANO (0x1011): the fan followed
+    // 30 / 60 / 100 % within a second, both reads were answered, and writing the panel's own
+    // fan_config back restored it byte for byte.
+
+    [Fact]
+    public void BuildCoolerFixedPower_encodes_fix_mode_and_the_power()
+    {
+        // f1{} + f202{ f1{ mode=1 (FixMode), fix_power=75 } }.
+        var expected = Convert.FromHexString("545259580b000000" + "0a00" + "d20c06" + "0a04" + "0801" + "184b");
+
+        Assert.Equal(expected, TryxRkProtocol.BuildCoolerFixedPower(75));
+    }
+
+    [Fact]
+    public void BuildCoolerFixedPower_clamps_to_a_percent()
+    {
+        Assert.Equal(TryxRkProtocol.BuildCoolerFixedPower(100), TryxRkProtocol.BuildCoolerFixedPower(150));
+        Assert.Equal(TryxRkProtocol.BuildCoolerFixedPower(0), TryxRkProtocol.BuildCoolerFixedPower(-5));
+        // fix_power = 0 is still written, so a stop is explicit rather than a missing field.
+        Assert.EndsWith("08011800", Convert.ToHexString(TryxRkProtocol.BuildCoolerFixedPower(0)));
+    }
+
+    [Fact]
+    public void BuildCoolerConfig_writes_a_fan_config_back_verbatim()
+    {
+        // A Smart Mode fan_config with one { temperature = 30, power = 40 } level, as a panel might report it.
+        var fanConfig = Convert.FromHexString("1204081e1028");
+        var expected = Convert.FromHexString("545259580d000000" + "0a00" + "d20c08" + "0a06" + "1204081e1028");
+
+        Assert.Equal(expected, TryxRkProtocol.BuildCoolerConfig(fanConfig));
+    }
+
+    [Fact]
+    public void BuildGetCoolerStatus_carries_the_cmd_serial_and_body_case()
+    {
+        var frame = TryxRkProtocol.BuildGetCoolerStatus("BYZL123");
+        var text = Encoding.ASCII.GetString(frame);
+
+        Assert.StartsWith("TRYX", text);
+        Assert.Contains("CMD_Get_CoolerStatus", text);
+        Assert.Contains("BYZL123", text);
+        // get_cooler_status body (field 107, tag 0xDA 0x06), empty.
+        Assert.EndsWith("DA0600", Convert.ToHexString(frame));
+    }
+
+    [Fact]
+    public void BuildGetCoolerConfig_carries_the_cmd_serial_and_body_case()
+    {
+        var frame = TryxRkProtocol.BuildGetCoolerConfig("BYZL123");
+        var text = Encoding.ASCII.GetString(frame);
+
+        Assert.StartsWith("TRYX", text);
+        Assert.Contains("CMD_Get_CoolerConfig", text);
+        Assert.Contains("BYZL123", text);
+        // get_cooler_config body (field 106, tag 0xD2 0x06), empty.
+        Assert.EndsWith("D20600", Convert.ToHexString(frame));
+    }
 }
