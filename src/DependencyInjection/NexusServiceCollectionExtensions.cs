@@ -562,6 +562,12 @@ public static class NexusServiceCollectionExtensions
             return engine;
         });
         services.AddSingleton<Nexus.Service.Lighting.Scene.LightingSceneStore>();
+        services.AddSingleton<Nexus.Service.Lighting.CustomEffects.CustomEffectStore>();
+        services.AddSingleton<Nexus.Service.Lighting.CustomEffects.CustomFragCompiler>(sp =>
+        {
+            var gpu = sp.GetRequiredService<Nexus.Service.Lighting.Engine.Gpu.GpuContext>();
+            return frag => Nexus.Service.Lighting.Engine.Gpu.ShaderEffect.ValidateFragment(gpu, frag);
+        });
         services.AddSingleton<Nexus.Service.Lighting.Scene.LightingSceneService>();
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Lighting.Scene.LightingSceneService>());
         // Community LED mappings: resolver state for contributor frames, the

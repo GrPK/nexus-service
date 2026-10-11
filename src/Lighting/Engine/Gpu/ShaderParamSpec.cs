@@ -80,7 +80,7 @@ public readonly partial record struct ShaderParamSpec(string Name, float Min, fl
     /// </summary>
     public static void Sanitize(string effect, AnimateEffectState state)
     {
-        if (!ShaderLibrary.AllEffectKeys.Contains(effect))
+        if (!ShaderLibrary.IsKnownKey(effect))
         {
             return;
         }

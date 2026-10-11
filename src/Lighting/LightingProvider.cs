@@ -570,7 +570,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             return null;
         }
         var name = (key ?? "").ToLowerInvariant();
-        if (!ShaderLibrary.AllEffectKeys.Contains(name))
+        if (!ShaderLibrary.IsKnownKey(name))
         {
             return null;
         }
@@ -700,6 +700,67 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         if (before != ActiveLookTag())
         {
             ReapplyActiveLook();
+        }
+    }
+
+    public void ReloadCustomEffect(string key)
+    {
+        ClearThumbnails(key);
+        if (_engine.CurrentEffect is not ShaderEffect cur || cur.Name != key || !ShaderLibrary.IsKnownKey(key))
+        {
+            return;
+        }
+        var extras = cur.ExtraParams is null
+            ? null
+            : new System.Collections.Generic.Dictionary<string, float>(cur.ExtraParams);
+        _engine.SetEffect(MakeShader(key, ShaderLibrary.Get(key), cur.Speed, cur.Intensity, cur.Hue, cur.Colorize, cur.Saturation, cur.Contrast, extras));
+    }
+
+    public void DropCustomEffect(string key)
+    {
+        ClearThumbnails(key);
+        var running = _engine.CurrentEffect is ShaderEffect cur && cur.Name == key;
+        _store.Update(s =>
+        {
+            s.Lighting.Animate.States.Remove(key);
+            s.Lighting.Animate.Templates.Remove(key);
+        });
+        if (!running)
+        {
+            return;
+        }
+        var a = _store.Load().Lighting.Animate;
+        if (!a.States.TryGetValue("rainbow", out var look) || look is null)
+        {
+            look = AnimateTemplateDefaults.ResolveSelected(a.Templates, "rainbow") ?? new Nexus.Service.Persistence.AnimateEffectState();
+        }
+        var list = new List<ShaderParam>();
+        foreach (var kv in look.Params)
+        {
+            list.Add(new ShaderParam { Name = kv.Key, Value = kv.Value });
+        }
+        StartAnimate(new AnimateHeadlessStart
+        {
+            Effect = "rainbow",
+            Speed = look.Speed,
+            Intensity = look.Intensity,
+            Hue = look.Hue,
+            Colorize = look.Colorize,
+            Saturation = look.Saturation,
+            Contrast = look.Contrast,
+            Params = list,
+        });
+    }
+
+    private void ClearThumbnails(string key)
+    {
+        var prefix = key + ":";
+        foreach (var k in _thumbnailCache.Keys)
+        {
+            if (k.StartsWith(prefix, System.StringComparison.Ordinal))
+            {
+                _thumbnailCache.TryRemove(k, out _);
+            }
         }
     }
 
@@ -965,6 +1026,13 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // the context can't initialise, the canvas stays dark. Pulse gets
         // a 0.5x speed scale to match the legacy feel.
         var effectSpeed = name == "pulse" ? speed * 0.5f : speed;
+        // A user-made effect carries its whole source; one the store no longer
+        // holds falls back to rainbow like any other unknown key.
+        if (ShaderLibrary.IsCustomKey(name))
+        {
+            return MakeShader(name, ShaderLibrary.IsKnownKey(name) ? ShaderLibrary.Get(name) : ShaderLibrary.Rainbow,
+                effectSpeed, intensity, hue, colorize, saturation, contrast, extras);
+        }
         // Simple solid-colour fills all share one cheap shader; the colour is
         // carried by the post-process tint, not the GLSL.
         if (name.StartsWith("simple", System.StringComparison.Ordinal))

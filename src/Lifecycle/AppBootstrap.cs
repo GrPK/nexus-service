@@ -166,6 +166,8 @@ internal static class AppBootstrap
         BootTimer.Mark("InitializeProfiles: CurveEngine resolved");
         var lightingEngine = app.Services.GetRequiredService<LightingEngine>();
         BootTimer.Mark("InitializeProfiles: LightingEngine resolved");
+        // Registers every stored custom effect source before the restore resolves a "custom:" key.
+        app.Services.GetRequiredService<Nexus.Service.Lighting.CustomEffects.CustomEffectStore>();
         var lightingProvider = app.Services.GetRequiredService<ILightingProvider>();
         BootTimer.Mark("InitializeProfiles: ILightingProvider resolved");
         var configStore = app.Services.GetRequiredService<IConfigStore>();

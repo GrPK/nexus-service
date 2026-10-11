@@ -89,4 +89,16 @@ public interface ILightingProvider
     /// the LED engine also running an audio effect.
     /// </summary>
     void SetAudioCaptureDemand(bool demanded);
+
+    /// <summary>
+    /// A custom effect's source changed: drop its cached thumbnails and, when it
+    /// is the running animate effect, rebuild it live from the new source.
+    /// </summary>
+    void ReloadCustomEffect(string key) { }
+
+    /// <summary>
+    /// A custom effect was deleted: drop its cached thumbnails and saved looks,
+    /// and move the running animate effect to rainbow if it was the one.
+    /// </summary>
+    void DropCustomEffect(string key) { }
 }
