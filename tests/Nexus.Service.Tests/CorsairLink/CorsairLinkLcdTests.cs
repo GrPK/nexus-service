@@ -228,6 +228,46 @@ public class CorsairLinkLcdTests
         Assert.False(lcd.HasDevice);
     }
 
+    [Fact]
+    public void LcdDiscovery_takes_the_sole_lcd_when_serials_differ()
+    {
+        // TITAN RX LCD on the Y70: chain serial and USB serial never match.
+        var chain = new CorsairLinkDevice[]
+        {
+            new() { Channel = 13, Type = 6, Serial = "4E0CF5679521C109ED49AD3D" },
+        };
+        var lcdHid = new HidDeviceInfo
+        {
+            VendorId = CorsairLinkLcd.LcdVendorId, ProductId = CorsairLinkLcd.AioPid,
+            Path = "/dev/titan-lcd", Serial = "A9IHT509000CJJ", OutputReportByteLength = 1024,
+        };
+
+        var hid = new RecordingHidEnumerator(new[] { lcdHid }, new RecordingHidDevice());
+        var lcd = new CorsairLinkLcd();
+        lcd.DiscoverAndAttach(chain, hid);
+
+        Assert.True(lcd.HasDevice);
+        Assert.Equal("/dev/titan-lcd", hid.LastOpenedPath);
+    }
+
+    [Fact]
+    public void LcdDiscovery_does_not_guess_between_two_unmatched_lcds()
+    {
+        var chain = new CorsairLinkDevice[] { new() { Channel = 13, Type = 6, Serial = "CHAIN" } };
+        HidDeviceInfo Lcd(string path, string serial) => new()
+        {
+            VendorId = CorsairLinkLcd.LcdVendorId, ProductId = CorsairLinkLcd.AioPid,
+            Path = path, Serial = serial, OutputReportByteLength = 1024,
+        };
+
+        var hid = new RecordingHidEnumerator(new[] { Lcd("/dev/a", "A"), Lcd("/dev/b", "B") }, new RecordingHidDevice());
+        var lcd = new CorsairLinkLcd();
+        lcd.DiscoverAndAttach(chain, hid);
+
+        Assert.False(lcd.HasDevice);
+        Assert.Null(hid.LastOpenedPath);
+    }
+
     // -------------------------------------------------------------------------
     // Media library meta roundtrip
     // -------------------------------------------------------------------------

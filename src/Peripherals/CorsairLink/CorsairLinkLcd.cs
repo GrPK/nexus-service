@@ -127,7 +127,8 @@ public sealed class CorsairLinkLcd
             if (lcdDev is null) return;
 
             var opened = TryOpenMatchingHid(hid, AioPid, lcdDev.Serial)
-                ?? TryOpenMatchingHid(hid, Xd5Pid, lcdDev.Serial);
+                ?? TryOpenMatchingHid(hid, Xd5Pid, lcdDev.Serial)
+                ?? TryOpenSoleHid(hid, lcdDev.Type == 14 ? Xd5Pid : AioPid);
             if (opened is null) return;
 
             _device = opened;
@@ -147,6 +148,20 @@ public sealed class CorsairLinkLcd
             if (dev is not null) return dev;
         }
         return null;
+    }
+
+    // A TITAN RX LCD's USB serial differs from its chain serial, so a sole LCD on the
+    // type's PID is taken without a serial match, as OLH GetAioLCDSerial does.
+    private static IHidDevice? TryOpenSoleHid(IHidEnumerator hid, int pid)
+    {
+        HidDeviceInfo? sole = null;
+        foreach (var info in hid.Find(LcdVendorId, pid))
+        {
+            if (info.OutputReportByteLength != LcdOutputReportByteLength) continue;
+            if (sole is not null) return null;
+            sole = info;
+        }
+        return sole is null ? null : hid.Open(sole.Path, forInput: false);
     }
 
     /// <summary>Sends the shutdown feature-report sequence and disposes the device.</summary>

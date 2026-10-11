@@ -7,6 +7,32 @@ namespace Nexus.Service.Tests.CorsairLink;
 
 public class CorsairLinkLightingTests
 {
+    // ── colour-stream order ───────────────────────────────────────────────────
+
+    [Fact]
+    public void WireOrder_streams_the_lcd_cap_right_after_the_aio()
+    {
+        // TITAN RX LCD chain: cap on ch13, pump on ch14, plus a fan on either side.
+        var fan = new CorsairLinkDevice { Channel = 1, Type = 1, Class = CorsairLinkClass.Fan, LedCount = 34 };
+        var cap = new CorsairLinkDevice { Channel = 13, Type = 6, Class = CorsairLinkClass.Pump, LedCount = 24 };
+        var pump = new CorsairLinkDevice { Channel = 14, Type = 17, Class = CorsairLinkClass.Aio, LedCount = 20 };
+        var fan2 = new CorsairLinkDevice { Channel = 15, Type = 1, Class = CorsairLinkClass.Fan, LedCount = 34 };
+
+        var ordered = CorsairLinkLightingFrameWriter.WireOrder(new[] { fan, cap, pump, fan2 }, new List<CorsairLinkDevice>());
+
+        Assert.Equal(new[] { fan, pump, cap, fan2 }, ordered);
+    }
+
+    [Fact]
+    public void WireOrder_keeps_channel_order_without_a_cap_and_aio_pair()
+    {
+        var cap = new CorsairLinkDevice { Channel = 13, Type = 6, Class = CorsairLinkClass.Pump, LedCount = 24 };
+        var fan = new CorsairLinkDevice { Channel = 14, Type = 1, Class = CorsairLinkClass.Fan, LedCount = 34 };
+        var devices = new[] { cap, fan };
+
+        Assert.Same(devices, CorsairLinkLightingFrameWriter.WireOrder(devices, new List<CorsairLinkDevice>()));
+    }
+
     // ── brightness-cap staging (port protection) ──────────────────────────────
 
     private static IReadOnlyList<CorsairLinkDevice> Port0Devices(int ledCount) =>
