@@ -408,6 +408,38 @@ public class KrakenLockSleepTests
         Assert.Equal(25, rig.Hub.Snapshot.LcdBrightness);
     }
 
+    [Fact]
+    public void A_failed_fade_down_step_writes_the_dark_end_state()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        rig.Advance(750);
+        rig.Hid.Writes.Clear();
+
+        rig.Hub.FaultFade();
+
+        Assert.Equal(0, BacklightLevels(rig)[^1]);
+        Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
+        rig.Advance(5000);
+        Assert.Equal(0, BacklightLevels(rig)[^1]);
+    }
+
+    [Fact]
+    public void A_failed_fade_up_step_writes_the_level_it_was_returning_to_and_clears_the_marker()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        rig.Advance(5000);
+        rig.Lock.Set(false);
+        rig.Advance(200);
+        rig.Hid.Writes.Clear();
+
+        rig.Hub.FaultFade();
+
+        Assert.Equal(60, BacklightLevels(rig)[^1]);
+        Assert.Null(rig.PersistedRestore);
+    }
+
     private sealed class Recorder : IHidDevice
     {
         private readonly Queue<byte[]> _replies = new();

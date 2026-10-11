@@ -257,6 +257,22 @@ public class CorsairLcdLockTests
         Assert.Equal(written, rig.Hid.Features.Count);
     }
 
+    [Fact]
+    public void A_failed_step_drops_the_ramp_and_the_next_pass_settles_the_level()
+    {
+        var rig = new Rig();
+        rig.Pass();
+        rig.Lock.Set(true);
+        rig.Pass();
+        rig.Advance(750);
+        Assert.InRange(Levels(rig)[^1], 1, 69);
+
+        rig.Worker.FaultFade();
+        rig.Pass();
+
+        Assert.Equal(0, Levels(rig)[^1]);
+    }
+
     private sealed class Device : IHidDevice
     {
         public List<byte[]> Features { get; } = new();

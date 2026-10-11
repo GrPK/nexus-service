@@ -82,7 +82,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         _notifyOverlay = notifyOverlay;
         _notifyPanelChanged = notifyPanelChanged;
         _nowMs = nowMs ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        FadeRunner = new LcdFadeRunner(StepFades, onFault: () => { lock (_fadeGate) { _fades.Clear(); } });
+        FadeRunner = new LcdFadeRunner(StepFades, onFault: FaultAllFades);
         if (lockState is not null)
         {
             _lockState = lockState;
@@ -209,14 +209,23 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         }
         foreach (var id in ids)
         {
-            var applied = ApplyBrightness(id);
-            foreach (var (doneId, up) in finished)
+            try
             {
-                // Cleared only once the panel confirmed the level it was returning to.
-                if (doneId == id && up && applied && !IsLockSleeping(id))
+                var applied = ApplyBrightness(id);
+                foreach (var (doneId, up) in finished)
                 {
-                    SetMarker(id, null);
+                    // Cleared only once the panel confirmed the level it was returning to.
+                    if (doneId == id && up && applied && !IsLockSleeping(id))
+                    {
+                        SetMarker(id, null);
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                // One panel's failure drops only its own ramp.
+                ServiceLog.Warn($"[lcd-lock] fade step failed for panel {id}: {ex.GetType().Name}: {ex.Message}");
+                FaultPanelFade(id);
             }
         }
         if (finished.Any(f => !f.Up))
@@ -224,6 +233,34 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             _notifyOverlay?.Invoke();
         }
         lock (_fadeGate) { return _fades.Count > 0; }
+    }
+
+    // The ramp is dropped and the panel gets its settled level (dark while the lock holds it, else the
+    // level it was returning to), so a failed step does not leave it lit mid-ramp.
+    private void FaultPanelFade(string panelDeviceId)
+    {
+        RemoveFade(panelDeviceId);
+        try
+        {
+            if (ApplyBrightness(panelDeviceId) && !IsLockSleeping(panelDeviceId))
+            {
+                SetMarker(panelDeviceId, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warn($"[lcd-lock] settling panel {panelDeviceId} after a failed fade: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void FaultAllFades()
+    {
+        List<string> ids;
+        lock (_fadeGate) { ids = _fades.Keys.ToList(); }
+        foreach (var id in ids)
+        {
+            FaultPanelFade(id);
+        }
     }
 
     // A panel with no stored backlight has no value to return to after the lock, so the
@@ -322,10 +359,6 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             }
             foreach (var id in woken)
             {
-                if (!panels.Contains(id, StringComparer.Ordinal))
-                {
-                    panels.Add(id);
-                }
                 // A panel that attached mid-lock has no marker yet.
                 if (CaptureRestoreLevel(id) is int level)
                 {

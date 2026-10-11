@@ -1804,21 +1804,106 @@ public class TryxPanoramaHubTests
     [Fact]
     public async System.Threading.Tasks.Task An_unlock_that_lands_inside_the_initial_config_decision_is_not_undone_by_it()
     {
-        var (hub, recording, state, _, _) = LockRig(connect: false);
+        var (hub, _, state, _, _) = LockRig(connect: false);
         state.Set(true);
         System.Threading.Tasks.Task? unlock = null;
+        using var entered = new ManualResetEventSlim();
+        using var cleared = new ManualResetEventSlim();
+        hub.TestHookUnlockHandlerEntered = entered.Set;
+        hub.TestHookUnlockHandlerCleared = cleared.Set;
         hub.TestHookInInitialConfigDecision = () =>
         {
             hub.TestHookInInitialConfigDecision = null;
-            // The unlock arrives between the decision and the flag it sets. With the gate it waits
-            // behind it; without, it completes here and the flag then goes back on.
+            // The unlock arrives between the decision and the flag it sets. Once its handler has
+            // started it either finishes (no gate: it clears the flag before this returns) or waits
+            // behind the gate (it clears the flag after).
             unlock = System.Threading.Tasks.Task.Run(() => state.Set(false));
-            unlock.Wait(300);
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            cleared.Wait(TimeSpan.FromMilliseconds(500));
         };
 
         hub.EnsureConnected();
         await unlock!.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.False(hub.LockDimmed);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task A_heartbeat_running_beside_the_done_branch_never_deadlocks_on_the_fade_gate()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        time.Now += 5000;
+        // A reconnect cancels the ramp while its last frame is being decided.
+        hub.TestHookBeforeStepSend = () =>
+        {
+            hub.TestHookBeforeStepSend = null;
+            hub.Disconnect();
+            hub.EnsureConnected();
+        };
+        System.Threading.Tasks.Task? heartbeat = null;
+        hub.TestHookInFadeDoneGate = () =>
+        {
+            hub.TestHookInFadeDoneGate = null;
+            var baseline = recording.Writes.Count;
+            // The heartbeat takes the send gate, writes, then asks the fade gate whether a ramp is
+            // in flight: it must be able to, so the done branch cannot be sending under that gate.
+            heartbeat = System.Threading.Tasks.Task.Run(() => hub.SendHeartbeatTick());
+            var until = Environment.TickCount64 + 10_000;
+            while (Environment.TickCount64 < until)
+            {
+                int count;
+                try { count = recording.Writes.Count; }
+                catch (InvalidOperationException) { continue; }
+                if (count > baseline) { break; }
+                Thread.SpinWait(100);
+            }
+        };
+
+        var step = System.Threading.Tasks.Task.Run(() => hub.StepFade());
+        var both = System.Threading.Tasks.Task.WhenAll(step, heartbeat ?? System.Threading.Tasks.Task.CompletedTask);
+        // The heartbeat task exists only once the hook has run, so wait for the step first.
+        var finished = await System.Threading.Tasks.Task.WhenAny(step, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == step;
+        if (finished && heartbeat is not null)
+        {
+            finished = await System.Threading.Tasks.Task.WhenAny(heartbeat, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == heartbeat;
+        }
+
+        Assert.True(finished, "the done branch and the heartbeat deadlocked on the fade and send gates");
+    }
+
+    [Fact]
+    public void A_reversal_while_a_step_is_in_flight_does_not_resend_the_state_it_replaced()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 750);
+        recording.Writes.Clear();
+        hub.TestHookBeforeStepSend = () =>
+        {
+            hub.TestHookBeforeStepSend = null;
+            // The unlock reverses the ramp while a down step is about to go out.
+            state.Set(false);
+        };
+        time.Now += 40;
+
+        hub.StepFade();
+
+        // The full user level would be the flash a stale resend of the old state causes.
+        Assert.DoesNotContain(70, ConfigFrames(recording));
+    }
+
+    [Fact]
+    public void A_failed_step_settles_the_screen_instead_of_leaving_it_on_a_half_step()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 750);
+        Assert.InRange(ConfigFrames(recording)[^1], 1, 69);
+
+        hub.FaultFade();
+
+        Assert.False(hub.FadeActive);
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
     }
 }

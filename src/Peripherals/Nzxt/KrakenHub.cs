@@ -95,7 +95,7 @@ public sealed class KrakenHub : IDisposable
     /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
     internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
 
-    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: () => { lock (_lock) { _fade = null; } });
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: FaultFade);
     private KrakenDisplayMode? _lockPendingMode;
 
     /// <summary>True while the lock holds the backlight at zero. Streamed frames are dropped meanwhile.</summary>
@@ -235,6 +235,36 @@ public sealed class KrakenHub : IDisposable
         // the dark write or the fade down left there).
         _fadeLastSent = from;
         FadeRunner.Kick();
+    }
+
+    /// <summary>A step threw: the ramp is dropped and its end state is applied (dark for a fade down, the level it was returning to for a fade up), so the glass is not left on a half step.</summary>
+    internal void FaultFade()
+    {
+        lock (_lock)
+        {
+            if (_fade is not { } fade)
+            {
+                return;
+            }
+            _fade = null;
+            try
+            {
+                var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(fade.To, _snapshot.LcdOrientationQuarterTurns));
+                if (!fade.Down)
+                {
+                    FinishRestoreLocked(wrote);
+                }
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warn($"[nzxt-kraken] settling after a failed fade step: {ex.GetType().Name}: {ex.Message}");
+                if (!fade.Down)
+                {
+                    // The poll retries the restore.
+                    _lockRestorePending = true;
+                }
+            }
+        }
     }
 
     /// <summary>One sample of the fade: writes the stepped level when it changed, finishes the ramp when it lands.</summary>

@@ -111,6 +111,7 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         public int? Applied { get; set; }
         public int? Previous { get; set; }
         public bool FailWrites { get; set; }
+        public bool ThrowOnNextApply { get; set; }
         public int? CurrentBrightness => Applied;
         public int? PreviousBrightness => Previous;
 
@@ -148,6 +149,11 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
             lock (_gate)
             {
                 ApplyCalls++;
+                if (ThrowOnNextApply)
+                {
+                    ThrowOnNextApply = false;
+                    throw new InvalidOperationException("transport fault");
+                }
                 return Step();
             }
         }
@@ -909,6 +915,31 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         Advance(coordinator, 40);
 
         Assert.Null(sparedTransport.Applied);
+    }
+
+    [Fact]
+    public void A_panel_whose_fade_step_throws_settles_alone_and_the_other_panel_keeps_ramping()
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(serial: "a", dimmable: true));
+        _discovery.Devices.Add(Device(serial: "b", dimmable: true));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var records = _store.Load();
+        _registry.Patch(records["a"].PanelDeviceId, new PanelDevicePatch { LcdBrightness = 60 });
+        _registry.Patch(records["b"].PanelDeviceId, new PanelDevicePatch { LcdBrightness = 60 });
+        var a = _discovery.BrightnessTransports.First(t => t.Serial == "a");
+        var b = _discovery.BrightnessTransports.First(t => t.Serial == "b");
+        _lock.Set(true);
+
+        a.ThrowOnNextApply = true;
+        Advance(coordinator, 750);
+
+        // A is settled dark on its own; B is still partway down its own ramp.
+        Assert.Equal(0, a.Applied);
+        Assert.InRange(b.Applied!.Value, 1, 59);
+        Advance(coordinator, 5000);
+        Assert.Equal(0, b.Applied);
     }
 
     [Fact]

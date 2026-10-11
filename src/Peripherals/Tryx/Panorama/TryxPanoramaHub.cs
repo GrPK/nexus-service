@@ -106,7 +106,8 @@ public sealed class TryxPanoramaHub : IDisposable
         state.Changed += OnLockChanged;
     }
 
-    // Taken only briefly and never across a send, so it cannot invert with _lock or _txGate.
+    // Lock order: _txGate, then _lock, then _lockGate, then _fadeGate. The two gates are leaves: nothing
+    // holding either sends, takes _txGate or takes _lock, so they cannot invert with the send path.
     private readonly object _lockGate = new();
 
     /// <summary>Test seam: runs between the lock's decision and the start of its fade.</summary>
@@ -135,13 +136,22 @@ public sealed class TryxPanoramaHub : IDisposable
     /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
     internal Func<long> FadeClock { get; set; } = () => Environment.TickCount64;
 
-    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: CancelFade);
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: FaultFade);
 
     /// <summary>True while a lock fade is in flight; the slideshow holds still meanwhile.</summary>
     internal bool FadeActive
     {
         get { lock (_fadeGate) { return _fade is not null; } }
     }
+
+    /// <summary>Test seam: runs inside the fade gate in the done branch, before it decides what to resend.</summary>
+    internal Action? TestHookInFadeDoneGate { get; set; }
+
+    /// <summary>Test seam: the unlock handler is about to take the lock gate.</summary>
+    internal Action? TestHookUnlockHandlerEntered { get; set; }
+
+    /// <summary>Test seam: the unlock handler has left the lock gate.</summary>
+    internal Action? TestHookUnlockHandlerCleared { get; set; }
 
     /// <summary>Test seam: runs in a fade step between reading the ramp and writing the frame.</summary>
     internal Action? TestHookBeforeStepSend { get; set; }
@@ -214,21 +224,54 @@ public sealed class TryxPanoramaHub : IDisposable
         var sent = IsConnected && SendReliable(fade.Down
             ? TryxRkProtocol.BuildConfig(false, State.Brightness)
             : TryxRkProtocol.BuildConfig(screenOn, State.Brightness));
+        bool resend;
+        bool more;
         lock (_fadeGate)
         {
+            TestHookInFadeDoneGate?.Invoke();
             if (!ReferenceEquals(_fade, fade))
             {
-                // Reversed while that write was in flight; the new ramp owns the screen.
-                ResendSettledIfCancelledLocked();
-                return true;
+                // Replaced by a reversal: the new ramp owns the screen. Cancelled by a reconnect: the
+                // settled state goes out again, after the gate is released, since that is a send.
+                resend = _fade is null;
+                more = _fade is not null;
             }
-            _fade = null;
-            if (sent)
+            else
             {
-                _offOnWire = fade.Down || !screenOn;
+                _fade = null;
+                if (sent)
+                {
+                    _offOnWire = fade.Down || !screenOn;
+                }
+                resend = false;
+                more = false;
             }
         }
-        return false;
+        if (resend)
+        {
+            ResendSettled();
+        }
+        return more;
+    }
+
+    /// <summary>A step threw: the ramp is dropped and the settled state goes out, so the screen is not left on a half step.</summary>
+    internal void FaultFade()
+    {
+        bool had;
+        lock (_fadeGate)
+        {
+            had = _fade is not null;
+            _fade = null;
+        }
+        if (!had)
+        {
+            return;
+        }
+        try { ResendSettled(); }
+        catch (Exception ex)
+        {
+            ServiceLog.Warn($"[tryx] settling after a failed fade step: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     // A reconnect's initial config writes without the send gate, so a step already in flight can
@@ -237,20 +280,13 @@ public sealed class TryxPanoramaHub : IDisposable
     {
         lock (_fadeGate)
         {
-            if (ReferenceEquals(_fade, fade))
+            // Replaced by a reversal is not cancelled: resending then would flash the old state.
+            if (_fade is not null)
             {
                 return;
             }
         }
         ResendSettled();
-    }
-
-    private void ResendSettledIfCancelledLocked()
-    {
-        if (_fade is null)
-        {
-            ResendSettled();
-        }
     }
 
     private void ResendSettled()
@@ -292,22 +328,30 @@ public sealed class TryxPanoramaHub : IDisposable
             return;
         }
         bool wasDimmed;
-        lock (_lockGate)
+        TestHookUnlockHandlerEntered?.Invoke();
+        try
         {
-            _lockSleep.Drain();
-            wasDimmed = _lockDimmed;
-            _lockDimmed = false;
-            if (!wasDimmed || !IsConnected || !State.ScreenEnabled)
+            lock (_lockGate)
             {
-                return;
+                _lockSleep.Drain();
+                wasDimmed = _lockDimmed;
+                _lockDimmed = false;
+                if (!wasDimmed || !IsConnected || !State.ScreenEnabled)
+                {
+                    return;
+                }
+                ServiceLog.Info("[lcd-lock] tryx screen fading in");
+                // Screen on at brightness 0, then up to the user's level: from 0 when the panel is off,
+                // or from the step a fade down was caught on.
+                BeginFadeLocked(CurrentWireLevel(), State.Brightness, SleepBlackoutCoordinator.UnlockFadeDuration);
+                // The clip that comes back with the screen gets a full hold from the start of the ramp,
+                // so the heartbeat inside it cannot select a clip at full brightness.
+                _slideshow.Rearm(State.CurrentMedia, NowMs());
             }
-            ServiceLog.Info("[lcd-lock] tryx screen fading in");
-            // Screen on at brightness 0, then up to the user's level: from 0 when the panel is off,
-            // or from the step a fade down was caught on.
-            BeginFadeLocked(CurrentWireLevel(), State.Brightness, SleepBlackoutCoordinator.UnlockFadeDuration);
-            // The clip that comes back with the screen gets a full hold from the start of the ramp,
-            // so the heartbeat inside it cannot select a clip at full brightness.
-            _slideshow.Rearm(State.CurrentMedia, NowMs());
+        }
+        finally
+        {
+            TestHookUnlockHandlerCleared?.Invoke();
         }
     }
 

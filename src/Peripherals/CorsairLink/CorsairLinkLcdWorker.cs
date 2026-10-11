@@ -133,7 +133,7 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
     /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
     internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
 
-    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: () => { lock (_fadeGate) { _fade = null; } });
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: FaultFade);
 
     internal void SyncGeneration()
     {
@@ -200,6 +200,15 @@ public sealed class CorsairLinkLcdWorker : BackgroundService
                 _lastDarkSentMs = Environment.TickCount64;
             }
         }
+    }
+
+    /// <summary>
+    /// A step threw: the ramp is dropped. With no ramp the next pass of the worker loop writes the
+    /// settled level (dark while the lock holds, else the stored one), so the glass is not left on a half step.
+    /// </summary>
+    internal void FaultFade()
+    {
+        lock (_fadeGate) { _fade = null; }
     }
 
     /// <summary>One sample of the fade: writes the stepped level when it changed and finishes the ramp when it lands.</summary>
