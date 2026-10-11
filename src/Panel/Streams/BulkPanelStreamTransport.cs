@@ -37,6 +37,7 @@ public sealed class BulkPanelStreamTransport : IStreamedPanelTransport, IOrienta
     private readonly object _brightnessLock = new();
     private Func<int?>? _brightness;
     private int _brightnessApplied = -1;
+    private int _brightnessPrevious = -1;
     private long _brightnessNextReadMs;
     private bool _brightnessFaultLogged;
 
@@ -156,6 +157,11 @@ public sealed class BulkPanelStreamTransport : IStreamedPanelTransport, IOrienta
         }
     }
 
+    public int? PreviousBrightness
+    {
+        get { lock (_brightnessLock) { return _brightnessPrevious >= 0 ? _brightnessPrevious : null; } }
+    }
+
     public void ApplyBrightness()
     {
         lock (_brightnessLock)
@@ -191,6 +197,7 @@ public sealed class BulkPanelStreamTransport : IStreamedPanelTransport, IOrienta
         }
         if (_hub.SetBrightness(percent))
         {
+            _brightnessPrevious = _brightnessApplied;
             _brightnessApplied = percent;
             ServiceLog.Info($"[{_hub.Driver.HandlerId}] backlight {percent}%");
         }

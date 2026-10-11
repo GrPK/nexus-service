@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Nexus.Service.Devices;
 using Nexus.Service.Lighting;
@@ -103,6 +104,16 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         public int ApplyCalls { get; private set; }
         public int? LastApplied { get; private set; }
         private Func<int?>? _source;
+        private readonly object _gate = new();
+
+        public int? Previous { get; set; }
+        public int? PreviousBrightness => Previous;
+
+        /// <summary>A frame thread: reads the bound source while holding the transport's own brightness lock.</summary>
+        public void FrameThreadRead()
+        {
+            lock (_gate) { LastApplied = _source?.Invoke(); }
+        }
 
         public FakeBrightnessTransport(string serial) { Serial = serial; }
         public void Open() => IsOpen = true;
@@ -112,8 +123,11 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         public void BindBrightness(Func<int?> source) => _source = source;
         public void ApplyBrightness()
         {
-            ApplyCalls++;
-            LastApplied = _source?.Invoke();
+            lock (_gate)
+            {
+                ApplyCalls++;
+                LastApplied = _source?.Invoke();
+            }
         }
     }
 
@@ -654,6 +668,81 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         var reopened = _discovery.BrightnessTransports.Last();
         Assert.NotSame(first, reopened);
         Assert.Equal(0, reopened.LastApplied);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task A_frame_thread_reading_the_backlight_never_deadlocks_with_ApplyBrightness_and_GetAssignments()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 50);
+        _lock.Set(true);
+        var stop = false;
+        var frames = System.Threading.Tasks.Task.Run(() =>
+        {
+            for (var i = 0; i < 20_000 && !Volatile.Read(ref stop); i++) transport.FrameThreadRead();
+        });
+        var applies = System.Threading.Tasks.Task.Run(() =>
+        {
+            for (var i = 0; i < 20_000 && !Volatile.Read(ref stop); i++)
+            {
+                coordinator.ApplyBrightness(panelId);
+                coordinator.GetAssignments();
+            }
+        });
+
+        var all = System.Threading.Tasks.Task.WhenAll(frames, applies);
+        var finished = await System.Threading.Tasks.Task.WhenAny(all, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == all;
+        Volatile.Write(ref stop, true);
+
+        Assert.True(finished, "the brightness getter and ApplyBrightness deadlocked");
+    }
+
+    [Fact]
+    public void A_panel_with_no_stored_backlight_returns_to_the_level_it_had_before_the_lock()
+    {
+        var (_, panelId, transport) = DimmablePanel(stored: null);
+        transport.Previous = 42;
+
+        _lock.Set(true);
+        Assert.Equal(0, transport.LastApplied);
+        Assert.Equal(42, _registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Null(_registry.Get(panelId)!.LcdBrightness);
+
+        _lock.Set(false);
+        Assert.Equal(42, transport.LastApplied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void A_restore_marker_left_by_a_restart_mid_lock_is_applied_and_cleared_on_connect()
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(dimmable: true));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var panelId = Assert.Single(coordinator.GetAssignments().Assignments).PanelDeviceId;
+        // The state a previous run left: dark glass, a marker, and no lock in progress.
+        _registry.SetLockRestoreBrightness(panelId, 64);
+        var first = Assert.Single(_discovery.BrightnessTransports);
+        first.Dispose();
+
+        coordinator.TickOnce();
+
+        var reopened = _discovery.BrightnessTransports.Last();
+        Assert.Equal(64, reopened.LastApplied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void A_lock_handler_that_runs_after_the_unlock_does_not_dim_the_panel()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 70);
+
+        // The handler for a lock whose unlock already happened.
+        coordinator.OnLockChanged(true);
+
+        Assert.NotEqual(0, transport.LastApplied);
+        Assert.Single(coordinator.GetAssignments().Assignments);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
     }
 
     [Fact]

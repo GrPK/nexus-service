@@ -59,6 +59,9 @@ public interface IBrightnessPanelTransport
 
     /// <summary>Applies the currently bound backlight value immediately.</summary>
     void ApplyBrightness();
+
+    /// <summary>The backlight in effect before the most recent change this transport made, or null when it never knew one.</summary>
+    int? PreviousBrightness => null;
 }
 
 /// <summary>Transport whose glass can be handed to Windows as a secondary monitor.</summary>

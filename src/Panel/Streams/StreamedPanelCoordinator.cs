@@ -56,11 +56,8 @@ public sealed class StreamedPanelCoordinator : BackgroundService
     private readonly SemaphoreSlim _wake = new(0, 1);
     private readonly LcdLockState? _lockState;
     private readonly LcdLockSleepSet? _lockSleep;
-    // Panels the lock has darkened at least once. A record with no stored backlight
-    // would otherwise read null after unlock and leave the glass on the dark value.
-    private readonly HashSet<string> _lockTouched = new(StringComparer.Ordinal);
 
-    /// <summary>Backlight percent a record with no stored value returns to after the lock.</summary>
+    /// <summary>Backlight percent used only when a panel with no stored value never revealed its pre-lock level.</summary>
     internal const int UnlockDefaultBrightness = 100;
 
     public StreamedPanelCoordinator(
@@ -104,19 +101,33 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         {
             return false;
         }
+        // The decision callback runs on frame threads holding a transport's brightness lock,
+        // so it must never take the coordinator lock: ApplyBrightness takes that lock first
+        // and the transport's second.
         return _lockSleep.IsSleeping(panelDeviceId, () =>
         {
-            var on = _registry.Get(panelDeviceId)?.SleepWhenLocked != false && CanDim(panelDeviceId);
+            var record = _registry.Get(panelDeviceId);
+            var on = record?.SleepWhenLocked != false && record?.Capabilities?.SupportsBrightness == true;
             if (on)
             {
-                lock (_lock) _lockTouched.Add(panelDeviceId);
                 ServiceLog.Info($"[lcd-lock] streamed panel {panelDeviceId} sleeping");
             }
             return on;
         });
     }
 
-    private bool CanDim(string panelDeviceId)
+    // Takes no coordinator lock; see IsLockSleeping.
+    private int? EffectiveBrightness(string panelDeviceId)
+    {
+        if (IsLockSleeping(panelDeviceId))
+        {
+            return 0;
+        }
+        var record = _registry.Get(panelDeviceId);
+        return record?.LcdBrightness ?? record?.LockRestoreBrightness;
+    }
+
+    private IBrightnessPanelTransport? DimmableTransport(string panelDeviceId)
     {
         lock (_lock)
         {
@@ -124,34 +135,28 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             {
                 if (!ds.Session.Closed && string.Equals(ds.Session.PanelDeviceId, panelDeviceId, StringComparison.Ordinal))
                 {
-                    return ds.Info.Profile.SupportsBrightness;
+                    return ds.Transport as IBrightnessPanelTransport;
                 }
             }
         }
-        return _registry.Get(panelDeviceId)?.Capabilities?.SupportsBrightness == true;
+        return null;
     }
 
-    private int? EffectiveBrightness(string panelDeviceId)
+    // A panel with no stored backlight has no value to return to after the lock, so the
+    // level it had before is recorded on its record: restored on unlock, and still there
+    // if the service restarts while the glass is dark.
+    private void RecordRestoreLevel(string panelDeviceId)
     {
-        if (IsLockSleeping(panelDeviceId))
+        var record = _registry.Get(panelDeviceId);
+        if (record is null || record.LcdBrightness is not null || record.LockRestoreBrightness is not null)
         {
-            return 0;
+            return;
         }
-        var stored = _registry.Get(panelDeviceId)?.LcdBrightness;
-        if (stored is null)
-        {
-            lock (_lock)
-            {
-                if (_lockTouched.Contains(panelDeviceId))
-                {
-                    return UnlockDefaultBrightness;
-                }
-            }
-        }
-        return stored;
+        var level = DimmableTransport(panelDeviceId)?.PreviousBrightness ?? UnlockDefaultBrightness;
+        _registry.SetLockRestoreBrightness(panelDeviceId, level);
     }
 
-    private void OnLockChanged(bool locked)
+    internal void OnLockChanged(bool locked)
     {
         List<string> panels;
         lock (_lock)
@@ -165,7 +170,15 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         {
             foreach (var id in panels)
             {
-                IsLockSleeping(id);
+                if (IsLockSleeping(id))
+                {
+                    ApplyBrightness(id);
+                    // A lock that already ended must not leave a marker behind.
+                    if (_lockState is { IsLocked: true })
+                    {
+                        RecordRestoreLevel(id);
+                    }
+                }
             }
         }
         else
@@ -181,11 +194,15 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                 {
                     panels.Add(id);
                 }
+                RecordRestoreLevel(id);
             }
-        }
-        foreach (var id in panels)
-        {
-            ApplyBrightness(id);
+            foreach (var id in panels)
+            {
+                if (ApplyBrightness(id) && !IsLockSleeping(id))
+                {
+                    _registry.SetLockRestoreBrightness(id, null);
+                }
+            }
         }
         _notifyOverlay?.Invoke();
     }
@@ -344,7 +361,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
     }
 
     /// <summary>Applies a persisted panel backlight change without waiting for a frame.</summary>
-    public void ApplyBrightness(string panelDeviceId)
+    public bool ApplyBrightness(string panelDeviceId)
     {
         lock (_lock)
         {
@@ -352,10 +369,13 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             {
                 if (ds.Session.Closed || !string.Equals(ds.Session.PanelDeviceId, panelDeviceId, StringComparison.Ordinal))
                     continue;
-                (ds.Transport as IBrightnessPanelTransport)?.ApplyBrightness();
-                return;
+                if (ds.Transport is not IBrightnessPanelTransport dimmable)
+                    return false;
+                dimmable.ApplyBrightness();
+                return true;
             }
         }
+        return false;
     }
 
     /// <summary>
@@ -660,9 +680,23 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             ds.Writer.SetTransport(transport);
             // No frames flow to a panel held dark, so nothing else would carry the dark value to a
             // glass that attached or reconnected mid-lock.
-            if (transport is IBrightnessPanelTransport lockDimmable && IsLockSleeping(panelId))
+            if (transport is IBrightnessPanelTransport lockDimmable)
             {
-                lockDimmable.ApplyBrightness();
+                var sleeping = IsLockSleeping(panelId);
+                if (sleeping)
+                {
+                    lockDimmable.ApplyBrightness();
+                    if (_lockState is { IsLocked: true })
+                    {
+                        RecordRestoreLevel(panelId);
+                    }
+                }
+                else if (_registry.Get(panelId)?.LockRestoreBrightness is not null)
+                {
+                    // Left over from a lock that ended while this panel was away, or from a restart.
+                    lockDimmable.ApplyBrightness();
+                    _registry.SetLockRestoreBrightness(panelId, null);
+                }
             }
             ServiceLog.Info($"[streamed-panel] transport open serial={ds.Info.Serial}");
         }
