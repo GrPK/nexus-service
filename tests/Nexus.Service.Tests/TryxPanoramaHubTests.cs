@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Nexus.Service.Devices.Handlers;
 using Nexus.Service.Fps;
 using Nexus.Service.Models.Sensors;
 using Nexus.Service.Panel;
@@ -31,6 +32,7 @@ public class TryxPanoramaHubTests
         public IReadOnlyDictionary<string, long> MediaFileSizes { get; set; } = new Dictionary<string, long>();
         public int MediaListVersion { get; set; }
         public string PanelSerial { get; set; } = "";
+        public string PanelFirmwareVersion { get; set; } = "";
         // Applied when a get_file_list frame is written, standing in for the panel's reply.
         public IReadOnlyList<string>? NextFileList { get; set; }
         // Serves file pulls from these (unmasked) files in PullChunkSize pieces, masked like the panel.
@@ -946,6 +948,21 @@ public class TryxPanoramaHubTests
         Assert.Equal(2, recording.Writes.Count);
         Assert.Equal(TryxRkProtocol.BuildConfig(true, 80), recording.Writes[0]);
         Assert.Equal(TryxRkProtocol.BuildGetDeviceInfo(), recording.Writes[1]);
+    }
+
+    [Fact]
+    public void TryxHandler_reports_the_firmware_version_of_the_connected_panel()
+    {
+        var recording = new RecordingTransport { PanelFirmwareVersion = "1.2.3" };
+        var hub = BuildHub(discovery: new StubDiscovery(), transportFactory: _ => recording);
+        var handler = new TryxHandler(hub);
+        Assert.Equal("", handler.GetFirmwareVersion());
+
+        hub.EnsureConnected();
+        Assert.Equal("1.2.3", handler.GetFirmwareVersion());
+
+        recording.IsOpen = false;
+        Assert.Equal("", handler.GetFirmwareVersion());
     }
 
     [Fact]
