@@ -162,21 +162,26 @@ public sealed class BulkPanelStreamTransport : IStreamedPanelTransport, IOrienta
         get { lock (_brightnessLock) { return _brightnessPrevious >= 0 ? _brightnessPrevious : null; } }
     }
 
-    public void ApplyBrightness()
+    public int? CurrentBrightness
+    {
+        get { lock (_brightnessLock) { return _brightnessApplied >= 0 ? _brightnessApplied : null; } }
+    }
+
+    public bool ApplyBrightness()
     {
         lock (_brightnessLock)
         {
             _brightnessNextReadMs = 0;
-            TryApplyBrightnessLocked();
+            return TryApplyBrightnessLocked();
         }
     }
 
-    private void TryApplyBrightnessLocked()
+    private bool TryApplyBrightnessLocked()
     {
         long nowMs = Environment.TickCount64;
         if (_brightness is null || nowMs < _brightnessNextReadMs)
         {
-            return;
+            return false;
         }
         _brightnessNextReadMs = nowMs + BrightnessTtlMs;
         int? wanted;
@@ -188,19 +193,21 @@ public sealed class BulkPanelStreamTransport : IStreamedPanelTransport, IOrienta
                 _brightnessFaultLogged = true;
                 ServiceLog.Warn($"[{_hub.Driver.HandlerId}] backlight source threw: {ex.GetType().Name}: {ex.Message}");
             }
-            return;
+            return false;
         }
         // No record value means the panel keeps what it powered up with.
         if (wanted is not int percent || percent == _brightnessApplied)
         {
-            return;
+            return true;
         }
         if (_hub.SetBrightness(percent))
         {
             _brightnessPrevious = _brightnessApplied;
             _brightnessApplied = percent;
             ServiceLog.Info($"[{_hub.Driver.HandlerId}] backlight {percent}%");
+            return true;
         }
+        return false;
     }
 
     public string Serial { get; }

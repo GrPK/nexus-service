@@ -65,18 +65,23 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
         _brightnessNextReadMs = 0;
     }
 
-    /// <summary>Applies a changed backlight from either the frame or settings path.</summary>
+    public int? CurrentBrightness
+    {
+        get { lock (_brightnessLock) { return _brightnessApplied >= 0 ? _brightnessApplied : null; } }
+    }
+
     public int? PreviousBrightness
     {
         get { lock (_brightnessLock) { return _brightnessPrevious >= 0 ? _brightnessPrevious : null; } }
     }
 
-    public void ApplyBrightness()
+    /// <summary>Applies a changed backlight from either the frame or settings path.</summary>
+    public bool ApplyBrightness()
     {
         lock (_brightnessLock)
         {
             _brightnessNextReadMs = 0;
-            TryApplyBrightnessLocked();
+            return TryApplyBrightnessLocked();
         }
     }
 

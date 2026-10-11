@@ -106,13 +106,34 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         private Func<int?>? _source;
         private readonly object _gate = new();
 
+        // Mirrors the real transports: what was last put on the glass, and what it replaced.
+        public int? Applied { get; set; }
         public int? Previous { get; set; }
+        public bool FailWrites { get; set; }
+        public int? CurrentBrightness => Applied;
         public int? PreviousBrightness => Previous;
+
+        private bool Step()
+        {
+            var wanted = _source?.Invoke();
+            LastApplied = wanted;
+            if (wanted is not int percent || percent == Applied)
+            {
+                return true;
+            }
+            if (FailWrites)
+            {
+                return false;
+            }
+            Previous = Applied;
+            Applied = percent;
+            return true;
+        }
 
         /// <summary>A frame thread: reads the bound source while holding the transport's own brightness lock.</summary>
         public void FrameThreadRead()
         {
-            lock (_gate) { LastApplied = _source?.Invoke(); }
+            lock (_gate) { Step(); }
         }
 
         public FakeBrightnessTransport(string serial) { Serial = serial; }
@@ -121,12 +142,12 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         public void Write(ReadOnlySpan<byte> annexBAccessUnit) { }
         public void Dispose() => IsOpen = false;
         public void BindBrightness(Func<int?> source) => _source = source;
-        public void ApplyBrightness()
+        public bool ApplyBrightness()
         {
             lock (_gate)
             {
                 ApplyCalls++;
-                LastApplied = _source?.Invoke();
+                return Step();
             }
         }
     }
@@ -671,36 +692,34 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async System.Threading.Tasks.Task A_frame_thread_reading_the_backlight_never_deadlocks_with_ApplyBrightness_and_GetAssignments()
+    public async System.Threading.Tasks.Task A_frame_thread_asking_first_never_deadlocks_with_the_lock_handler()
     {
-        var (coordinator, panelId, transport) = DimmablePanel(stored: 50);
-        _lock.Set(true);
-        var stop = false;
-        var frames = System.Threading.Tasks.Task.Run(() =>
+        var (_, _, transport) = DimmablePanel(stored: 50);
+
+        // Each round is a fresh lock epoch, so the first ask for the decision comes from whichever
+        // thread gets there first: the lock handler (coordinator lock, then the transport's) or a
+        // frame thread (the transport's lock, then the getter).
+        for (var round = 0; round < 400; round++)
         {
-            for (var i = 0; i < 20_000 && !Volatile.Read(ref stop); i++) transport.FrameThreadRead();
-        });
-        var applies = System.Threading.Tasks.Task.Run(() =>
-        {
-            for (var i = 0; i < 20_000 && !Volatile.Read(ref stop); i++)
+            _lock.Set(false);
+            using var barrier = new Barrier(2);
+            var handler = System.Threading.Tasks.Task.Run(() => { barrier.SignalAndWait(); _lock.Set(true); });
+            var frames = System.Threading.Tasks.Task.Run(() =>
             {
-                coordinator.ApplyBrightness(panelId);
-                coordinator.GetAssignments();
-            }
-        });
-
-        var all = System.Threading.Tasks.Task.WhenAll(frames, applies);
-        var finished = await System.Threading.Tasks.Task.WhenAny(all, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == all;
-        Volatile.Write(ref stop, true);
-
-        Assert.True(finished, "the brightness getter and ApplyBrightness deadlocked");
+                barrier.SignalAndWait();
+                for (var i = 0; i < 5; i++) transport.FrameThreadRead();
+            });
+            var both = System.Threading.Tasks.Task.WhenAll(handler, frames);
+            var finished = await System.Threading.Tasks.Task.WhenAny(both, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == both;
+            Assert.True(finished, $"deadlocked in round {round}");
+        }
     }
 
     [Fact]
     public void A_panel_with_no_stored_backlight_returns_to_the_level_it_had_before_the_lock()
     {
         var (_, panelId, transport) = DimmablePanel(stored: null);
-        transport.Previous = 42;
+        transport.Applied = 42;
 
         _lock.Set(true);
         Assert.Equal(0, transport.LastApplied);
@@ -709,6 +728,45 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
 
         _lock.Set(false);
         Assert.Equal(42, transport.LastApplied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void A_lock_whose_unlock_ran_before_its_marker_write_leaves_no_marker_and_no_dark_glass()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        // The unlock runs completely between the lock's dark apply and its marker write.
+        coordinator.TestHookBeforeMarkerWrite = () =>
+        {
+            coordinator.TestHookBeforeMarkerWrite = null;
+            _lock.Set(false);
+        };
+
+        _lock.Set(true);
+
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Equal(42, transport.Applied);
+        Assert.Equal(42, transport.LastApplied);
+    }
+
+    [Fact]
+    public void A_failed_restoring_write_keeps_the_marker_for_the_next_connect_to_retry()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        _lock.Set(true);
+        transport.FailWrites = true;
+
+        _lock.Set(false);
+
+        Assert.Equal(42, _registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Equal(0, transport.Applied);
+
+        transport.Dispose();
+        coordinator.TickOnce();
+        var reopened = _discovery.BrightnessTransports.Last();
+        Assert.Equal(42, reopened.LastApplied);
         Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
     }
 

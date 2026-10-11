@@ -145,15 +145,56 @@ public sealed class StreamedPanelCoordinator : BackgroundService
     // A panel with no stored backlight has no value to return to after the lock, so the
     // level it had before is recorded on its record: restored on unlock, and still there
     // if the service restarts while the glass is dark.
-    private void RecordRestoreLevel(string panelDeviceId)
+    private readonly object _markerGate = new();
+
+    /// <summary>Test seam: runs between the lock path's dark apply and its marker write.</summary>
+    internal Action? TestHookBeforeMarkerWrite { get; set; }
+
+    // Read BEFORE the dark apply, from what the transport last put on the glass. Previous is
+    // only a fallback for a decision a frame thread already acted on, and a zero never
+    // becomes a restore level.
+    private int? CaptureRestoreLevel(string panelDeviceId)
     {
         var record = _registry.Get(panelDeviceId);
         if (record is null || record.LcdBrightness is not null || record.LockRestoreBrightness is not null)
         {
+            return null;
+        }
+        var transport = DimmableTransport(panelDeviceId);
+        if (transport?.CurrentBrightness is > 0 and var current)
+        {
+            return current;
+        }
+        if (transport?.PreviousBrightness is > 0 and var previous)
+        {
+            return previous;
+        }
+        return UnlockDefaultBrightness;
+    }
+
+    private void SetMarker(string panelDeviceId, int? level)
+    {
+        lock (_markerGate)
+        {
+            _registry.SetLockRestoreBrightness(panelDeviceId, level);
+        }
+    }
+
+    // The lock path writes only while the lock it started under is still the current one.
+    private void WriteMarkerForLock(string panelDeviceId, int? level, int epoch)
+    {
+        if (level is not > 0)
+        {
             return;
         }
-        var level = DimmableTransport(panelDeviceId)?.PreviousBrightness ?? UnlockDefaultBrightness;
-        _registry.SetLockRestoreBrightness(panelDeviceId, level);
+        TestHookBeforeMarkerWrite?.Invoke();
+        lock (_markerGate)
+        {
+            if (_lockState is { IsLocked: true } state && state.Epoch == epoch)
+            {
+                _registry.SetLockRestoreBrightness(panelDeviceId, level);
+            }
+        }
     }
 
     internal void OnLockChanged(bool locked)
@@ -172,12 +213,10 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             {
                 if (IsLockSleeping(id))
                 {
+                    var epoch = _lockState?.Epoch ?? 0;
+                    var level = CaptureRestoreLevel(id);
                     ApplyBrightness(id);
-                    // A lock that already ended must not leave a marker behind.
-                    if (_lockState is { IsLocked: true })
-                    {
-                        RecordRestoreLevel(id);
-                    }
+                    WriteMarkerForLock(id, level, epoch);
                 }
             }
         }
@@ -194,13 +233,19 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                 {
                     panels.Add(id);
                 }
-                RecordRestoreLevel(id);
+                // A panel that attached mid-lock has no marker yet.
+                if (CaptureRestoreLevel(id) is int level)
+                {
+                    SetMarker(id, level);
+                }
             }
             foreach (var id in panels)
             {
+                // Cleared only after the panel confirmed the write; a failed one keeps the marker
+                // for the next apply or connect to retry.
                 if (ApplyBrightness(id) && !IsLockSleeping(id))
                 {
-                    _registry.SetLockRestoreBrightness(id, null);
+                    SetMarker(id, null);
                 }
             }
         }
@@ -371,8 +416,7 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                     continue;
                 if (ds.Transport is not IBrightnessPanelTransport dimmable)
                     return false;
-                dimmable.ApplyBrightness();
-                return true;
+                return dimmable.ApplyBrightness();
             }
         }
         return false;
@@ -685,17 +729,18 @@ public sealed class StreamedPanelCoordinator : BackgroundService
                 var sleeping = IsLockSleeping(panelId);
                 if (sleeping)
                 {
+                    var epoch = _lockState?.Epoch ?? 0;
+                    var level = CaptureRestoreLevel(panelId);
                     lockDimmable.ApplyBrightness();
-                    if (_lockState is { IsLocked: true })
-                    {
-                        RecordRestoreLevel(panelId);
-                    }
+                    WriteMarkerForLock(panelId, level, epoch);
                 }
                 else if (_registry.Get(panelId)?.LockRestoreBrightness is not null)
                 {
                     // Left over from a lock that ended while this panel was away, or from a restart.
-                    lockDimmable.ApplyBrightness();
-                    _registry.SetLockRestoreBrightness(panelId, null);
+                    if (lockDimmable.ApplyBrightness())
+                    {
+                        SetMarker(panelId, null);
+                    }
                 }
             }
             ServiceLog.Info($"[streamed-panel] transport open serial={ds.Info.Serial}");

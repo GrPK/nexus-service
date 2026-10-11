@@ -57,8 +57,11 @@ public interface IBrightnessPanelTransport
     /// </summary>
     void BindBrightness(Func<int?> source);
 
-    /// <summary>Applies the currently bound backlight value immediately.</summary>
-    void ApplyBrightness();
+    /// <summary>Applies the currently bound backlight value immediately. True only when the panel now shows it (or already did); false when the write failed or there is nothing bound.</summary>
+    bool ApplyBrightness();
+
+    /// <summary>The backlight this transport last put on the panel, or null when it never knew one.</summary>
+    int? CurrentBrightness => null;
 
     /// <summary>The backlight in effect before the most recent change this transport made, or null when it never knew one.</summary>
     int? PreviousBrightness => null;
