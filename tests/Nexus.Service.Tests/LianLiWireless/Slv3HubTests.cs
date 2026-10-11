@@ -2713,14 +2713,17 @@ public class Slv3HubTests
         Assert.True(hub.DriveTick());
         Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
         Assert.True(hub.DriveTick());
-        LockAndSettle(hub, state, clock);
-        Assert.Equal(0, LastAioBrightness(tx));
+        Assert.Equal(30, LastAioBrightness(tx));
 
-        // The AIO drops off the controller's list long enough to expire, then returns.
+        // The AIO drops off the controller's list long enough to expire, and the PC locks while it is gone.
         net.Fans.Clear();
         clock.AdvanceMs(40_000);
         Assert.True(hub.DriveTick());
         Assert.Empty(hub.State.Fans);
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+
+        // It returns mid-lock: a first sight, so it goes straight to dark.
         net.Fans.Add(fan);
         Assert.True(hub.DriveTick());
         Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
