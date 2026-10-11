@@ -20,10 +20,19 @@ public class KrakenLockSleepTests
         public Recorder Hid = new();
         public bool SleepSetting = true;
         public int? PersistedRestore;
+        public long Now = 1_000_000;
+
+        public void Advance(int ms)
+        {
+            Now += ms;
+            Hub.StepFade();
+        }
 
         public Rig(int brightness = 60)
         {
             Hub = new KrakenHub(new Factory());
+            Hub.Clock = () => Now;
+            Hub.FadeRunner.AutoRun = false;
             Hub.BindLockSleep(Lock, () => SleepSetting, () => PersistedRestore, level => PersistedRestore = level);
             Connect();
             Assert.True(Hub.SetLcdBacklight(brightness, 0));
@@ -56,15 +65,95 @@ public class KrakenLockSleepTests
         var rig = new Rig(60);
 
         rig.Lock.Set(true);
+        rig.Advance(5000);
         Assert.True(rig.Wrote(0));
         Assert.True(rig.Hub.LockDimmed);
         Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
 
         rig.Hid.Writes.Clear();
         rig.Lock.Set(false);
+        rig.Advance(5000);
         Assert.True(rig.Wrote(60));
         Assert.False(rig.Hub.LockDimmed);
         Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
+    }
+
+    private static int[] BacklightLevels(Rig rig) =>
+        rig.Hid.Writes
+            .Where(w => w[0] == KrakenProtocol.EncodeSetBacklight(0, 0)[0] && w[1] == KrakenProtocol.EncodeSetBacklight(0, 0)[1])
+            .Select(w => (int)w[3])
+            .ToArray();
+
+    [Fact]
+    public void Lock_steps_the_backlight_down_to_zero_and_the_cooler_ends_dark()
+    {
+        var rig = new Rig(60);
+        rig.Hid.Writes.Clear();
+
+        rig.Lock.Set(true);
+        for (var i = 0; i < 45; i++) rig.Advance(40);
+
+        var levels = BacklightLevels(rig);
+        Assert.True(levels.Length >= 8, "a ramp, not a jump: " + string.Join(",", levels));
+        Assert.Equal(0, levels[^1]);
+        Assert.Equal(levels.OrderByDescending(l => l), levels);
+        Assert.True(rig.Hub.LockDimmed);
+        Assert.Equal(60, rig.PersistedRestore);
+    }
+
+    [Fact]
+    public void Unlock_ramps_up_from_zero_and_ends_on_exactly_the_level_the_lock_started_at()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        rig.Advance(5000);
+        rig.Hid.Writes.Clear();
+
+        rig.Lock.Set(false);
+        for (var i = 0; i < 30; i++) rig.Advance(40);
+
+        var levels = BacklightLevels(rig);
+        Assert.Equal(60, levels[^1]);
+        Assert.Equal(levels.OrderBy(l => l), levels);
+        Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
+        Assert.Null(rig.PersistedRestore);
+    }
+
+    [Fact]
+    public void An_unlock_mid_fade_down_reverses_to_the_start_level_not_the_step_it_caught()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        rig.Advance(750);
+        rig.Hid.Writes.Clear();
+
+        rig.Lock.Set(false);
+        rig.Advance(5000);
+
+        var levels = BacklightLevels(rig);
+        Assert.Equal(60, levels[^1]);
+        Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
+        Assert.Null(rig.PersistedRestore);
+    }
+
+    [Fact]
+    public void A_lock_mid_fade_up_reverses_down_and_the_next_unlock_still_restores_the_start_level()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        rig.Advance(5000);
+        rig.Lock.Set(false);
+        rig.Advance(450);
+
+        rig.Lock.Set(true);
+        rig.Advance(5000);
+        Assert.Equal(0, BacklightLevels(rig)[^1]);
+        Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
+
+        rig.Hid.Writes.Clear();
+        rig.Lock.Set(false);
+        rig.Advance(5000);
+        Assert.Equal(60, BacklightLevels(rig)[^1]);
     }
 
     [Fact]
@@ -89,6 +178,7 @@ public class KrakenLockSleepTests
     {
         var rig = new Rig(60);
         rig.Lock.Set(true);
+        rig.Advance(5000);
         rig.Hid.Writes.Clear();
 
         Assert.True(rig.Hub.SetLcdBacklight(25, 0));
@@ -98,6 +188,7 @@ public class KrakenLockSleepTests
         Assert.Equal(25, rig.Hub.Snapshot.LcdBrightness);
         rig.Hid.Writes.Clear();
         rig.Lock.Set(false);
+        rig.Advance(5000);
         Assert.True(rig.Wrote(25));
     }
 
@@ -131,6 +222,7 @@ public class KrakenLockSleepTests
     {
         var rig = new Rig(60);
         rig.Lock.Set(true);
+        rig.Advance(5000);
 
         rig.Reconnect();
 
@@ -139,6 +231,7 @@ public class KrakenLockSleepTests
         Assert.Equal(60, rig.Hub.Snapshot.LcdBrightness);
         rig.Hid.Writes.Clear();
         rig.Lock.Set(false);
+        rig.Advance(5000);
         Assert.True(rig.Wrote(60));
     }
 

@@ -86,6 +86,16 @@ public sealed class KrakenHub : IDisposable
     // Changes made while dark are stored and applied on unlock, ahead of the backlight, so
     // nothing here can put an image on a glass the lock is holding at zero.
     private bool _lockPendingReupload;
+    // The lock fade in flight. Sampled by the runner; the level it returns to is _lockSavedBrightness,
+    // fixed before the first step, and no step ever reaches the snapshot or the settings.
+    private LcdFade? _fade;
+    private int _fadeLastSent = -1;
+    private LcdFadeRunner? _fadeRunner;
+
+    /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
+    internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
+
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade);
     private KrakenDisplayMode? _lockPendingMode;
 
     /// <summary>True while the lock holds the backlight at zero. Streamed frames are dropped meanwhile.</summary>
@@ -148,10 +158,13 @@ public sealed class KrakenHub : IDisposable
             {
                 return;
             }
+            // The snapshot always holds the user's level, never a fade step, so this is the level to
+            // come back to even when an unlock's fade up is caught half way.
             _lockSavedBrightness = _snapshot.LcdBrightness;
             _lockDimmed = true;
             _saveRestore?.Invoke(_lockSavedBrightness);
-            WriteLocked(KrakenProtocol.EncodeSetBacklight(0, _snapshot.LcdOrientationQuarterTurns));
+            var from = _fade is { Down: false } rising ? rising.LevelAt(Clock()) : _lockSavedBrightness;
+            StartFadeLocked(from, 0, SleepBlackoutCoordinator.LockFadeDuration);
             ServiceLog.Info($"[lcd-lock] kraken LCD sleeping (backlight {_lockSavedBrightness}% kept)");
         }
     }
@@ -169,15 +182,16 @@ public sealed class KrakenHub : IDisposable
             if (_isConnected && _device != null)
             {
                 ApplyPendingWhileDarkLocked();
-                if (WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns)))
+                // Up from 0, or from the step a fade down was caught on.
+                var from = _fade is { Down: true } falling ? falling.LevelAt(Clock()) : 0;
+                if (from == _lockSavedBrightness)
                 {
-                    _saveRestore?.Invoke(null);
-                    ServiceLog.Info($"[lcd-lock] kraken LCD waking to {_lockSavedBrightness}%");
+                    _fade = null;
+                    FinishRestoreLocked(WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns)));
                 }
                 else
                 {
-                    // Cleared only once the write lands; Poll and the next Connect retry it.
-                    _lockRestorePending = true;
+                    StartFadeLocked(from, _lockSavedBrightness, SleepBlackoutCoordinator.UnlockFadeDuration);
                 }
             }
             else
@@ -185,6 +199,76 @@ public sealed class KrakenHub : IDisposable
                 // The cooler stays dark and its read-back will say zero; Connect restores the real value.
                 _lockRestorePending = true;
             }
+        }
+    }
+
+    // Caller holds _lock. Cleared only once the write lands; Poll and the next Connect retry it.
+    private void FinishRestoreLocked(bool wrote)
+    {
+        if (wrote)
+        {
+            _saveRestore?.Invoke(null);
+            ServiceLog.Info($"[lcd-lock] kraken LCD waking to {_lockSavedBrightness}%");
+        }
+        else
+        {
+            _lockRestorePending = true;
+        }
+    }
+
+    // Caller holds _lock. A ramp that starts and ends at the same level is just the write.
+    private void StartFadeLocked(int from, int to, TimeSpan duration)
+    {
+        var turns = _snapshot.LcdOrientationQuarterTurns;
+        if (from == to)
+        {
+            _fade = null;
+            var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(to, turns));
+            if (to > 0)
+            {
+                FinishRestoreLocked(wrote);
+            }
+            return;
+        }
+        _fade = new LcdFade(from, to, duration, Clock());
+        // The cooler already shows the level the ramp starts at (a fade up starts from 0, which
+        // the dark write or the fade down left there).
+        _fadeLastSent = from;
+        FadeRunner.Kick();
+    }
+
+    /// <summary>One sample of the fade: writes the stepped level when it changed, finishes the ramp when it lands.</summary>
+    internal bool StepFade()
+    {
+        lock (_lock)
+        {
+            if (_fade is not { } fade || !_isConnected || _device == null)
+            {
+                _fade = null;
+                return false;
+            }
+            var now = Clock();
+            var level = fade.LevelAt(now);
+            var done = fade.IsDoneAt(now);
+            if (!done && level == _fadeLastSent)
+            {
+                return true;
+            }
+            var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(level, _snapshot.LcdOrientationQuarterTurns));
+            if (wrote)
+            {
+                _fadeLastSent = level;
+            }
+            if (!done)
+            {
+                return true;
+            }
+            _fade = null;
+            if (!fade.Down)
+            {
+                FinishRestoreLocked(wrote);
+            }
+            return false;
         }
     }
 
@@ -397,6 +481,7 @@ public sealed class KrakenHub : IDisposable
                 _lockSavedBrightness = persisted;
                 _lockRestorePending = true;
             }
+            _fade = null;
             var restore = _lockRestorePending || (_lockDimmed && !sleepNow);
             if (_lockDimmed || restore)
             {
@@ -608,7 +693,14 @@ public sealed class KrakenHub : IDisposable
                 _lockSavedBrightness = Math.Clamp(brightnessPercent, 0, 100);
                 // A restart mid-lock restores this level, not the one from before the change.
                 _saveRestore?.Invoke(_lockSavedBrightness);
-                report = KrakenProtocol.EncodeSetBacklight(0, orientationQuarterTurns);
+                // Dark, or the step a fade down is on: the change must not jump the ramp.
+                var shown = _fade is { } running ? running.LevelAt(Clock()) : 0;
+                report = KrakenProtocol.EncodeSetBacklight(shown, orientationQuarterTurns);
+            }
+            else
+            {
+                // An explicit level after the unlock wins over a fade up still in flight.
+                _fade = null;
             }
             if (_device == null || !WriteLocked(report))
             {
@@ -1089,6 +1181,7 @@ public sealed class KrakenHub : IDisposable
         lock (_lock)
         {
             _isConnected = false;
+            _fade = null;
             _snapshot = KrakenSnapshot.Empty;
             _lcd?.Dispose();
             _lcd = null;
@@ -1107,6 +1200,7 @@ public sealed class KrakenHub : IDisposable
             }
             _disposed = true;
             _isConnected = false;
+            _fade = null;
             _snapshot = KrakenSnapshot.Empty;
             _lcd?.Dispose();
             _lcd = null;
