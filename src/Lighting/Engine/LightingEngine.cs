@@ -167,6 +167,46 @@ public sealed class LightingEngine : IDisposable
     /// </summary>
     public Func<Nexus.Service.Lighting.StaticDeviceAssignment, IEffect?>? StaticEffectFactory { get; set; }
 
+    /// <summary>
+    /// Per-device animation locks. Set once at wire-up; null in tests and any
+    /// host that never locks one, in which case sampling is unchanged.
+    /// </summary>
+    public Nexus.Service.Lighting.AnimateDeviceLockTracker? AnimateLocks { get; set; }
+
+    /// <summary>
+    /// Content tag of an effect's resolved current look, so the engine can tell
+    /// when a locked effect needs updating. Supplied by the provider, which owns
+    /// where that look lives.
+    /// </summary>
+    public Func<string, string?>? AnimateLockLookTag { get; set; }
+
+    /// <summary>
+    /// Builds a locked effect at its resolved current look. Given the instance
+    /// built before (or null), it may update that one in place and return it,
+    /// which avoids a shader recompile per slider drag; any other return value
+    /// replaces it and the engine disposes the old one.
+    /// </summary>
+    public Func<string, IEffect?, IEffect?>? AnimateLockEffectFactory { get; set; }
+
+    // One live instance per distinct locked effect key. Engine thread only: the
+    // GL context lives there.
+    private sealed class LockedRender
+    {
+        public IEffect? Effect;
+        public CanvasBuffer Canvas = null!;
+        public string? Tag;
+        public bool Failed;
+        public long RenderedTick = -1;
+    }
+    private readonly Dictionary<string, LockedRender> _lockRenders = new(StringComparer.Ordinal);
+    // Device id to the canvas it samples this tick; a null canvas means the
+    // main one. Absent means no animation lock (or its effect failed to render).
+    private readonly Dictionary<string, CanvasBuffer?> _lockedDevices = new(StringComparer.Ordinal);
+    private int _lockStampSeen = -1;
+    private int _lockVersionSeen = -1;
+    private long _lockTick;
+    private bool[] _gameSkip = Array.Empty<bool>();
+
     // One assignment renders once into this scratch canvas and every device
     // wearing that look samples it. Static is a held frame, so a look is
     // rendered only when its key changes, not per frame.
@@ -641,6 +681,7 @@ public sealed class LightingEngine : IDisposable
                         // publish: UpdateDevices swaps the array lock-free,
                         // and the skip mask below is indexed against it.
                         var devices = _devices;
+                        RenderAnimateLocks(effect);
                         SampleDevicesFromCanvas(devices);
                         ApplyLedColorLocks(devices);
                         if (effect is GameSyncEffect gs)
@@ -648,7 +689,7 @@ public sealed class LightingEngine : IDisposable
                             // A locked look (or a highlight / test pattern)
                             // already owns its device; the game frame must
                             // not paint over it.
-                            gs.WriteToDevices(devices, _overlaid);
+                            gs.WriteToDevices(devices, GameSkipMask(devices));
                             // The game frame paints whole devices, locked LEDs too.
                             ApplyLedColorLocks(devices);
                         }
@@ -726,12 +767,170 @@ public sealed class LightingEngine : IDisposable
         }
         finally
         {
+            DisposeLockRenders();
             _canvas.Clear();
             foreach (var dev in _devices)
             {
                 dev.Clear();
             }
         }
+    }
+
+    private void DisposeLockRenders()
+    {
+        foreach (var r in _lockRenders.Values)
+        {
+            try { r.Effect?.Dispose(); } catch { /* best-effort */ }
+        }
+        _lockRenders.Clear();
+        _lockedDevices.Clear();
+        _lockStampSeen = -1;
+        _lockVersionSeen = -1;
+    }
+
+    /// <summary>
+    /// Renders each distinct locked effect that is not the active one onto its
+    /// own canvas and records which canvas every locked device samples. The
+    /// active effect's devices simply keep the main canvas. Engine thread.
+    /// </summary>
+    private void RenderAnimateLocks(IEffect active)
+    {
+        var tracker = AnimateLocks;
+        _lockedDevices.Clear();
+        if (tracker is null || !tracker.Any)
+        {
+            if (_lockRenders.Count > 0)
+            {
+                DisposeLockRenders();
+            }
+            return;
+        }
+        var factory = AnimateLockEffectFactory;
+        if (factory is null)
+        {
+            return;
+        }
+        var locks = tracker.Snapshot();
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var tick = ++_lockTick;
+        var stamp = tracker.ChangeStamp;
+        var version = tracker.Version;
+        var recheck = stamp != _lockStampSeen || version != _lockVersionSeen;
+        if (version != _lockVersionSeen)
+        {
+            // Drop instances no lock references any more.
+            List<string>? stale = null;
+            foreach (var key in _lockRenders.Keys)
+            {
+                var used = false;
+                foreach (var v in locks.Values)
+                {
+                    if (string.Equals(v, key, StringComparison.Ordinal)) { used = true; break; }
+                }
+                if (!used) (stale ??= new List<string>()).Add(key);
+            }
+            if (stale is not null)
+            {
+                foreach (var key in stale)
+                {
+                    try { _lockRenders[key].Effect?.Dispose(); } catch { /* best-effort */ }
+                    _lockRenders.Remove(key);
+                }
+            }
+        }
+        _lockStampSeen = stamp;
+        _lockVersionSeen = version;
+
+        var activeName = active.Name;
+        foreach (var (deviceId, key) in locks)
+        {
+            if (string.Equals(activeName, key, StringComparison.Ordinal))
+            {
+                _lockedDevices[deviceId] = null;
+                continue;
+            }
+            if (!_lockRenders.TryGetValue(key, out var render))
+            {
+                render = new LockedRender { Canvas = new CanvasBuffer(_canvas.Width, _canvas.Height) };
+                _lockRenders[key] = render;
+                recheck = true;
+            }
+            if (recheck)
+            {
+                UpdateLockRender(key, render, factory);
+            }
+            if (render.Failed || render.Effect is null)
+            {
+                continue;
+            }
+            if (render.RenderedTick != tick)
+            {
+                try
+                {
+                    render.Effect.RenderFrame(render.Canvas, nowMs);
+                    render.RenderedTick = tick;
+                }
+                catch (Exception ex)
+                {
+                    // A locked effect that cannot render must not take the
+                    // frame down; its devices fall through to the canvas.
+                    render.Failed = true;
+                    Gpu.GpuContext.Log($"[animate-lock] render failed for {key}: {ex.GetType().Name}: {ex.Message}");
+                    continue;
+                }
+            }
+            _lockedDevices[deviceId] = render.Canvas;
+        }
+    }
+
+    private void UpdateLockRender(string key, LockedRender render, Func<string, IEffect?, IEffect?> factory)
+    {
+        var tagFn = AnimateLockLookTag;
+        var tag = tagFn?.Invoke(key);
+        if (render.Effect is not null && !render.Failed && tag is not null && tag == render.Tag)
+        {
+            return;
+        }
+        try
+        {
+            var previous = render.Failed ? null : render.Effect;
+            var built = factory(key, previous);
+            if (!ReferenceEquals(built, render.Effect))
+            {
+                try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+            }
+            render.Effect = built;
+            render.Tag = tag;
+            render.Failed = built is null;
+        }
+        catch (Exception ex)
+        {
+            try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+            render.Effect = null;
+            render.Tag = tag;
+            render.Failed = true;
+            Gpu.GpuContext.Log($"[animate-lock] build failed for {key}: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The skip mask for the game frame: whatever an overlay painted, plus
+    /// animation-locked devices, which the shared game frame must not overwrite.
+    /// The key-reactive pass keeps using the overlay mask alone, so a locked
+    /// keyboard still reacts to presses.
+    /// </summary>
+    private bool[] GameSkipMask(DeviceFrame[] devices)
+    {
+        if (_lockedDevices.Count == 0)
+        {
+            return _overlaid;
+        }
+        if (_gameSkip.Length < devices.Length) _gameSkip = new bool[devices.Length];
+        for (var i = 0; i < devices.Length; i++)
+        {
+            _gameSkip[i] = (i < _overlaid.Length && _overlaid[i]) || _lockedDevices.ContainsKey(devices[i].Id);
+        }
+        return _gameSkip;
     }
 
     /// <summary>
@@ -756,6 +955,11 @@ public sealed class LightingEngine : IDisposable
             var editing = d.HighlightLeds is { Count: > 0 } || d.TestPattern is not null
                 || d.PreviewLayout is not null || d.PreviewLedCount is not null;
             if (editing && deviceIds.Contains(d.Id))
+            {
+                return false;
+            }
+            // A locked device shows its own effect, which a loop rendered from the active one would miss.
+            if (AnimateLocks?.IsLocked(d.Id) == true && deviceIds.Contains(d.Id))
             {
                 return false;
             }
@@ -821,7 +1025,7 @@ public sealed class LightingEngine : IDisposable
                 var shadow = req.NewShadowFrames();
                 effect.RenderFrame(_aheadCanvas, req.TickMs[req.NextFrame]);
                 _sampleCanvas = _aheadCanvas;
-                SampleDevicesFromCanvas(shadow);
+                SampleDevicesFromCanvas(shadow, honorAnimateLocks: false);
                 ApplyLedColorLocks(shadow);
                 foreach (var d in shadow)
                 {
@@ -849,7 +1053,20 @@ public sealed class LightingEngine : IDisposable
         }
     }
 
-    private void SampleDevicesFromCanvas(DeviceFrame[] devices)
+    private void SampleDevicesFromCanvas(DeviceFrame[] devices, bool honorAnimateLocks = true)
+    {
+        var baseCanvas = _sampleCanvas;
+        try
+        {
+            SampleDevicesCore(devices, baseCanvas, honorAnimateLocks && _lockedDevices.Count > 0);
+        }
+        finally
+        {
+            _sampleCanvas = baseCanvas;
+        }
+    }
+
+    private void SampleDevicesCore(DeviceFrame[] devices, CanvasBuffer baseCanvas, bool useLocks)
     {
         var cw = _sampleCanvas.Width;
         var ch = _sampleCanvas.Height;
@@ -857,13 +1074,18 @@ public sealed class LightingEngine : IDisposable
         // Overlays first, so an LED they own never gets a canvas colour it is
         // about to lose. Correctness no longer rests on this - DeviceFrame
         // publishes once per tick - but painting an LED twice is wasted work.
-        var overlaid = ApplyTestOverlays(devices);
+        var overlaid = ApplyTestOverlays(devices, useLocks);
         // Placed devices follow the scene camera under every sampling mode: a
         // sweep in 3D crosses the whole scene instead of each device end to end.
         var scene = _scene;
         for (var di = 0; di < devices.Length; di++)
         {
             var dev = devices[di];
+            // An animation-locked device samples its effect's canvas, the main
+            // one when it is locked onto the active effect.
+            _sampleCanvas = useLocks && _lockedDevices.TryGetValue(dev.Id, out var lockCanvas) && lockCanvas is not null
+                ? lockCanvas
+                : baseCanvas;
             // Preview LED count from the editor's unsaved draft; clamped to the
             // physical buffer size because SetLed bounds-guards on LedCount.
             var ledCount = dev.PreviewLedCount is { } pc
@@ -1265,7 +1487,7 @@ public sealed class LightingEngine : IDisposable
     /// Returns, per device, whether it painted the whole preview range, so the
     /// caller can skip a canvas sample that would only be overwritten.
     /// </summary>
-    private bool[] ApplyTestOverlays(DeviceFrame[] devices)
+    private bool[] ApplyTestOverlays(DeviceFrame[] devices, bool useLocks)
     {
         if (_overlaid.Length < devices.Length) _overlaid = new bool[devices.Length];
         var owned = _overlaid;
@@ -1293,8 +1515,10 @@ public sealed class LightingEngine : IDisposable
                 continue;
             }
 
+            // An animation lock outranks a static look, locked or not.
             if (StaticEffects is not null
                 && dev.TestPattern is null
+                && !(useLocks && _lockedDevices.ContainsKey(dev.Id))
                 && StaticEffects.TryGet(dev.Id, out var assignment))
             {
                 // A palette pick is a colour, not an effect: nothing to render,

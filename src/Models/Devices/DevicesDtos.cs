@@ -379,6 +379,20 @@ public class StaticDeviceLookDto
     /// <summary>Held in every mode; picks are refused until unlocked.</summary>
     public bool Locked { get; set; }
 }
+/// <summary>GET /devices/lighting-devices/animate-locks: device id to the Animate
+/// effect key it is locked onto.</summary>
+public class AnimateDeviceLocksResponse
+{
+    public Dictionary<string, string> Locks { get; set; } = new();
+}
+
+/// <summary>POST /devices/lighting-devices/animate-lock. A null Effect unlocks.</summary>
+public class SetAnimateLockBody
+{
+    public string Id { get; set; } = "";
+    public string? Effect { get; set; }
+}
+
 public class SetStaticLockBody { public string Id { get; set; } = ""; public bool Locked { get; set; } }
 public class SetZoneLedCountBody { public string Id { get; set; } = ""; public int Count { get; set; } }
 public class IdentifyLightingDeviceBody { public string Id { get; set; } = ""; public int DurationMs { get; set; } = 2000; }

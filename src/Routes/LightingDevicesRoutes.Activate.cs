@@ -32,6 +32,7 @@ public static partial class DevicesRoutes
         var uncontrolled = preset.UncontrolledDevices is null ? null : new List<string>(preset.UncontrolledDevices);
         var look = preset.Look;
         var staticLooks = preset.StaticDeviceLooks is null ? null : DeepCopyStaticLooks(preset.StaticDeviceLooks);
+        var animateLocks = preset.AnimateDeviceLocks is null ? null : new Dictionary<string, string>(preset.AnimateDeviceLocks);
         var devicePrefs = preset.DevicePrefs is null ? null : DeepCopyDevicePrefs(preset.DevicePrefs);
         var sceneView = preset.SceneView is null ? null : CopySceneView(preset.SceneView);
         // Ids the preset re-enables. Smart lights re-push their static colour
@@ -67,6 +68,11 @@ public static partial class DevicesRoutes
                 // off the store's OnChanged, so writing this is what repaints
                 // the devices - no separate replay.
                 settings.Lighting.StaticDeviceLooks = staticLooks;
+            }
+            if (animateLocks is not null)
+            {
+                // Same as the static looks: the tracker re-hydrates off OnChanged.
+                settings.Lighting.AnimateDeviceLocks = animateLocks;
             }
             if (devicePrefs is not null)
             {

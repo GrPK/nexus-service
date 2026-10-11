@@ -95,6 +95,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _engine.StaticEffectFactory = a => BuildAnimateEffect(
             a.Effect, 0f, a.Intensity, a.Hue, a.Colorize, a.Saturation, a.Contrast,
             a.Params is null ? null : new System.Collections.Generic.Dictionary<string, float>(a.Params));
+        _engine.AnimateLockLookTag = key => ResolveLockedLook(key) is { } look ? HashSlot(look) : null;
+        _engine.AnimateLockEffectFactory = BuildLockedEffect;
         _hub = hub;
         _rgb = rgb;
         _gpu = gpu;
@@ -701,6 +703,52 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             ReapplyActiveLook();
         }
+    }
+
+    /// <summary>
+    /// The look an animation-locked device shows for an effect: the stored
+    /// per-effect state, else its resolved selected preset slot. Same resolution
+    /// the effect would use if it were the active one.
+    /// </summary>
+    private Nexus.Service.Persistence.AnimateEffectState? ResolveLockedLook(string effect)
+    {
+        var a = _store.Load().Lighting.Animate;
+        if (a.States.TryGetValue(effect, out var state) && state is not null)
+        {
+            return state;
+        }
+        return AnimateTemplateDefaults.ResolveSelected(a.Templates, effect);
+    }
+
+    /// <summary>
+    /// Builds, or updates in place, the shader a locked device runs. In-place
+    /// updates mirror <see cref="ReapplyActiveLook"/>, so a slider drag does not
+    /// recompile the shader.
+    /// </summary>
+    private IEffect? BuildLockedEffect(string effect, IEffect? existing)
+    {
+        var look = ResolveLockedLook(effect);
+        if (look is null)
+        {
+            return null;
+        }
+        var speed = (float)(look.Speed / 50.0);
+        var intensity = look.Intensity > 0 ? look.Intensity : 1f;
+        var extras = look.Params is { Count: > 0 }
+            ? new System.Collections.Generic.Dictionary<string, float>(look.Params)
+            : null;
+        if (existing is ShaderEffect cur && cur.Name == effect)
+        {
+            cur.Speed = effect == "pulse" ? speed * 0.5f : speed;
+            cur.Intensity = intensity;
+            cur.Hue = look.Hue;
+            cur.Colorize = look.Colorize;
+            cur.Saturation = look.Saturation;
+            cur.Contrast = look.Contrast;
+            cur.ExtraParams = extras;
+            return cur;
+        }
+        return BuildAnimateEffect(effect, speed, intensity, look.Hue, look.Colorize, look.Saturation, look.Contrast, extras);
     }
 
     /// <summary>Content tag of the slot currently driving the LEDs, or null when no animate effect is active.</summary>

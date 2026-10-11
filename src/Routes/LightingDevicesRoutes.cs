@@ -138,6 +138,7 @@ public static partial class DevicesRoutes
             // lists above they are not replayed on undo/redo, so a straight
             // copy cannot rewrite the outgoing preset on the way past.
             preset.StaticDeviceLooks = DeepCopyStaticLooks(s.Lighting.StaticDeviceLooks);
+            preset.AnimateDeviceLocks = new Dictionary<string, string>(s.Lighting.AnimateDeviceLocks);
             preset.DevicePrefs = DeepCopyDevicePrefs(s.Devices.LightingDevicePrefs);
         });
     }
@@ -253,6 +254,7 @@ public static partial class DevicesRoutes
             return;
         }
         preset.StaticDeviceLooks = DeepCopyStaticLooks(settings.Lighting.StaticDeviceLooks);
+        preset.AnimateDeviceLocks = new Dictionary<string, string>(settings.Lighting.AnimateDeviceLocks);
         preset.DevicePrefs = DeepCopyDevicePrefs(settings.Devices.LightingDevicePrefs);
     }
 
@@ -966,12 +968,19 @@ public static partial class DevicesRoutes
             SetStaticLockBody body,
             Nexus.Service.Persistence.IConfigStore store,
             [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.StaticDeviceEffectTracker staticEffects,
+            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.AnimateDeviceLockTracker animateLocks,
             FeatureGates gates,
             Nexus.Service.Sockets.MultiplexHub hub) =>
         {
             if (!gates.Lighting)
             {
                 return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
+            }
+            // One lock kind per device: the animation lock would outrank the
+            // static look being locked, so refuse rather than hide it.
+            if (body.Locked && animateLocks.IsLocked(body.Id))
+            {
+                return Results.Conflict(ApiResponse.Fail("device is locked onto an animation"));
             }
             if (!staticEffects.SetLocked(body.Id, body.Locked))
             {
@@ -980,6 +989,60 @@ public static partial class DevicesRoutes
             CaptureDeviceStateIntoActive(store);
             // Unlike a pick, a lock changes what OTHER clients may write, so
             // they re-read the lock flags off this frame.
+            Nexus.Service.Sockets.PanelTopics.BroadcastLighting(hub);
+            return Results.Ok(ApiResponse.Ok());
+        }).AllowPanel();
+
+        app.MapGet("/devices/lighting-devices/animate-locks", (
+            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.AnimateDeviceLockTracker animateLocks) =>
+        {
+            return Results.Json(
+                new AnimateDeviceLocksResponse { Locks = new Dictionary<string, string>(animateLocks.Snapshot()) },
+                Nexus.Service.Serialization.AppJsonContext.Default.AnimateDeviceLocksResponse);
+        }).AllowPanel();
+
+        // Locks a device onto an Animate shader: the engine runs it on that
+        // device in every mode. Only the assignment is stored; the shader's
+        // look stays the global per-effect state. A null effect unlocks.
+        app.MapPost("/devices/lighting-devices/animate-lock", (
+            SetAnimateLockBody body,
+            Nexus.Service.Persistence.IConfigStore store,
+            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.StaticDeviceEffectTracker staticEffects,
+            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.AnimateDeviceLockTracker animateLocks,
+            FeatureGates gates,
+            Nexus.Service.Sockets.MultiplexHub hub) =>
+        {
+            if (!gates.Lighting)
+            {
+                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
+            }
+            if (string.IsNullOrEmpty(body.Id))
+            {
+                return Results.Json(
+                    ApiResponse.Fail("device id required"),
+                    Nexus.Service.Serialization.AppJsonContext.Default.ApiResponse,
+                    statusCode: 400);
+            }
+            if (string.IsNullOrEmpty(body.Effect))
+            {
+                animateLocks.Clear(body.Id);
+            }
+            else
+            {
+                if (!Nexus.Service.Lighting.AnimateDeviceLockTracker.IsAnimateEffect(body.Effect))
+                {
+                    return Results.Json(
+                    ApiResponse.Fail("not an animate effect"),
+                    Nexus.Service.Serialization.AppJsonContext.Default.ApiResponse,
+                    statusCode: 400);
+                }
+                if (staticEffects.IsLocked(body.Id))
+                {
+                    return Results.Conflict(ApiResponse.Fail("device look is locked"));
+                }
+                animateLocks.Set(body.Id, body.Effect);
+            }
+            CaptureDeviceStateIntoActive(store);
             Nexus.Service.Sockets.PanelTopics.BroadcastLighting(hub);
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();

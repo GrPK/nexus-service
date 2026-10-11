@@ -619,6 +619,10 @@ public sealed class LightingSettings
     /// hardware is meant to show, not a UI preference.
     /// </summary>
     public Dictionary<string, StaticDeviceLook> StaticDeviceLooks { get; set; } = new();
+    /// <summary>Per-device animation locks, effect key by lighting-device id. A
+    /// locked device runs that Animate shader in every mode; the shader's look
+    /// stays the global per-effect state.</summary>
+    public Dictionary<string, string> AnimateDeviceLocks { get; set; } = new();
     /// <summary>Per-LED colour locks, "#rrggbb" by lighting-device id then LED index; held in every mode.</summary>
     public Dictionary<string, Dictionary<int, string>> LedColorLocks { get; set; } = new();
     /// <summary>Per-keyboard key reactions by lighting-device id; rendered by <see cref="Nexus.Service.Lighting.KeyReactive.KeyReactiveOverlay"/>.</summary>
@@ -861,6 +865,9 @@ public sealed class LayoutPreset : IAppBoundPreset
     /// device wears instead of the shared canvas. Null on a preset saved before
     /// per-preset assignments; activate then leaves the live ones untouched.</summary>
     public Dictionary<string, StaticDeviceLook>? StaticDeviceLooks { get; set; }
+    /// <summary>Per-device animation locks captured at save time, same
+    /// null-means-untouched contract as <see cref="StaticDeviceLooks"/>.</summary>
+    public Dictionary<string, string>? AnimateDeviceLocks { get; set; }
     /// <summary>Per-device brightness / hue / saturation captured at save time,
     /// same null-means-untouched contract as the fields above.</summary>
     public Dictionary<string, LightingDevicePreference>? DevicePrefs { get; set; }
