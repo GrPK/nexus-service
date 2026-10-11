@@ -109,11 +109,113 @@ public sealed class TryxPanoramaHub : IDisposable
     // Taken only briefly and never across a send, so it cannot invert with _lock or _txGate.
     private readonly object _lockGate = new();
 
-    /// <summary>Test seam: runs between the lock's decision and its off frame.</summary>
+    /// <summary>Test seam: runs between the lock's decision and the start of its fade.</summary>
     internal Action? TestHookAfterLockDecision { get; set; }
 
     /// <summary>True while the lock holds the screen off on the wire.</summary>
     internal bool LockDimmed => _lockDimmed;
+
+    /// <summary>
+    /// Brightness steps a lock fade takes. Every step is a full config frame through the same
+    /// serialized write path as any other command, and the panel re-enumerates on its own about
+    /// once a minute, so this stays well under the other devices' step count.
+    /// </summary>
+    internal const int FadeSteps = 8;
+
+    // The fade, sampled by one runner loop: a new or reversed fade is just new state for the same
+    // loop, so steps never queue up behind each other, and a step that blocks on a slow write is
+    // simply skipped over because the level is read off the clock.
+    private readonly object _fadeGate = new();
+    private LcdFade? _fade;
+    private int _fadeLastSent = -1;
+    // The panel was last told the screen is off (the end of a fade down or an instant off).
+    private bool _offOnWire;
+    private LcdFadeRunner? _fadeRunner;
+
+    /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
+    internal Func<long> FadeClock { get; set; } = () => Environment.TickCount64;
+
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade);
+
+    // Caller holds _lockGate. Only records the ramp and wakes the loop; nothing is sent here.
+    private void BeginFadeLocked(int from, int to, TimeSpan duration)
+    {
+        lock (_fadeGate)
+        {
+            _fade = new LcdFade(from, to, duration, FadeClock(), FadeSteps);
+            _fadeLastSent = -1;
+        }
+        FadeRunner.Kick();
+    }
+
+    private void CancelFade()
+    {
+        lock (_fadeGate) { _fade = null; }
+    }
+
+    private int CurrentWireLevel()
+    {
+        lock (_fadeGate)
+        {
+            if (_fade is { } running)
+            {
+                return running.LevelAt(FadeClock());
+            }
+        }
+        return _offOnWire ? 0 : State.Brightness;
+    }
+
+    /// <summary>One sample of the fade: sends the stepped level when it changed, and the final state when it lands.</summary>
+    internal bool StepFade()
+    {
+        LcdFade? fade;
+        int lastSent;
+        lock (_fadeGate)
+        {
+            fade = _fade;
+            lastSent = _fadeLastSent;
+        }
+        if (fade is null)
+        {
+            return false;
+        }
+        var now = FadeClock();
+        var level = fade.LevelAt(now);
+        if (!fade.IsDoneAt(now))
+        {
+            if (level != lastSent && IsConnected && SendOnly(TryxRkProtocol.BuildConfig(true, level)))
+            {
+                lock (_fadeGate)
+                {
+                    if (ReferenceEquals(_fade, fade)) { _fadeLastSent = level; }
+                }
+            }
+            return true;
+        }
+        // The end of the ramp: off for a fade down, the user's brightness for a fade up. Reliable,
+        // because this is the state the panel keeps.
+        var sent = IsConnected && SendReliable(fade.Down
+            ? TryxRkProtocol.BuildConfig(false, State.Brightness)
+            : TryxRkProtocol.BuildConfig(true, State.Brightness));
+        lock (_fadeGate)
+        {
+            if (!ReferenceEquals(_fade, fade))
+            {
+                // Reversed while that write was in flight; the new ramp owns the screen.
+                return true;
+            }
+            _fade = null;
+            if (sent)
+            {
+                _offOnWire = fade.Down;
+            }
+        }
+        if (sent && !fade.Down)
+        {
+            _slideshow.Rearm(State.CurrentMedia, NowMs());
+        }
+        return false;
+    }
 
     internal void OnLockChanged(bool locked)
     {
@@ -133,17 +235,15 @@ public sealed class TryxPanoramaHub : IDisposable
                 _lockDimmed = true;
             }
             TestHookAfterLockDecision?.Invoke();
-            if (IsConnected && State.ScreenEnabled)
+            lock (_lockGate)
             {
-                ServiceLog.Info("[lcd-lock] tryx screen sleeping");
-                SendReliable(TryxRkProtocol.BuildConfig(false, State.Brightness));
-                bool unlockedMeanwhile;
-                lock (_lockGate) { unlockedMeanwhile = !_lockDimmed; }
-                if (unlockedMeanwhile && IsConnected && State.ScreenEnabled)
+                // The unlock may have run since; then there is nothing to fade out.
+                if (!_lockDimmed || !IsConnected || !State.ScreenEnabled)
                 {
-                    // The unlock's wake went out before this off did; put the screen back.
-                    SendReliable(TryxRkProtocol.BuildConfig(true, State.Brightness));
+                    return;
                 }
+                ServiceLog.Info("[lcd-lock] tryx screen fading out");
+                BeginFadeLocked(CurrentWireLevel(), 0, SleepBlackoutCoordinator.LockFadeDuration);
             }
             return;
         }
@@ -153,16 +253,14 @@ public sealed class TryxPanoramaHub : IDisposable
             _lockSleep.Drain();
             wasDimmed = _lockDimmed;
             _lockDimmed = false;
-        }
-        if (!wasDimmed)
-        {
-            return;
-        }
-        if (IsConnected && State.ScreenEnabled)
-        {
-            ServiceLog.Info("[lcd-lock] tryx screen waking");
-            SendReliable(TryxRkProtocol.BuildConfig(true, State.Brightness));
-            _slideshow.Rearm(State.CurrentMedia, NowMs());
+            if (!wasDimmed || !IsConnected || !State.ScreenEnabled)
+            {
+                return;
+            }
+            ServiceLog.Info("[lcd-lock] tryx screen fading in");
+            // Screen on at brightness 0, then up to the user's level: from 0 when the panel is off,
+            // or from the step a fade down was caught on.
+            BeginFadeLocked(CurrentWireLevel(), State.Brightness, SleepBlackoutCoordinator.UnlockFadeDuration);
         }
     }
 
@@ -552,6 +650,9 @@ public sealed class TryxPanoramaHub : IDisposable
                 {
                     _lockDimmed = true;
                 }
+                // A reconnect starts from the settled state, not from half a ramp.
+                CancelFade();
+                _offOnWire = !Wire(State.ScreenEnabled);
             }
             transport.Write(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), State.Brightness));
             // Bootstrap the device serial: get_file_list needs the panel's serial_number (locked),
@@ -665,6 +766,7 @@ public sealed class TryxPanoramaHub : IDisposable
         var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(enable), State.Brightness));
         if (ok)
         {
+            _offOnWire = !Wire(enable);
             State.ScreenEnabled = enable;
             // The clip that comes back with the screen gets a full hold.
             if (enable) _slideshow.Rearm(State.CurrentMedia, NowMs());
