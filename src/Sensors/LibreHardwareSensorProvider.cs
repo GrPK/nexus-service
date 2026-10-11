@@ -546,23 +546,22 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
             var max = SensorValueSanitizer.Sanitize(s.Max ?? 0f);
             if (s.SensorType == SensorType.Data)
             {
-                // LHM reports Data in bytes; the wire keeps GB, and GPU memory keeps SmallData in MB.
-                var small = hw.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel;
-                value = LhmDataSensors.ToLegacyValue(value, small);
-                min = LhmDataSensors.ToLegacyValue(min, small);
-                max = LhmDataSensors.ToLegacyValue(max, small);
+                var unit = LhmDataSensors.UnitFor(hw.HardwareType.ToString(), s.Name);
+                value = LhmDataSensors.ToLegacyValue(value, unit);
+                min = LhmDataSensors.ToLegacyValue(min, unit);
+                max = LhmDataSensors.ToLegacyValue(max, unit);
                 return new HardwareSensor
                 {
-                    Id = LhmDataSensors.ToLegacyId(s.Identifier.ToString(), small),
+                    Id = LhmDataSensors.ToLegacyId(s.Identifier.ToString(), unit),
                     Name = s.Name,
-                    Type = LhmDataSensors.ToLegacyType(small),
+                    Type = LhmDataSensors.ToLegacyType(unit),
                     Value = value,
                     Min = min,
                     Max = max,
-                    Units = LhmDataSensors.ToLegacyUnits(small),
-                    Formatted = LhmDataSensors.Format(value, small),
-                    FormattedMax = LhmDataSensors.Format(max, small),
-                    FormattedMin = LhmDataSensors.Format(min, small),
+                    Units = LhmDataSensors.ToLegacyUnits(unit),
+                    Formatted = LhmDataSensors.Format(value, unit),
+                    FormattedMax = LhmDataSensors.Format(max, unit),
+                    FormattedMin = LhmDataSensors.Format(min, unit),
                     Parent = new SensorParent { Id = hw.Identifier.ToString(), Name = hw.Name },
                 };
             }

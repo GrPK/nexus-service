@@ -13,7 +13,7 @@ public enum StorageBusKind
     Other,
 }
 
-/// <summary>Mirrors DiskInfoToolkit.StorageHealthStatus without a package dependency, so the classifier stays pure.</summary>
+/// <summary>Mirrors DiskInfoToolkit.Smart.StorageHealthStatus without a package dependency, so the classifier stays pure.</summary>
 public enum VendorHealthStatus
 {
     Good,
@@ -37,7 +37,7 @@ public enum DriveStatus
     Unknown,
 }
 
-/// <summary>One SMART attribute row, mirroring DiskInfoToolkit.SmartAttributeEntry's field shapes.</summary>
+/// <summary>One SMART attribute row, mirroring DiskInfoToolkit.Smart.SmartAttributeEntry's field shapes.</summary>
 public sealed record SmartAttributeSample(byte Id, string Name, byte Current, byte Worst, byte Threshold, ulong Raw);
 
 /// <summary>One classification finding. Code is the stable machine key (web maps to i18n); Summary/Detail are plain English, supplemental only.</summary>
