@@ -150,8 +150,8 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
             // as the ceiling for "GPU Memory Used" / "Free" so the client can
             // draw a proportional gauge without juggling sibling lookups.
             float vramTotalMb = hw.Sensors
-                .Where(s => s.SensorType == SensorType.SmallData && s.Name.Contains("Total", StringComparison.OrdinalIgnoreCase))
-                .Select(s => SensorValueSanitizer.Sanitize(s.Value ?? 0f))
+                .Where(s => s.SensorType == SensorType.Data && s.Name.Contains("Total", StringComparison.OrdinalIgnoreCase))
+                .Select(s => LhmDataSensors.BytesToMb(SensorValueSanitizer.Sanitize(s.Value ?? 0f)))
                 .FirstOrDefault();
             if (vramTotalMb > 0)
             {
@@ -212,11 +212,11 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
             // sensors self-describing.
             float used = hw.Sensors
                 .Where(s => s.SensorType == SensorType.Data && s.Name.Contains("Used", StringComparison.OrdinalIgnoreCase))
-                .Select(s => SensorValueSanitizer.Sanitize(s.Value ?? 0f))
+                .Select(s => LhmDataSensors.BytesToGb(SensorValueSanitizer.Sanitize(s.Value ?? 0f)))
                 .FirstOrDefault();
             float avail = hw.Sensors
                 .Where(s => s.SensorType == SensorType.Data && s.Name.Contains("Available", StringComparison.OrdinalIgnoreCase))
-                .Select(s => SensorValueSanitizer.Sanitize(s.Value ?? 0f))
+                .Select(s => LhmDataSensors.BytesToGb(SensorValueSanitizer.Sanitize(s.Value ?? 0f)))
                 .FirstOrDefault();
             float total = used + avail;
             if (total > 0)
@@ -246,7 +246,7 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
         var avail = mem.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Data && s.Name.Contains("Available", StringComparison.OrdinalIgnoreCase));
 
         if (used?.Value != null && avail?.Value != null)
-            return $"{used.Value.Value + avail.Value.Value:F1} GB";
+            return $"{LhmDataSensors.BytesToGb(used.Value.Value + avail.Value.Value):F1} GB";
 
         return "";
     }
@@ -544,6 +544,28 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
             var value = SensorValueSanitizer.Sanitize(s.Value ?? 0f);
             var min = SensorValueSanitizer.Sanitize(s.Min ?? 0f);
             var max = SensorValueSanitizer.Sanitize(s.Max ?? 0f);
+            if (s.SensorType == SensorType.Data)
+            {
+                // LHM reports Data in bytes; the wire keeps GB, and GPU memory keeps SmallData in MB.
+                var small = hw.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel;
+                value = LhmDataSensors.ToLegacyValue(value, small);
+                min = LhmDataSensors.ToLegacyValue(min, small);
+                max = LhmDataSensors.ToLegacyValue(max, small);
+                return new HardwareSensor
+                {
+                    Id = LhmDataSensors.ToLegacyId(s.Identifier.ToString(), small),
+                    Name = s.Name,
+                    Type = LhmDataSensors.ToLegacyType(small),
+                    Value = value,
+                    Min = min,
+                    Max = max,
+                    Units = LhmDataSensors.ToLegacyUnits(small),
+                    Formatted = LhmDataSensors.Format(value, small),
+                    FormattedMax = LhmDataSensors.Format(max, small),
+                    FormattedMin = LhmDataSensors.Format(min, small),
+                    Parent = new SensorParent { Id = hw.Identifier.ToString(), Name = hw.Name },
+                };
+            }
             return new HardwareSensor
             {
                 Id = s.Identifier.ToString(),
@@ -575,8 +597,6 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
         SensorType.Level => "Level",
         SensorType.Factor => "Factor",
         SensorType.Power => "Power",
-        SensorType.Data => "Data",
-        SensorType.SmallData => "SmallData",
         SensorType.Throughput => "Throughput",
         SensorType.TimeSpan => "TimeSpan",
         SensorType.Energy => "Energy",
@@ -597,8 +617,6 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
         SensorType.Control => "%",
         SensorType.Level => "%",
         SensorType.Power => "W",
-        SensorType.Data => "GB",
-        SensorType.SmallData => "MB",
         SensorType.Throughput => "B/s",
         SensorType.Energy => "mWh",
         SensorType.Noise => "dBA",
@@ -615,8 +633,6 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
         SensorType.Current => $"{value:F3} A",
         SensorType.Fan => $"{value:F0} RPM",
         SensorType.Power => $"{value:F1} W",
-        SensorType.Data => $"{value:F2} GB",
-        SensorType.SmallData => $"{value:F0} MB",
         SensorType.Energy => $"{value:F0} mWh",
         SensorType.Throughput => FormatThroughput(value),
         SensorType.TimeSpan => FormatTimeSpan(value),
