@@ -27,12 +27,14 @@ public sealed class PowerEventListener : IHostedService, IDisposable
     private readonly RgbBridge _bridge;
     private readonly SleepBlackoutCoordinator _blackout;
     private readonly Nexus.Service.Peripherals.LianLi.LianLiHubSet? _lianLi;
+    private readonly Nexus.Service.Peripherals.LianLiWireless.Slv3Hub? _slv3;
 #if WINDOWS
     private bool _subscribed;
 #endif
 
-    public PowerEventListener(RgbBridge bridge, SleepBlackoutCoordinator blackout, Nexus.Service.Peripherals.LianLi.LianLiHubSet? lianLi = null)
+    public PowerEventListener(RgbBridge bridge, SleepBlackoutCoordinator blackout, Nexus.Service.Peripherals.LianLi.LianLiHubSet? lianLi = null, Nexus.Service.Peripherals.LianLiWireless.Slv3Hub? slv3 = null)
     {
+        _slv3 = slv3;
         _bridge = bridge;
         _blackout = blackout;
         _lianLi = lianLi;
@@ -71,10 +73,15 @@ public sealed class PowerEventListener : IHostedService, IDisposable
         // QSeriesPortWatcher uses: the machine stops once every subscriber
         // returns, so a blackout dispatched to the thread pool loses the race,
         // while a resume has no deadline. OnSuspending is budget-capped so it
-        // cannot hold this shared pump thread open.
+        // cannot hold this shared pump thread open. The Lian Li wireless SaveCfg
+        // follows the blackout: the pump waits only for its first attempt, capped.
         if (e.Mode == PowerModes.Suspend)
         {
             _blackout.OnSuspending();
+            // The SaveCfg sequence runs on a hub background task; this pump waits only for its first
+            // attempt, hard-capped by the hub, so a stuck USB write cannot hold it.
+            try { _ = _slv3?.OnSystemSuspending(); }
+            catch (Exception ex) { ServiceLog.Warn($"[lianli-wireless] suspend SaveCfg failed: {ex.Message}"); }
         }
         else if (e.Mode == PowerModes.Resume)
         {
