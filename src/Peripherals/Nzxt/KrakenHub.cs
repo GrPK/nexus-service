@@ -130,8 +130,12 @@ public sealed class KrakenHub : IDisposable
     // flight finishes before the backlight moves. The decision is taken under both locks:
     // a handler that waited behind a bucket upload while the PC was unlocked meanwhile sees
     // the unlock here and does nothing.
+    /// <summary>Test seam: runs where a handler that already knows it is locked waits for the device locks.</summary>
+    internal Action? TestHookBeforeLockEnter { get; set; }
+
     private void EnterLockSleep()
     {
+        TestHookBeforeLockEnter?.Invoke();
         lock (_lcdTransferLock)
         lock (_lock)
         {
@@ -165,15 +169,37 @@ public sealed class KrakenHub : IDisposable
             if (_isConnected && _device != null)
             {
                 ApplyPendingWhileDarkLocked();
-                WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns));
-                _saveRestore?.Invoke(null);
-                ServiceLog.Info($"[lcd-lock] kraken LCD waking to {_lockSavedBrightness}%");
+                if (WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns)))
+                {
+                    _saveRestore?.Invoke(null);
+                    ServiceLog.Info($"[lcd-lock] kraken LCD waking to {_lockSavedBrightness}%");
+                }
+                else
+                {
+                    // Cleared only once the write lands; Poll and the next Connect retry it.
+                    _lockRestorePending = true;
+                }
             }
             else
             {
                 // The cooler stays dark and its read-back will say zero; Connect restores the real value.
                 _lockRestorePending = true;
             }
+        }
+    }
+
+    // A restoring backlight write that failed at unlock is retried on every poll until it lands.
+    private void RetryRestoreLocked()
+    {
+        if (!_lockRestorePending || _lockDimmed || !_isConnected || !_model.HasLcd)
+        {
+            return;
+        }
+        if (WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns)))
+        {
+            _lockRestorePending = false;
+            _saveRestore?.Invoke(null);
+            ServiceLog.Info($"[lcd-lock] kraken LCD restored to {_lockSavedBrightness}% on retry");
         }
     }
 
@@ -387,19 +413,6 @@ public sealed class KrakenHub : IDisposable
                 0, 0, 0, 0, 0,
                 fw?.ToString() ?? "",
                 brightness, orientation, mode, channels);
-            if (_model.HasLcd && (sleepNow || restore))
-            {
-                WriteLocked(KrakenProtocol.EncodeSetBacklight(sleepNow ? 0 : brightness, orientation));
-                if (!sleepNow)
-                {
-                    _saveRestore?.Invoke(null);
-                }
-                ServiceLog.Info(sleepNow
-                    ? "[lcd-lock] kraken LCD attached while locked; staying dark"
-                    : $"[lcd-lock] kraken LCD restored to {brightness}% after reconnect");
-            }
-            _lockRestorePending = false;
-
             if (_model.HasLcd)
             {
                 _lcd = _lcdFactory?.Open(_device.Serial);
@@ -408,6 +421,32 @@ public sealed class KrakenHub : IDisposable
                     ServiceLog.Info("[nzxt-kraken] connected without an LCD bulk pipe; image upload unavailable");
                 }
             }
+
+            if (_model.HasLcd && !sleepNow)
+            {
+                // Changes made while the glass was held dark and not yet shown.
+                ApplyPendingWhileDarkLocked();
+            }
+            var restoreFailed = false;
+            if (_model.HasLcd && (sleepNow || restore))
+            {
+                var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(sleepNow ? 0 : brightness, orientation));
+                if (!sleepNow)
+                {
+                    if (wrote)
+                    {
+                        _saveRestore?.Invoke(null);
+                    }
+                    else
+                    {
+                        restoreFailed = true;
+                    }
+                }
+                ServiceLog.Info(sleepNow
+                    ? "[lcd-lock] kraken LCD attached while locked; staying dark"
+                    : $"[lcd-lock] kraken LCD restored to {brightness}% after reconnect");
+            }
+            _lockRestorePending = restoreFailed;
 
             _isConnected = true;
             return true;
@@ -492,6 +531,7 @@ public sealed class KrakenHub : IDisposable
                 return false;
             }
             DrainLocked();
+            RetryRestoreLocked();
             if (!WriteLocked(KrakenProtocol.EncodeStatusRequest()))
             {
                 return false;
@@ -566,6 +606,8 @@ public sealed class KrakenHub : IDisposable
             if (_lockDimmed)
             {
                 _lockSavedBrightness = Math.Clamp(brightnessPercent, 0, 100);
+                // A restart mid-lock restores this level, not the one from before the change.
+                _saveRestore?.Invoke(_lockSavedBrightness);
                 report = KrakenProtocol.EncodeSetBacklight(0, orientationQuarterTurns);
             }
             if (_device == null || !WriteLocked(report))
@@ -584,6 +626,7 @@ public sealed class KrakenHub : IDisposable
                 }
                 else
                 {
+                    _lockPendingReupload = false;
                     UploadLcdFrameLocked(_lastLcdFrame, turns);
                 }
             }
@@ -607,6 +650,9 @@ public sealed class KrakenHub : IDisposable
                 _snapshot = _snapshot.WithDisplayMode(mode);
                 return true;
             }
+            // An explicit change after the lock supersedes anything held from before it.
+            _lockPendingMode = null;
+            _lockPendingReupload = false;
             var reply = ExchangeLocked(
                 KrakenProtocol.EncodeSetDisplayMode(mode, bucketIndex), 0x39, 0x01, CommandReadTimeoutMs);
             if (reply == null || !KrakenProtocol.IsAck(reply))
@@ -705,6 +751,8 @@ public sealed class KrakenHub : IDisposable
                 _snapshot = _snapshot.WithDisplayMode(KrakenDisplayMode.Bucket);
                 return true;
             }
+            _lockPendingReupload = false;
+            _lockPendingMode = null;
             return UploadLcdFrameLocked(source, _snapshot.LcdOrientationQuarterTurns);
         }
     }

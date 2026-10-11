@@ -174,17 +174,75 @@ public class KrakenLockSleepTests
     }
 
     [Fact]
-    public void A_lock_handler_that_runs_after_the_unlock_does_not_dim()
+    public async System.Threading.Tasks.Task A_lock_handler_that_decided_before_the_unlock_does_not_dim_after_it()
     {
         var rig = new Rig(60);
+        using var entered = new System.Threading.ManualResetEventSlim();
+        using var release = new System.Threading.ManualResetEventSlim();
+        // The handler has been told "locked" and waits for the device locks (a bucket upload
+        // holds them for ~450 ms) while the unlock arrives.
+        rig.Hub.TestHookBeforeLockEnter = () => { entered.Set(); release.Wait(TimeSpan.FromSeconds(10)); };
+        var handler = System.Threading.Tasks.Task.Run(() => rig.Lock.Set(true));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
 
-        // The handler of a lock whose unlock already happened; the state says unlocked.
-        rig.Hub.OnLockChanged(true);
+        rig.Hub.TestHookBeforeLockEnter = null;
+        rig.Lock.Set(false);
+        release.Set();
+        await handler.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.False(rig.Hub.LockDimmed);
         Assert.Equal(0, rig.BacklightWrites);
         Assert.True(rig.Hub.PushStreamFrame(new byte[EliteNoRgb.LcdFrameBytes]));
         Assert.NotEmpty(rig.Hid.Writes);
+    }
+
+    [Fact]
+    public void A_failed_restoring_write_keeps_the_marker_and_the_next_poll_retries_it()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        rig.Hid.Writes.Clear();
+        rig.Hid.FailWrites = true;
+
+        rig.Lock.Set(false);
+
+        Assert.Equal(60, rig.PersistedRestore);
+        rig.Hid.FailWrites = false;
+        rig.Hub.Poll();
+        Assert.True(rig.Wrote(60));
+        Assert.Null(rig.PersistedRestore);
+    }
+
+    [Fact]
+    public void A_change_held_while_dark_is_applied_once_on_a_reconnect_after_the_unlock_and_never_replayed()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+        Assert.True(rig.Hub.SetDisplayMode(KrakenDisplayMode.Liquid));
+        rig.Hub.Detach();
+        rig.Lock.Set(false);
+        rig.Hid = new Recorder();
+
+        rig.Connect();
+
+        var modeWrite = KrakenProtocol.EncodeSetDisplayMode(KrakenDisplayMode.Liquid, 0);
+        Assert.Contains(rig.Hid.Writes, w => w[0] == modeWrite[0] && w[1] == modeWrite[1] && w[2] == modeWrite[2]);
+
+        rig.Hid.Writes.Clear();
+        rig.Lock.Set(true);
+        rig.Lock.Set(false);
+        Assert.DoesNotContain(rig.Hid.Writes, w => w[0] == modeWrite[0] && w[1] == modeWrite[1] && w[2] == modeWrite[2]);
+    }
+
+    [Fact]
+    public void A_level_set_while_dark_is_the_persisted_restore_level()
+    {
+        var rig = new Rig(60);
+        rig.Lock.Set(true);
+
+        Assert.True(rig.Hub.SetLcdBacklight(25, 0));
+
+        Assert.Equal(25, rig.PersistedRestore);
     }
 
     [Fact]
@@ -252,8 +310,14 @@ public class KrakenLockSleepTests
         public int UsagePage => 0xFF00;
         public int Usage => 1;
 
+        public bool FailWrites { get; set; }
+
         public bool Write(ReadOnlySpan<byte> report)
         {
+            if (FailWrites)
+            {
+                return false;
+            }
             var copy = report.ToArray();
             Writes.Add(copy);
             var reply = new byte[KrakenProtocol.ReportLength];
