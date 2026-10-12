@@ -55,39 +55,12 @@ public sealed class LightingWriteToolsTests : IDisposable
 
     // ── set_static_color ────────────────────────────────────────────────────
 
-    [Fact]
-    public async Task SetStaticColor_selects_the_matching_preset_and_persists_the_color()
-    {
-        var store = NewStore();
-        var lighting = new McpTestHarness.StubLightingProvider();
-        var tool = new SetStaticColorTool(lighting, store, new MultiplexHub());
-
-        var args = JsonSerializer.SerializeToElement(new { color = "#ff0000" });
-        var result = await tool.ExecuteAsync(args, CancellationToken.None);
-
-        Assert.False(result.IsError);
-        // Pure red must select the red preset, not the white one - selecting the
-        // real preset is what makes the change show in the lighting page, and
-        // the fills live in Static mode.
-        var call = Assert.Single(lighting.StartStaticCalls);
-        Assert.Equal("simplered", call.Effect);
-        Assert.True(call.Persist);
-
-        var color = store.Load().Lighting.StaticColor;
-        Assert.Equal((byte)255, color.R);
-        Assert.Equal((byte)0, color.G);
-        Assert.Equal((byte)0, color.B);
-    }
-
     [Theory]
-    [InlineData("#ff0000", "simplered")]
-    [InlineData("#00ff00", "simplegreen")]
-    [InlineData("#0000ff", "simpleblue")]
-    [InlineData("#ffff00", "simpleyellow")]
-    [InlineData("#ff8800", "simpleorange")]
-    [InlineData("#ffffff", "simplewhite")]
-    [InlineData("#111111", "simplewhite")]
-    public async Task SetStaticColor_snaps_to_the_nearest_preset(string color, string expectedEffect)
+    [InlineData("#ff0000")]
+    [InlineData("#336699")]
+    [InlineData("#111111")]
+    [InlineData("#00e639")]
+    public async Task SetStaticColor_sets_the_exact_global_color(string color)
     {
         var lighting = new McpTestHarness.StubLightingProvider();
         var tool = new SetStaticColorTool(lighting, NewStore(), new MultiplexHub());
@@ -95,35 +68,10 @@ public sealed class LightingWriteToolsTests : IDisposable
         var result = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { color }), CancellationToken.None);
 
         Assert.False(result.IsError);
-        Assert.Equal(expectedEffect, Assert.Single(lighting.StartStaticCalls).Effect);
-    }
-
-    [Fact]
-    public async Task SetStaticColor_dark_low_value_green_snaps_to_dark_green()
-    {
-        // Green (hue 120) and dark green (hue 126) are nearly hue-identical, so
-        // a dim, saturated green must be split off by HSV value, not hue alone.
-        var lighting = new McpTestHarness.StubLightingProvider();
-        var tool = new SetStaticColorTool(lighting, NewStore(), new MultiplexHub());
-
-        var result = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { color = "#006600" }), CancellationToken.None);
-
-        Assert.False(result.IsError);
-        Assert.Equal("simpledarkgreen", Assert.Single(lighting.StartStaticCalls).Effect);
-    }
-
-    [Fact]
-    public async Task SetStaticColor_bright_hue_near_dark_green_snaps_to_green()
-    {
-        // Hue-nearest alone would land here on dark green (hue 126); a bright
-        // value must still fall back to the plain green preset.
-        var lighting = new McpTestHarness.StubLightingProvider();
-        var tool = new SetStaticColorTool(lighting, NewStore(), new MultiplexHub());
-
-        var result = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { color = "#00e639" }), CancellationToken.None);
-
-        Assert.False(result.IsError);
-        Assert.Equal("simplegreen", Assert.Single(lighting.StartStaticCalls).Effect);
+        var call = Assert.Single(lighting.StartStaticCalls);
+        Assert.Equal(color, call.Color);
+        Assert.True(call.Persist);
+        Assert.Contains(color, result.Text ?? "");
     }
 
     [Theory]

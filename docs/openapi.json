@@ -25172,6 +25172,9 @@
               "$ref": "#/components/schemas/ScreenSyncMonitor"
             }
           },
+          "selectedMonitor": {
+            "type": "string"
+          },
           "selectionMode": {
             "type": "string"
           }
@@ -26697,6 +26700,12 @@
           "effect": {
             "type": "string"
           },
+          "color": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "intensity": {
             "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
             "type": [
@@ -26753,6 +26762,12 @@
         "properties": {
           "effect": {
             "type": "string"
+          },
+          "color": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "states": {
             "type": "object",
