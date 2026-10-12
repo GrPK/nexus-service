@@ -75,6 +75,108 @@ public class Slv3LcdHubTests
     }
 
     [Fact]
+    public void A_failed_write_drops_the_handle_and_the_screen_reopens_after_the_backoff()
+    {
+        long now = 0;
+        var discovery = new FakeDiscovery();
+        var factory = new FakeTransportFactory();
+        var hub = new Slv3LcdHub(discovery, factory.Create, nowMs: () => now);
+        discovery.Ports.Add(new Slv3LcdPortInfo { PortName = "path-1", Serial = "SER1" });
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 1 }));
+        var unplugged = factory.Opened["SER1"];
+        unplugged.FailWrites = true;
+
+        Assert.False(hub.PushImageToSerial("SER1", new byte[] { 2 }));
+        Assert.True(unplugged.Disposed);
+
+        // Inside the backoff the screen is not reopened.
+        Assert.False(hub.PushImageToSerial("SER1", new byte[] { 3 }));
+        Assert.Equal(1, factory.OpenCallCount);
+
+        now += 1000;
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 4 }));
+        Assert.Equal(2, factory.OpenCallCount);
+        Assert.Equal(new byte[] { 4 }, Assert.Single(factory.Opened["SER1"].PushedImages));
+    }
+
+    [Fact]
+    public void Forget_closes_a_departed_screen_so_its_return_opens_fresh()
+    {
+        var (hub, factory, discovery) = CreateHub();
+        discovery.Ports.Add(new Slv3LcdPortInfo { PortName = "path-1", Serial = "SER1" });
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 1 }));
+        var first = factory.Opened["SER1"];
+
+        hub.Forget("SER1", "left the bus");
+
+        Assert.True(first.Disposed);
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 2 }));
+        Assert.Equal(2, factory.OpenCallCount);
+    }
+
+    [Fact]
+    public void A_reopened_screen_gets_its_last_brightness_and_rotation_back()
+    {
+        long now = 0;
+        var discovery = new FakeDiscovery();
+        var factory = new FakeTransportFactory();
+        var hub = new Slv3LcdHub(discovery, factory.Create, nowMs: () => now);
+        discovery.Ports.Add(new Slv3LcdPortInfo { PortName = "path-1", Serial = "SER1" });
+        Assert.True(hub.SetBrightness("SER1", 40));
+        Assert.True(hub.SetRotation("SER1", 2));
+        factory.Opened["SER1"].FailWrites = true;
+        Assert.False(hub.PushImageToSerial("SER1", new byte[] { 1 }));
+
+        now += 1000;
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 2 }));
+
+        var reopened = factory.Opened["SER1"];
+        Assert.Equal(new byte[] { 40 }, reopened.Brightness);
+        Assert.Equal(new byte[] { 2 }, reopened.Rotation);
+    }
+
+    [Fact]
+    public void A_screen_missing_from_discovery_is_not_looked_up_again_inside_the_backoff()
+    {
+        long now = 0;
+        var discovery = new FakeDiscovery();
+        var hub = new Slv3LcdHub(discovery, new FakeTransportFactory().Create, nowMs: () => now);
+
+        Assert.False(hub.PushImageToSerial("SER1", new byte[] { 1 }));
+        discovery.Ports.Add(new Slv3LcdPortInfo { PortName = "path-1", Serial = "SER1" });
+        Assert.False(hub.PushImageToSerial("SER1", new byte[] { 2 }));
+
+        now += 1000;
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 3 }));
+    }
+
+    [Fact]
+    public void OpenSerials_lists_every_open_connection_and_Forget_closes_it()
+    {
+        var (hub, _, discovery) = CreateHub();
+        discovery.Ports.Add(new Slv3LcdPortInfo { PortName = "path-1", Serial = "SER1" });
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 1 }));
+
+        Assert.Equal(new[] { "SER1" }, hub.OpenSerials());
+        hub.Forget("SER1", "Nexus Control off");
+        Assert.Empty(hub.OpenSerials());
+    }
+
+    [Fact]
+    public void An_oversized_frame_does_not_drop_a_working_handle()
+    {
+        var (hub, factory, discovery) = CreateHub();
+        discovery.Ports.Add(new Slv3LcdPortInfo { PortName = "path-1", Serial = "SER1" });
+        Assert.True(hub.PushImageToSerial("SER1", new byte[] { 1 }));
+        factory.Opened["SER1"].ThrowOnPush = true;
+
+        Assert.False(hub.PushImageToSerial("SER1", new byte[] { 2 }));
+
+        Assert.False(factory.Opened["SER1"].Disposed);
+        Assert.Equal(1, factory.OpenCallCount);
+    }
+
+    [Fact]
     public void PushImageToSerial_fails_for_unknown_serial()
     {
         var (hub, _, _) = CreateHub();
@@ -282,11 +384,18 @@ public class Slv3LcdHubTests
 
         public void SimulateDisconnect() => _open = false;
 
+        /// <summary>Every write fails while the handle still reads as open: an unplugged screen's handle.</summary>
+        public bool FailWrites { get; set; }
+
         public bool PushImage(byte[] jpeg)
         {
             if (ThrowOnPush)
             {
                 throw new ArgumentException("jpeg exceeds the payload capacity");
+            }
+            if (FailWrites)
+            {
+                return false;
             }
             PushedImages.Add(jpeg);
             return true;

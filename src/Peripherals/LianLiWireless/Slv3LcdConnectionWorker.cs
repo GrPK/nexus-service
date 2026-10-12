@@ -39,6 +39,11 @@ public sealed class Slv3LcdConnectionWorker : BackgroundService
                 if (!_gate.IsEnabled("lianli-wireless"))
                 {
                     _knownPositions.Clear();
+                    // Every tick: a content loop or route can reopen a screen after the first one.
+                    foreach (var serial in _hub.OpenSerials())
+                    {
+                        _hub.Forget(serial, "Nexus Control off");
+                    }
                     _hub.UpdateScreens(Array.Empty<Slv3LcdScreenInfo>());
                 }
                 else
@@ -90,6 +95,13 @@ public sealed class Slv3LcdConnectionWorker : BackgroundService
             if (!seen.Contains(serial))
             {
                 _knownPositions.Remove(serial);
+            }
+        }
+        foreach (var serial in _hub.OpenSerials())
+        {
+            if (!seen.Contains(serial))
+            {
+                _hub.Forget(serial, "left the bus");
             }
         }
 
