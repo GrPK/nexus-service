@@ -1,0 +1,367 @@
+using Nexus.Service.Activity;
+using Nexus.Service.Lighting;
+using Nexus.Service.Lighting.Capture;
+using Nexus.Service.Lighting.Engine;
+using Nexus.Service.Lighting.Engine.Effects;
+using Nexus.Service.Lighting.Engine.Gpu;
+using Nexus.Service.Media;
+using Nexus.Service.Persistence;
+using Nexus.Service.Sockets;
+
+namespace Nexus.Service.Tests;
+
+public class DevicePinEngineTests : IDisposable
+{
+    private sealed class Fill : IEffect
+    {
+        public byte R, G, B;
+        public bool Disposed;
+        public bool Throws;
+        public Fill(string name, byte r, byte g, byte b) { Name = name; R = r; G = g; B = b; }
+        public string Name { get; }
+        public void RenderFrame(CanvasBuffer canvas, double tickMs)
+        {
+            if (Throws) throw new InvalidOperationException("boom");
+            for (int y = 0; y < canvas.Height; y++)
+                for (int x = 0; x < canvas.Width; x++)
+                    canvas.SetPixel(x, y, R, G, B);
+        }
+        public void Dispose() { Disposed = true; }
+    }
+
+    private sealed class FakeScreen : IScreenFrameSource
+    {
+        public int Starts, Stops;
+        public bool Running;
+        public byte R = 255, G = 0, B = 0;
+        public void Start(string monitorId, int width, int height) { Starts++; Running = true; }
+        public void Stop() { Stops++; Running = false; }
+        public byte[]? TryAcquireFrame(out int width, out int height)
+        {
+            width = 16;
+            height = 9;
+            var frame = new byte[16 * 9 * 3];
+            for (var i = 0; i < frame.Length; i += 3) { frame[i] = R; frame[i + 1] = G; frame[i + 2] = B; }
+            return frame;
+        }
+    }
+
+    private sealed class FakeBeats : IBeatsProvider
+    {
+        public bool Running;
+        public void Start() => Running = true;
+        public void Stop() => Running = false;
+        public event Action? OnBeat { add { } remove { } }
+        public void Dispose() { }
+    }
+
+    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "nexus-pins-" + Guid.NewGuid().ToString("N")[..8]);
+
+    public DevicePinEngineTests() => Directory.CreateDirectory(_tempDir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tempDir, recursive: true); } catch { }
+    }
+
+    private static DeviceFrame Device(string id = "dev-a") =>
+        new(0, id, 5, x: 300, y: 100, w: 40, h: 250, rotation: 90);
+
+    private static async Task<byte[]> WaitFor(DeviceFrame dev, Func<byte[], bool> ok)
+    {
+        for (var i = 0; i < 300; i++)
+        {
+            var leds = dev.LedBytes.ToArray();
+            if (ok(leds)) return leds;
+            await Task.Delay(10);
+        }
+        return dev.LedBytes.ToArray();
+    }
+
+    private static async Task<bool> Eventually(Func<bool> cond)
+    {
+        for (var i = 0; i < 300; i++)
+        {
+            if (cond()) return true;
+            await Task.Delay(10);
+        }
+        return cond();
+    }
+
+    private static LightingEngine Engine(DevicePinTracker pins, DeviceFrame dev, Func<string, IEffect?, IEffect?> factory)
+    {
+        var engine = new LightingEngine
+        {
+            Pins = pins,
+            PinEffectFactory = factory,
+            PinLookTag = _ => "t",
+            FrameIntervalMs = 10,
+        };
+        engine.UpdateDevices(new[] { dev });
+        return engine;
+    }
+
+    [Fact]
+    public async Task An_animate_pin_applies_while_the_global_mode_is_static()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        var dev = Device();
+        using var engine = Engine(pins, dev, (_, _) => new Fill("red", 255, 0, 0));
+        // Static mode holds one catalog shader's frame.
+        engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+        engine.SetFrozen(true);
+
+        var leds = await WaitFor(dev, l => l[0] == 255);
+        Assert.Equal(255, leds[0]);
+        Assert.Equal(0, leds[1]);
+    }
+
+    [Fact]
+    public async Task Game_sync_skips_a_device_with_an_animate_pin()
+    {
+        const int cols = 4, rows = 4, count = cols * rows;
+        var dev = new DeviceFrame(0, "dev-a", count, x: 100, y: 100, w: 250, h: 90)
+        {
+            Archetype = "keyboard",
+            LedU = Enumerable.Range(0, count).Select(i => (i % cols) / (float)(cols - 1)).ToArray(),
+            LedV = Enumerable.Range(0, count).Select(i => (i / cols) / (float)(rows - 1)).ToArray(),
+        };
+        var gs = new GameSyncEffect();
+        gs.IngestAuthoredFill(255, 255, 255, "test");
+        gs.IngestFrame("keyboard", "CHROMA_CUSTOM", rows, cols, new int[count]);   // all black grid
+
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        using var engine = Engine(pins, dev, (_, _) => new Fill("red", 255, 0, 0));
+        engine.SetEffect(gs);
+
+        var leds = await WaitFor(dev, l => l[0] == 255);
+        Assert.Equal(255, leds[0]);
+        Assert.Equal(0, leds[1]);
+    }
+
+    [Fact]
+    public async Task A_pin_cleared_returns_the_device_and_disposes_the_instance()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        var dev = Device();
+        Fill? built = null;
+        using var engine = Engine(pins, dev, (_, _) => built = new Fill("red", 255, 0, 0));
+        engine.SetEffect(new Fill("green", 0, 255, 0));
+        await WaitFor(dev, l => l[0] == 255);
+
+        pins.Clear("dev-a");
+        var leds = await WaitFor(dev, l => l[1] == 255);
+
+        Assert.Equal(255, leds[1]);
+        Assert.True(await Eventually(() => built!.Disposed));
+    }
+
+    [Fact]
+    public async Task A_pin_for_an_absent_device_builds_nothing()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("not-here", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        var dev = Device();
+        var builds = 0;
+        using var engine = Engine(pins, dev, (_, _) => { builds++; return new Fill("red", 255, 0, 0); });
+        engine.SetEffect(new Fill("green", 0, 255, 0));
+
+        await WaitFor(dev, l => l[1] == 255);
+        await Task.Delay(100);
+        Assert.Equal(0, builds);
+    }
+
+    [Fact]
+    public async Task A_pinned_effect_that_throws_lets_the_device_fall_through()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        var dev = Device();
+        using var engine = Engine(pins, dev, (_, _) => new Fill("red", 255, 0, 0) { Throws = true });
+        engine.SetEffect(new Fill("green", 0, 255, 0));
+
+        var leds = await WaitFor(dev, l => l[1] == 255);
+        Assert.Equal(255, leds[1]);
+        Assert.Equal(0, leds[0]);
+    }
+
+    [Fact]
+    public async Task A_pin_onto_the_running_effect_samples_the_main_canvas_without_a_second_render()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "wave" });
+        var dev = Device();
+        var builds = 0;
+        using var engine = Engine(pins, dev, (_, _) => { builds++; return new Fill("wave", 255, 0, 0); });
+        engine.SetEffect(new Fill("wave", 0, 255, 0));
+
+        var leds = await WaitFor(dev, l => l[1] == 255);
+        Assert.Equal(255, leds[1]);
+        Assert.Equal(0, builds);
+    }
+
+    // ---- mirror pins, through the provider that builds the capture effect ----
+
+    private sealed class Rig : IDisposable
+    {
+        public readonly JsonConfigStore Store;
+        public readonly DevicePinTracker Pins;
+        public readonly LightingEngine Engine;
+        public readonly GpuContext Gpu = new(160, 90);
+        public readonly FakeScreen Screen = new();
+        public readonly FakeBeats Beats = new();
+        public readonly LightingProvider Provider;
+
+        public Rig(string dir)
+        {
+            Store = new JsonConfigStore(Path.Combine(dir, "settings.json"));
+            Pins = new DevicePinTracker(Store);
+            Engine = new LightingEngine { Pins = Pins, FrameIntervalMs = 10 };
+            Provider = new LightingProvider(Store, Engine, new LightingOutputHub(), Gpu, new MediaLibrary(),
+                new Nexus.Service.Platform.DefaultMonitorEnumerator(), frameSource: Screen, beats: Beats);
+        }
+
+        public void Dispose()
+        {
+            Engine.Dispose();
+            Provider.Dispose();
+            Gpu.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task A_mirror_pin_samples_the_capture_while_the_global_mode_is_animate()
+    {
+        using var rig = new Rig(_tempDir);
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("plasma", 0, 255, 0));   // global Animate
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Mirror });
+
+        var leds = await WaitFor(dev, l => l[0] > 200);
+        Assert.Equal(255, leds[0]);
+        Assert.Equal(0, leds[1]);
+    }
+
+    [Fact]
+    public async Task The_capture_starts_on_the_first_mirror_pin_runs_once_and_stops_with_the_last()
+    {
+        using var rig = new Rig(_tempDir);
+        var a = Device("dev-a");
+        var b = new DeviceFrame(1, "dev-b", 5, x: 100, y: 100, w: 40, h: 250, rotation: 90);
+        rig.Engine.UpdateDevices(new[] { a, b });
+        rig.Engine.SetEffect(new Fill("plasma", 0, 255, 0));
+        await Task.Delay(100);
+        Assert.Equal(0, rig.Screen.Starts);
+
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Mirror });
+        Assert.True(await Eventually(() => rig.Screen.Running));
+        rig.Pins.Set("dev-b", new DevicePin { Kind = DevicePinKinds.Mirror });
+        await WaitFor(b, l => l[0] > 200);
+        Assert.Equal(1, rig.Screen.Starts);
+
+        rig.Pins.Clear("dev-a");
+        await Task.Delay(100);
+        Assert.True(rig.Screen.Running);
+
+        rig.Pins.Clear("dev-b");
+        Assert.True(await Eventually(() => !rig.Screen.Running));
+        Assert.Equal(1, rig.Screen.Stops);
+    }
+
+    [Fact]
+    public async Task Pausing_holds_the_mirror_pin_frame()
+    {
+        using var rig = new Rig(_tempDir);
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("plasma", 0, 255, 0));
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Mirror });
+        await WaitFor(dev, l => l[0] > 200);
+
+        rig.Engine.SetPaused(true);
+        rig.Screen.R = 0;
+        rig.Screen.B = 255;
+        await Task.Delay(150);
+
+        Assert.Equal(255, dev.LedBytes.ToArray()[0]);
+        Assert.Equal(0, dev.LedBytes.ToArray()[2]);
+    }
+
+    [Fact]
+    public void The_shared_capture_closes_only_with_its_last_handle()
+    {
+        var inner = new FakeScreen();
+        var shared = new SharedScreenFrameSource(inner);
+        var first = shared.CreateHandle();
+        var second = shared.CreateHandle();
+        var neverStarted = shared.CreateHandle();
+
+        first.Start("", 160, 90);
+        second.Start("", 160, 90);
+        Assert.Equal(1, inner.Starts);
+
+        neverStarted.Stop();   // stopping an unstarted handle must not close the capture
+        first.Stop();
+        Assert.True(inner.Running);
+        first.Stop();          // idempotent
+        Assert.True(inner.Running);
+        second.Stop();
+        Assert.False(inner.Running);
+        Assert.Equal(1, inner.Stops);
+    }
+
+    [Fact]
+    public void An_audio_reactive_animate_pin_keeps_capture_on()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Store.Update(s => s.Lighting.MusicReactive = true);
+        Assert.False(rig.Beats.Running);
+
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "basspulse" });
+        Assert.True(rig.Beats.Running);
+
+        rig.Pins.Clear("dev-a");
+        Assert.False(rig.Beats.Running);
+
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "plasma" });
+        Assert.False(rig.Beats.Running);
+    }
+
+    [Fact]
+    public void A_template_save_moves_a_pinned_effects_look()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "plasma" });
+        var before = rig.Engine.PinLookTag!("plasma");
+        Assert.NotNull(before);
+
+        var slot = AnimateTemplateDefaults.ResolveSelected(rig.Store.Load().Lighting.Animate.Templates, "plasma")!;
+        rig.Provider.SaveAnimateTemplates(new Dictionary<string, AnimateEffectTemplates>
+        {
+            ["plasma"] = new()
+            {
+                Selected = 0,
+                Slots = new List<AnimateEffectState?>
+                {
+                    new AnimateEffectState
+                    {
+                        Speed = slot.Speed,
+                        Intensity = slot.Intensity,
+                        Hue = slot.Hue + 0.31f,
+                        Colorize = slot.Colorize,
+                        Saturation = slot.Saturation,
+                        Contrast = slot.Contrast,
+                    },
+                },
+            },
+        });
+
+        var after = rig.Engine.PinLookTag!("plasma");
+        Assert.NotNull(after);
+        Assert.NotEqual(before, after);
+    }
+}

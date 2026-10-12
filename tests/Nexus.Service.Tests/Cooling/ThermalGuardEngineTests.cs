@@ -168,10 +168,10 @@ public class ThermalGuardEngineTests
     public void LockedChannelNexusDrives_IsRaisedByTheGuard_ButUncontrolledNever()
     {
         var (engine, fans, store, clock) = Build();
-        fans.Channels[0].Kind = FanKinds.Pump; // pumps are locked by default
+        fans.Channels[0].Kind = FanKinds.Pump; // pumps are pinned by default
         store.Update(s =>
         {
-            s.Cooling.FanLockOverrides["f2"] = true;
+            s.Cooling.FanPinOverrides["f2"] = true;
             s.Cooling.Curves.Add(Flat("f3", 10));
         });
         fans.Channels.Add(new FanChannel { Id = "f3", Name = "Fan 3" });

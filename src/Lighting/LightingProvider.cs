@@ -90,13 +90,14 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _gates = gates ?? FeatureGates.AllEnabled;
         _store = store;
         _engine = engine;
-        // The engine renders per-device Static assignments but must not know how
-        // to build a shader; hand it the same builder StartStatic uses.
-        _engine.StaticEffectFactory = a => BuildAnimateEffect(
-            a.Effect, 0f, a.Intensity, a.Hue, a.Colorize, a.Saturation, a.Contrast,
+        // The engine renders per-device pins but must not know how to build a
+        // shader; hand it the same builders the modes use.
+        _engine.StaticPinEffectFactory = a => BuildAnimateEffect(
+            a.Effect ?? "", 0f, DevicePinLook.Intensity(a), a.Hue ?? 0f, a.Colorize ?? 0f, DevicePinLook.Saturation(a), DevicePinLook.Contrast(a),
             a.Params is null ? null : new System.Collections.Generic.Dictionary<string, float>(a.Params));
-        _engine.AnimateLockLookTag = key => _lockedLooks.TryGetValue(key, out var l) ? l.Tag : null;
-        _engine.AnimateLockEffectFactory = BuildLockedEffect;
+        _engine.PinLookTag = PinTag;
+        _engine.PinEffectFactory = BuildPinnedEffect;
+        _sharedSource = frameSource is null ? null : new SharedScreenFrameSource(frameSource);
         _hub = hub;
         _rgb = rgb;
         _gpu = gpu;
@@ -114,8 +115,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _engine.OnEffectChanged += ReconcileAudioCapture;
         // Any settings write can move a locked effect's look (template save,
         // preset activate, profile switch) or the lock set itself.
-        _store.OnChanged += RefreshLockedLooks;
-        RefreshLockedLooks();
+        _store.OnChanged += RefreshPinnedLooks;
+        RefreshPinnedLooks();
         _scanner?.OnScanComplete = OnGameScanComplete;
     }
 
@@ -130,7 +131,6 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     // StartStatic re-asserts it immediately after.
     private void EnsureRgbActive()
     {
-        _engine.StaticEffects?.Enabled = false;
         // Only simple mode's sweep set samples every device across the whole
         // canvas; StartAnimate re-asserts it, so a mode start cannot inherit it.
         _engine.FullFrameSampling = false;
@@ -170,7 +170,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         lock (_audioCaptureLock)
         {
             var music = _store.Load().Lighting.MusicReactive;
-            var forLeds = music && (ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName) || _lockedAudio);
+            var forLeds = music && (ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName) || _pinnedAudio);
             if (forLeds || Volatile.Read(ref _audioCaptureDemand) > 0)
             {
                 _beats.Start();
@@ -447,7 +447,6 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             return;
         }
         EnsureRgbActive();
-        _engine.StaticEffects?.Enabled = true;
         var name = (body.Effect ?? "").ToLowerInvariant();
         if (!StaticEffectCatalog.Contains(name))
         {
@@ -710,20 +709,32 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
-    // Immutable look per locked effect, resolved off the engine thread and
+    // Immutable look per pinned Animate effect, resolved off the engine thread and
     // published by reference swap; the engine only ever reads this.
-    private sealed record LockedLook(Nexus.Service.Persistence.AnimateEffectState State, string Tag);
-    private volatile System.Collections.Generic.Dictionary<string, LockedLook> _lockedLooks = new();
-    private volatile bool _lockedAudio;
+    private sealed record PinnedLook(Nexus.Service.Persistence.AnimateEffectState State, string Tag);
+    private volatile System.Collections.Generic.Dictionary<string, PinnedLook> _pinnedLooks = new();
+    private volatile bool _pinnedAudio;
     [System.ThreadStatic] private static bool _refreshingLooks;
 
+    // The one screen capture. The global Mirror effect and the mirror-pin effect
+    // each take a handle, so the capture runs once and closes with its last user.
+    private readonly SharedScreenFrameSource? _sharedSource;
+    private string _mirrorMonitor = "";
+
+    private IScreenFrameSource? ScreenSource() => _sharedSource is null ? _frameSource : _sharedSource.CreateHandle();
+
+    private string? PinTag(string key) =>
+        key == LightingEngine.MirrorPinKey
+            ? "m|" + _mirrorMonitor
+            : _pinnedLooks.TryGetValue(key, out var l) ? l.Tag : null;
+
     /// <summary>
-    /// Re-resolves every locked effect's look the way the active effect does
-    /// (<see cref="ActiveLookTag"/>: the selected preset slot) from a copy taken
-    /// under the store lock, then re-evaluates audio capture. Runs on whichever
-    /// thread wrote settings, never the engine thread.
+    /// Re-resolves every pinned Animate effect's look the way the active effect
+    /// does (<see cref="ActiveLookTag"/>: the selected preset slot) from a copy
+    /// taken under the store lock, then re-evaluates audio capture. Runs on
+    /// whichever thread wrote settings, never the engine thread.
     /// </summary>
-    private void RefreshLockedLooks()
+    private void RefreshPinnedLooks()
     {
         // The snapshot goes through Update to get the store lock, which raises
         // OnChanged again; that re-entry has nothing new to read.
@@ -734,15 +745,16 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _refreshingLooks = true;
         try
         {
-            if (_store.Load().Lighting.AnimateDeviceLocks.Count == 0 && _lockedLooks.Count == 0 && !_lockedAudio)
+            if (_store.Load().Lighting.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
             {
                 return;
             }
-            var next = new System.Collections.Generic.Dictionary<string, LockedLook>(System.StringComparer.Ordinal);
+            var next = new System.Collections.Generic.Dictionary<string, PinnedLook>(System.StringComparer.Ordinal);
             _store.Update(s =>
             {
-                foreach (var key in s.Lighting.AnimateDeviceLocks.Values)
+                foreach (var pin in s.Lighting.DevicePins.Values)
                 {
+                    var key = pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate ? pin.Effect : null;
                     if (string.IsNullOrEmpty(key) || next.ContainsKey(key))
                     {
                         continue;
@@ -764,7 +776,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
                             ? new()
                             : new System.Collections.Generic.Dictionary<string, float>(slot.Params),
                     };
-                    next[key] = new LockedLook(copy, HashSlot(copy));
+                    next[key] = new PinnedLook(copy, HashSlot(copy));
                 }
             });
             var audio = false;
@@ -772,8 +784,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             {
                 audio |= ShaderLibrary.IsAudioEffect(key);
             }
-            _lockedLooks = next;
-            _lockedAudio = audio;
+            _pinnedLooks = next;
+            _pinnedAudio = audio;
             ReconcileAudioCapture();
         }
         finally
@@ -783,17 +795,28 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     }
 
     /// <summary>
-    /// Builds, or updates in place, the shader a locked device runs. In-place
-    /// updates mirror <see cref="ReapplyActiveLook"/>, so a slider drag does not
-    /// recompile the shader.
+    /// Builds, or updates in place, the source a pinned device runs: the shared
+    /// screen-capture effect for a mirror pin, else the pinned Animate shader. In
+    /// place updates mirror <see cref="ReapplyActiveLook"/>, so a slider drag does
+    /// not recompile the shader.
     /// </summary>
-    private IEffect? BuildLockedEffect(string effect, IEffect? existing)
+    private IEffect? BuildPinnedEffect(string effect, IEffect? existing)
     {
-        if (!_lockedLooks.TryGetValue(effect, out var locked))
+        if (effect == LightingEngine.MirrorPinKey)
+        {
+            // A monitor change since the instance was built needs a new capture.
+            if (existing is not null && PinTag(effect) == _builtMirrorTag)
+            {
+                return existing;
+            }
+            _builtMirrorTag = PinTag(effect);
+            return new ScreenMirrorEffect(_mirrorMonitor, _screenPP, ScreenSource(), _gpu);
+        }
+        if (!_pinnedLooks.TryGetValue(effect, out var pinned))
         {
             return null;
         }
-        var look = locked.State;
+        var look = pinned.State;
         var speed = (float)(look.Speed / 50.0);
         var intensity = look.Intensity > 0 ? look.Intensity : 1f;
         var extras = look.Params is { Count: > 0 }
@@ -812,6 +835,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
         return BuildAnimateEffect(effect, speed, intensity, look.Hue, look.Colorize, look.Saturation, look.Contrast, extras);
     }
+
+    private string? _builtMirrorTag;
 
     /// <summary>Content tag of the slot currently driving the LEDs, or null when no animate effect is active.</summary>
     private string? ActiveLookTag()
@@ -1218,7 +1243,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // client calls /start with empty post-process fields before it has
         // fetched the current values, overwriting here would silently clobber
         // the user's saved look back to identity on every mode swap.
-        _engine.SetEffect(new ScreenMirrorEffect(body.Monitor, _screenPP, _frameSource, _gpu));
+        _mirrorMonitor = body.Monitor ?? "";
+        _engine.SetEffect(new ScreenMirrorEffect(_mirrorMonitor, _screenPP, ScreenSource(), _gpu));
         _store.Update(s =>
         {
             s.Lighting.Sync = "screen";

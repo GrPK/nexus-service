@@ -31,8 +31,7 @@ public static partial class DevicesRoutes
         var disabled = preset.DisabledDevices is null ? null : new List<string>(preset.DisabledDevices);
         var uncontrolled = preset.UncontrolledDevices is null ? null : new List<string>(preset.UncontrolledDevices);
         var look = preset.Look;
-        var staticLooks = preset.StaticDeviceLooks is null ? null : DeepCopyStaticLooks(preset.StaticDeviceLooks);
-        var animateLocks = preset.AnimateDeviceLocks is null ? null : new Dictionary<string, string>(preset.AnimateDeviceLocks);
+        var devicePins = preset.DevicePins is null ? null : DeepCopyPins(preset.DevicePins);
         var devicePrefs = preset.DevicePrefs is null ? null : DeepCopyDevicePrefs(preset.DevicePrefs);
         var sceneView = preset.SceneView is null ? null : CopySceneView(preset.SceneView);
         // Ids the preset re-enables. Smart lights re-push their static colour
@@ -62,17 +61,12 @@ public static partial class DevicesRoutes
             {
                 Nexus.Service.Lighting.LightingPresetLooks.Apply(settings.Lighting, look);
             }
-            if (staticLooks is not null)
+            if (devicePins is not null)
             {
-                // Replaced wholesale: StaticDeviceEffectTracker re-hydrates
-                // off the store's OnChanged, so writing this is what repaints
-                // the devices - no separate replay.
-                settings.Lighting.StaticDeviceLooks = staticLooks;
-            }
-            if (animateLocks is not null)
-            {
-                // Same as the static looks: the tracker re-hydrates off OnChanged.
-                settings.Lighting.AnimateDeviceLocks = animateLocks;
+                // Replaced wholesale: DevicePinTracker re-hydrates off the
+                // store's OnChanged, so writing this is what re-pins the
+                // devices - no separate replay.
+                settings.Lighting.DevicePins = devicePins;
             }
             if (devicePrefs is not null)
             {

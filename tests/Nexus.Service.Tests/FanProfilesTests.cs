@@ -220,7 +220,7 @@ public class FanProfilesTests : IDisposable
     }
 
     [Fact]
-    public void SilentToCustom_ManualRestoreSkipsLockedFan()
+    public void SilentToCustom_ManualRestoreSkipsPinnedFan()
     {
         var fan1 = _fans.GetFanChannels().First(c => c.Id == "fan1");
         _store.Update(s =>
@@ -229,33 +229,33 @@ public class FanProfilesTests : IDisposable
             s.Cooling.ManualSpeeds["fan1"] = 40;
             s.Cooling.ManualSpeeds["fan2"] = 70;
         });
-        FanProfiles.SetLockOverride(fan1, true, _store);
+        FanProfiles.SetPinOverride(fan1, true, _store);
 
         FanProfiles.Apply("silent", _fans, _store);
         FanProfiles.Apply("custom", _fans, _store);
 
-        // The locked fan keeps whatever drives it; only fan2 is re-driven.
+        // The pinned fan keeps whatever drives it; only fan2 is re-driven.
         Assert.DoesNotContain(_fans.SpeedSet, w => w.Id == "fan1");
         Assert.Contains(("fan2", 70), _fans.SpeedSet);
     }
 
     [Fact]
-    public void SilentToCustom_ManualRestoreSkipsExplicitlyLockedAbsentFan()
+    public void SilentToCustom_ManualRestoreSkipsExplicitlyPinnedAbsentFan()
     {
-        // A locked fan whose hub is disconnected at apply time is missing
-        // from the live channel list (and so from lockedIds); its explicit
-        // lock override must still exempt it from the snapshot restore, or
-        // a duty changed while locked gets stomped and replayed on reconnect.
+        // A pinned fan whose hub is disconnected at apply time is missing
+        // from the live channel list (and so from pinnedIds); its explicit
+        // pin override must still exempt it from the snapshot restore, or
+        // a duty changed while pinned gets stomped and replayed on reconnect.
         _store.Update(s =>
         {
             s.Cooling.ActivePreset = "custom";
             s.Cooling.ManualSpeeds["ghost-fan"] = 20;
             s.Cooling.ManualSpeeds["fan2"] = 70;
-            s.Cooling.FanLockOverrides["ghost-fan"] = true;
+            s.Cooling.FanPinOverrides["ghost-fan"] = true;
         });
 
         FanProfiles.Apply("silent", _fans, _store);
-        // While the preset is active the user adjusts the locked fan.
+        // While the preset is active the user adjusts the pinned fan.
         _store.Update(s => s.Cooling.ManualSpeeds["ghost-fan"] = 65);
         FanProfiles.Apply("custom", _fans, _store);
 
@@ -832,13 +832,13 @@ public class FanProfilesTests : IDisposable
     }
 
     [Fact]
-    public void IsLockedByDefault_CoversPumpsGpuFansAndAioChannels()
+    public void IsPinnedByDefault_CoversPumpsGpuFansAndAioChannels()
     {
-        Assert.False(FanProfiles.IsLockedByDefault(new FanChannel { Id = "case" }));
-        Assert.True(FanProfiles.IsLockedByDefault(new FanChannel { Id = "pump", Kind = FanKinds.Pump }));
-        Assert.True(FanProfiles.IsLockedByDefault(new FanChannel { Id = "gpu", IsGpu = true }));
+        Assert.False(FanProfiles.IsPinnedByDefault(new FanChannel { Id = "case" }));
+        Assert.True(FanProfiles.IsPinnedByDefault(new FanChannel { Id = "pump", Kind = FanKinds.Pump }));
+        Assert.True(FanProfiles.IsPinnedByDefault(new FanChannel { Id = "gpu", IsGpu = true }));
         // A radiator fan is an ordinary Fan; it is the AIO membership that locks it.
-        Assert.True(FanProfiles.IsLockedByDefault(new FanChannel { Id = "rad", IsAio = true }));
+        Assert.True(FanProfiles.IsPinnedByDefault(new FanChannel { Id = "rad", IsAio = true }));
     }
 
     [Fact]
@@ -875,7 +875,7 @@ public class FanProfilesTests : IDisposable
             {
                 new() { Id = "case1", Name = "Case Fan 1" },
                 new() { Id = "pump1", Name = "Pump", Kind = FanKinds.Pump },
-                // Radiator fan on the same cooler: an ordinary Fan, locked by
+                // Radiator fan on the same cooler: an ordinary Fan, pinned by
                 // its AIO membership rather than by its kind.
                 new() { Id = "rad1", Name = "AIO Fan", IsAio = true },
                 // The provider decides this from the hardware it enumerated the
@@ -892,7 +892,7 @@ public class FanProfilesTests : IDisposable
 
         // An explicit unlock is the user overriding that default, and it sticks.
         var gpu = fans.GetFanChannels().First(c => c.Id == "gpu1");
-        FanProfiles.SetLockOverride(gpu, false, _store);
+        FanProfiles.SetPinOverride(gpu, false, _store);
         FanProfiles.Apply("turbo", fans, _store);
 
         turbo = _store.Load().Cooling.Curves.First(c => c.Preset == "turbo");
@@ -1011,11 +1011,11 @@ public class FanProfilesTests : IDisposable
     }
 
     [Fact]
-    public void LockedFan_StaysOnItsPreset_WhenAnotherPresetIsApplied()
+    public void PinnedFan_StaysOnItsPreset_WhenAnotherPresetIsApplied()
     {
         FanProfiles.Apply("silent", _fans, _store);
         var fan1 = _fans.GetFanChannels().First(c => c.Id == "fan1");
-        FanProfiles.SetLockOverride(fan1, true, _store);
+        FanProfiles.SetPinOverride(fan1, true, _store);
 
         FanProfiles.Apply("turbo", _fans, _store);
 
@@ -1028,15 +1028,15 @@ public class FanProfilesTests : IDisposable
     }
 
     [Fact]
-    public void LockedFan_AppliedOff_IsReleasedToBios()
+    public void PinnedFan_AppliedOff_IsReleasedToBios()
     {
         FanProfiles.Apply("silent", _fans, _store);
         var fan1 = _fans.GetFanChannels().First(c => c.Id == "fan1");
-        FanProfiles.SetLockOverride(fan1, true, _store);
+        FanProfiles.SetPinOverride(fan1, true, _store);
 
         FanProfiles.Apply("off", _fans, _store);
 
-        // Off ignores the lock: every channel detaches and releases to BIOS.
+        // Off ignores the pin: every channel detaches and releases to BIOS.
         var s = _store.Load();
         var preset = s.Cooling.Curves.First(c => c.Preset == "silent");
         Assert.DoesNotContain(preset.Outputs, o => o.Id == "fan1");
@@ -1046,7 +1046,7 @@ public class FanProfilesTests : IDisposable
     }
 
     [Fact]
-    public void UnlockedPump_AppliedSilent_IsAttached()
+    public void UnpinnedPump_AppliedSilent_IsAttached()
     {
         var fans = new FakeFanProvider(
             channels: new List<FanChannel>
@@ -1056,7 +1056,7 @@ public class FanProfilesTests : IDisposable
             },
             temps: new List<TemperatureSource> { new() { Id = "cpu", Category = "CPU" } });
         var pump = fans.GetFanChannels().First(c => c.Id == "pump1");
-        FanProfiles.SetLockOverride(pump, false, _store);
+        FanProfiles.SetPinOverride(pump, false, _store);
 
         FanProfiles.Apply("silent", fans, _store);
 
@@ -1066,23 +1066,23 @@ public class FanProfilesTests : IDisposable
     }
 
     [Fact]
-    public void DerivePresetFromCurves_LockedFanOffPreset_DoesNotForceCustom()
+    public void DerivePresetFromCurves_PinnedFanOffPreset_DoesNotForceCustom()
     {
         FanProfiles.Apply("silent", _fans, _store);
         var fan2 = _fans.GetFanChannels().First(c => c.Id == "fan2");
-        FanProfiles.SetLockOverride(fan2, true, _store);
+        FanProfiles.SetPinOverride(fan2, true, _store);
         FanProfiles.DetachFanFromCurves("fan2", _store);
 
         Assert.Equal("silent", FanProfiles.DerivePresetFromCurves(_store, _fans));
     }
 
     [Fact]
-    public void DerivePresetFromCurves_LockedCurveDrivenFans_AreNotOff()
+    public void DerivePresetFromCurves_PinnedCurveDrivenFans_AreNotOff()
     {
-        // Locking every fan that has a curve leaves only the BIOS-control fans
-        // in the coverage set; without the locked half counted, derivation
+        // Pinning every fan that has a curve leaves only the BIOS-control fans
+        // in the coverage set; without the pinned half counted, derivation
         // reads "all fans BIOS" and the page raises the Off banner while the
-        // locked fans are still curve-driven.
+        // pinned fans are still curve-driven.
         var fans = new FakeFanProvider(
             channels: new List<FanChannel>
             {
@@ -1099,38 +1099,38 @@ public class FanProfilesTests : IDisposable
                 Outputs = new List<CurveOutputDocument> { new() { Id = "fan1", Type = "Fan" } },
             });
         });
-        FanProfiles.SetLockOverride(fans.GetFanChannels().First(c => c.Id == "fan1"), true, _store);
+        FanProfiles.SetPinOverride(fans.GetFanChannels().First(c => c.Id == "fan1"), true, _store);
 
         Assert.Equal("custom", FanProfiles.DerivePresetFromCurves(_store, fans));
     }
 
     [Fact]
-    public void DerivePresetFromCurves_LockedFanOnManual_IsNotOff()
+    public void DerivePresetFromCurves_PinnedFanOnManual_IsNotOff()
     {
-        // Same shape through the manual path: a locked fan holding a manual
+        // Same shape through the manual path: a pinned fan holding a manual
         // duty is software-driven, so "every fan is on BIOS" is false.
         var fan1 = _fans.GetFanChannels().First(c => c.Id == "fan1");
-        FanProfiles.SetLockOverride(fan1, true, _store);
+        FanProfiles.SetPinOverride(fan1, true, _store);
         _store.Update(s => s.Cooling.ManualSpeeds["fan1"] = 55);
 
         Assert.Equal("custom", FanProfiles.DerivePresetFromCurves(_store, _fans));
     }
 
     [Fact]
-    public void DerivePresetFromCurves_LockedFanOnBios_StaysOff()
+    public void DerivePresetFromCurves_PinnedFanOnBios_StaysOff()
     {
-        // The other side of the guard: a locked fan with no curve and no manual
+        // The other side of the guard: a pinned fan with no curve and no manual
         // duty is on BIOS like the rest, so Off stays Off.
         FanProfiles.Apply("off", _fans, _store);
-        FanProfiles.SetLockOverride(_fans.GetFanChannels().First(c => c.Id == "fan1"), true, _store);
+        FanProfiles.SetPinOverride(_fans.GetFanChannels().First(c => c.Id == "fan1"), true, _store);
 
         Assert.Equal("off", FanProfiles.DerivePresetFromCurves(_store, _fans));
     }
 
     [Fact]
-    public void DerivePresetFromCurves_LockedUncontrolledOrUnresponsiveFan_StaysOff()
+    public void DerivePresetFromCurves_PinnedUncontrolledOrUnresponsiveFan_StaysOff()
     {
-        // The narrowing halves of the locked-fan check. An uncontrolled channel
+        // The narrowing halves of the pinned-fan check. An uncontrolled channel
         // is inert at the write chokepoint and an unresponsive one is physically
         // gone, so a stale attachment on either is not something Nexus drives.
         var fans = new FakeFanProvider(
@@ -1143,7 +1143,7 @@ public class FanProfilesTests : IDisposable
             temps: new List<TemperatureSource> { new() { Id = "cpu", Category = "CPU" } });
         foreach (var id in new[] { "fan2", "fan3" })
         {
-            FanProfiles.SetLockOverride(fans.GetFanChannels().First(c => c.Id == id), true, _store);
+            FanProfiles.SetPinOverride(fans.GetFanChannels().First(c => c.Id == id), true, _store);
         }
         FanControlledState.SetControlled("fan3", false, _store);
         _store.Update(s =>
@@ -1209,22 +1209,22 @@ public class FanProfilesTests : IDisposable
     }
 
     [Fact]
-    public void SetLockOverride_CollapsesToDefault_AndRecordsDeviations()
+    public void SetPinOverride_CollapsesToDefault_AndRecordsDeviations()
     {
         var pump = new FanChannel { Id = "pump1", Kind = FanKinds.Pump };
         var fan = new FanChannel { Id = "fan1", Kind = FanKinds.Fan };
 
-        // Locking a pump matches its default (locked) -> no override stored.
-        FanProfiles.SetLockOverride(pump, true, _store);
-        Assert.False(_store.Load().Cooling.FanLockOverrides.ContainsKey("pump1"));
+        // Pinning a pump matches its default (pinned) -> no override stored.
+        FanProfiles.SetPinOverride(pump, true, _store);
+        Assert.False(_store.Load().Cooling.FanPinOverrides.ContainsKey("pump1"));
 
-        // Locking a fan deviates from its default (unlocked) -> stored as true.
-        FanProfiles.SetLockOverride(fan, true, _store);
-        Assert.True(_store.Load().Cooling.FanLockOverrides["fan1"]);
+        // Pinning a fan deviates from its default (unpinned) -> stored as true.
+        FanProfiles.SetPinOverride(fan, true, _store);
+        Assert.True(_store.Load().Cooling.FanPinOverrides["fan1"]);
 
-        // Unlocking that fan restores its default -> entry removed.
-        FanProfiles.SetLockOverride(fan, false, _store);
-        Assert.False(_store.Load().Cooling.FanLockOverrides.ContainsKey("fan1"));
+        // Unpinning that fan restores its default -> entry removed.
+        FanProfiles.SetPinOverride(fan, false, _store);
+        Assert.False(_store.Load().Cooling.FanPinOverrides.ContainsKey("fan1"));
     }
 
     [Fact]

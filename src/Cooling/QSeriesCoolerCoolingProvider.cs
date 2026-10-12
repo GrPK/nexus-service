@@ -492,7 +492,7 @@ public sealed class QSeriesCoolerCoolingProvider : IFanControlProvider, ICooling
             cooling.ManualSpeeds.ContainsKey(legacyId) ||
             cooling.CustomManualSpeeds.ContainsKey(legacyId) ||
             cooling.FanOffsets.ContainsKey(legacyId) ||
-            cooling.FanLockOverrides.ContainsKey(legacyId) ||
+            cooling.FanPinOverrides.ContainsKey(legacyId) ||
             cooling.FanRoles.ContainsKey(legacyId) ||
             cooling.CustomFanCurveAssignments.ContainsKey(legacyId) ||
             cooling.UncontrolledFanChannels.Contains(legacyId) ||
@@ -511,7 +511,7 @@ public sealed class QSeriesCoolerCoolingProvider : IFanControlProvider, ICooling
                 MigrateMap(s.Cooling.ManualSpeeds, legacyId, newIds);
                 MigrateMap(s.Cooling.CustomManualSpeeds, legacyId, newIds);
                 MigrateMap(s.Cooling.FanOffsets, legacyId, newIds);
-                MigrateMap(s.Cooling.FanLockOverrides, legacyId, newIds);
+                MigrateMap(s.Cooling.FanPinOverrides, legacyId, newIds);
                 MigrateMap(s.Cooling.FanRoles, legacyId, newIds);
                 MigrateMap(s.Cooling.CustomFanCurveAssignments, legacyId, newIds);
                 MigrateIdList(s.Cooling.UncontrolledFanChannels, legacyId, newIds);

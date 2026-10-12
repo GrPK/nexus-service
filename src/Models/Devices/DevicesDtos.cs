@@ -302,21 +302,6 @@ public class SetLightingDeviceColor
     public string Id { get; set; } = "";
     public float Hue { get; set; }
     public float Saturation { get; set; }
-    // Static assignment. Absent (empty Effect) clears the device's own look and
-    // returns it to the shared canvas; older clients that send only hue/sat
-    // still land on the preference write.
-    public string Effect { get; set; } = "";
-    // A flat palette pick carries its colour outright and needs nothing else -
-    // no shader, no params. When set it wins over every field below it.
-    public string Color { get; set; } = "";
-    public float Intensity { get; set; } = 1f;
-    public float Colorize { get; set; }
-    public float Contrast { get; set; } = 1f;
-    public Dictionary<string, float>? Params { get; set; }
-    // Template slot the look was picked from. Round-tripped for the UI only -
-    // the render path resolves nothing from it - but a preset that restores an
-    // assignment has to restore which slot it came from too.
-    public int Slot { get; set; }
 }
 
 /// <summary>One card's colour-tuning trim. Every value is a multiplier around
@@ -357,45 +342,19 @@ public class SetLightingColorAdjustBody
     public int? Brightness { get; set; }
 }
 
-/// <summary>GET /devices/lighting-devices/static-looks: every per-device Static
-/// assignment, so a client can rebuild what each device wears (after a preset
-/// activate, a profile switch, or on a machine that has never seen them).</summary>
-public class StaticDeviceLooksResponse
+/// <summary>GET /devices/lighting-devices/pins: every pinned device, keyed by id.</summary>
+public class DevicePinsResponse
 {
-    public Dictionary<string, StaticDeviceLookDto> Looks { get; set; } = new();
+    public Dictionary<string, Nexus.Service.Persistence.DevicePin> Pins { get; set; } = new();
 }
 
-public class StaticDeviceLookDto
+/// <summary>POST /devices/lighting-devices/pins. Pins every id the same, replacing any pin it held; a null Pin clears them.</summary>
+public class SetDevicePinsBody
 {
-    public string Effect { get; set; } = "";
-    public string Color { get; set; } = "";
-    public float Intensity { get; set; } = 1f;
-    public float Hue { get; set; }
-    public float Colorize { get; set; }
-    public float Saturation { get; set; } = 1f;
-    public float Contrast { get; set; } = 1f;
-    public int Slot { get; set; }
-    /// <summary>Shader params. Without these a client that rebuilds a pick from
-    /// this route and re-posts it flattens a pattern to a bare colour.</summary>
-    public Dictionary<string, float> Params { get; set; } = new();
-    /// <summary>Held in every mode; picks are refused until unlocked.</summary>
-    public bool Locked { get; set; }
-}
-/// <summary>GET /devices/lighting-devices/animate-locks: device id to the Animate
-/// effect key it is locked onto.</summary>
-public class AnimateDeviceLocksResponse
-{
-    public Dictionary<string, string> Locks { get; set; } = new();
+    public List<string>? Ids { get; set; }
+    public Nexus.Service.Persistence.DevicePin? Pin { get; set; }
 }
 
-/// <summary>POST /devices/lighting-devices/animate-lock. A null Effect unlocks.</summary>
-public class SetAnimateLockBody
-{
-    public string Id { get; set; } = "";
-    public string? Effect { get; set; }
-}
-
-public class SetStaticLockBody { public string Id { get; set; } = ""; public bool Locked { get; set; } }
 public class SetZoneLedCountBody { public string Id { get; set; } = ""; public int Count { get; set; } }
 public class IdentifyLightingDeviceBody { public string Id { get; set; } = ""; public int DurationMs { get; set; } = 2000; }
 

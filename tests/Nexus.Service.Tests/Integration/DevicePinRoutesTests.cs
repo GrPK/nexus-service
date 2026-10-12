@@ -1,0 +1,132 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Nexus.Service.Auth;
+using Nexus.Service.Persistence;
+
+namespace Nexus.Service.Tests.Integration;
+
+public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
+{
+    private readonly StubDeviceHostFactory _factory;
+    private readonly HttpClient _client;
+
+    public DevicePinRoutesTests(StubDeviceHostFactory factory)
+    {
+        _factory = factory;
+        _factory.ResetSettings();
+        _client = _factory.CreateClient();
+        _client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue(
+                "Bearer",
+                _factory.Services.GetRequiredService<TokenService>().Token);
+    }
+
+    private static StringContent Json(string body) => new(body, Encoding.UTF8, "application/json");
+
+    private IConfigStore Store => _factory.Services.GetRequiredService<IConfigStore>();
+
+    private Task<HttpResponseMessage> Pin(string ids, string pin) =>
+        _client.PostAsync("/devices/lighting-devices/pins", Json($$"""{"ids":[{{ids}}],"pin":{{pin}}}"""));
+
+    [Fact]
+    public async Task A_bulk_pin_lands_on_every_id_and_the_get_route_lists_it()
+    {
+        var res = await Pin("\"pin-a1\",\"pin-a2\"", """{"kind":"animate","effect":"plasma"}""");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("plasma", Store.Load().Lighting.DevicePins["pin-a1"].Effect);
+        Assert.Equal("plasma", Store.Load().Lighting.DevicePins["pin-a2"].Effect);
+
+        var get = await _client.GetAsync("/devices/lighting-devices/pins");
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        using var doc = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
+        var pin = doc.RootElement.GetProperty("pins").GetProperty("pin-a1");
+        Assert.Equal("animate", pin.GetProperty("kind").GetString());
+        Assert.Equal("plasma", pin.GetProperty("effect").GetString());
+        Assert.False(pin.TryGetProperty("color", out _));
+    }
+
+    [Fact]
+    public async Task A_new_pin_replaces_the_old_one_and_a_null_pin_clears()
+    {
+        await Pin("\"pin-b1\"", """{"kind":"animate","effect":"plasma"}""");
+        await Pin("\"pin-b1\"", """{"kind":"static","effect":"flat","color":"#112233","slot":2}""");
+        var held = Store.Load().Lighting.DevicePins["pin-b1"];
+        Assert.Equal("static", held.Kind);
+        Assert.Equal("#112233", held.Color);
+        Assert.Equal(2, held.Slot);
+
+        await Pin("\"pin-b1\"", """{"kind":"mirror"}""");
+        Assert.Equal("mirror", Store.Load().Lighting.DevicePins["pin-b1"].Kind);
+
+        var cleared = await Pin("\"pin-b1\"", "null");
+        Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
+        Assert.False(Store.Load().Lighting.DevicePins.ContainsKey("pin-b1"));
+    }
+
+    [Theory]
+    [InlineData("""{"kind":"media"}""")]
+    [InlineData("""{"kind":"gamesync"}""")]
+    [InlineData("""{"kind":""}""")]
+    [InlineData("""{"kind":"animate","effect":"gradientlinear"}""")]
+    [InlineData("""{"kind":"animate","effect":"simplered"}""")]
+    [InlineData("""{"kind":"animate","effect":"not-an-effect"}""")]
+    [InlineData("""{"kind":"animate"}""")]
+    [InlineData("""{"kind":"static","effect":"plasma"}""")]
+    [InlineData("""{"kind":"static"}""")]
+    [InlineData("""{"kind":"mirror","effect":"plasma"}""")]
+    [InlineData("""{"kind":"mirror","hue":0.5}""")]
+    public async Task An_invalid_pin_is_refused_and_stores_nothing(string pin)
+    {
+        var res = await Pin("\"pin-c1\"", pin);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.False(Store.Load().Lighting.DevicePins.ContainsKey("pin-c1"));
+    }
+
+    [Fact]
+    public async Task A_static_effect_from_the_catalog_is_accepted()
+    {
+        var res = await Pin("\"pin-d1\"", """{"kind":"static","effect":"gradientlinear","hue":0.25,"params":{"u_angle":90}}""");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var held = Store.Load().Lighting.DevicePins["pin-d1"];
+        Assert.Equal(0.25f, held.Hue!.Value, 3);
+        Assert.Equal(90f, held.Params!["u_angle"], 3);
+    }
+
+    [Fact]
+    public async Task The_removed_routes_are_gone()
+    {
+        foreach (var (method, path) in new[]
+        {
+            ("GET", "/devices/lighting-devices/static-looks"),
+            ("POST", "/devices/lighting-devices/static-lock"),
+            ("GET", "/devices/lighting-devices/animate-locks"),
+            ("POST", "/devices/lighting-devices/animate-lock"),
+        })
+        {
+            var req = new HttpRequestMessage(new HttpMethod(method), path);
+            if (method == "POST") req.Content = Json("{}");
+            var res = await _client.SendAsync(req);
+            Assert.True(res.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed, $"{method} {path} -> {res.StatusCode}");
+        }
+    }
+
+    [Fact]
+    public async Task A_preset_round_trips_the_pins()
+    {
+        await Pin("\"pin-e1\"", """{"kind":"mirror"}""");
+        var createRes = await _client.PostAsync("/devices/lighting-devices/layout-presets", Json("""{"name":"Pinned"}"""));
+        using var createDoc = JsonDocument.Parse(await createRes.Content.ReadAsStringAsync());
+        var id = createDoc.RootElement.GetProperty("preset").GetProperty("id").GetString()!;
+        Assert.Equal("mirror", Store.Load().Lighting.LayoutPresets.Find(p => p.Id == id)!.DevicePins!["pin-e1"].Kind);
+
+        await _client.PostAsync("/devices/lighting-devices/layout-presets", Json("""{"name":"Open"}"""));
+        await Pin("\"pin-e1\"", "null");
+        Assert.False(Store.Load().Lighting.DevicePins.ContainsKey("pin-e1"));
+
+        await _client.PostAsync($"/devices/lighting-devices/layout-presets/{id}/activate", Json("{}"));
+        Assert.Equal("mirror", Store.Load().Lighting.DevicePins["pin-e1"].Kind);
+    }
+}

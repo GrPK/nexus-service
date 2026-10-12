@@ -1,6 +1,7 @@
 using Nexus.Service.Lighting;
 using Nexus.Service.Lighting.Engine;
 using Nexus.Service.Lighting.Engine.Effects;
+using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Tests;
 
@@ -10,7 +11,7 @@ namespace Nexus.Service.Tests;
 /// EFFECT - a flat colour cannot represent a gradient or carry the tint
 /// controls, which is how the first cut of this shipped wrong.
 /// </summary>
-public class StaticDeviceEffectTests
+public class DevicePinStaticTests
 {
     private sealed class FillEffect : IEffect
     {
@@ -44,10 +45,10 @@ public class StaticDeviceEffectTests
 
     private static async Task<byte[]> RenderOnce(
         DeviceFrame device,
-        StaticDeviceEffectTracker? tracker,
-        Func<StaticDeviceAssignment, IEffect?>? factory)
+        DevicePinTracker? tracker,
+        Func<DevicePin, IEffect?>? factory)
     {
-        using var engine = new LightingEngine { StaticEffects = tracker, StaticEffectFactory = factory };
+        using var engine = new LightingEngine { Pins = tracker, StaticPinEffectFactory = factory };
         engine.UpdateDevices(new[] { device });
         engine.FrameIntervalMs = 10;
         var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -61,12 +62,12 @@ public class StaticDeviceEffectTests
     private static DeviceFrame MakeDevice(int leds = 5) =>
         new(0, "keeb:keys", leds, x: 300, y: 100, w: 40, h: 250, rotation: 90);
 
-    private static StaticDeviceAssignment Assign(string effect) => new() { Effect = effect };
+    private static DevicePin Assign(string effect) => new() { Kind = DevicePinKinds.Static, Effect = effect };
 
     [Fact]
     public async Task Assigned_effect_overrides_the_shared_canvas()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
+        var tracker = new DevicePinTracker();
         tracker.Set("keeb:keys", Assign("red"));
         var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
         Assert.Equal(255, leds[0]);
@@ -78,7 +79,7 @@ public class StaticDeviceEffectTests
     {
         // The flat-colour implementation this replaces could only ever produce
         // one colour here; a ramp must read end to end (fullscreen evaluation).
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
+        var tracker = new DevicePinTracker();
         tracker.Set("keeb:keys", Assign("ramp"));
         // Wider than tall, so its LEDs run ACROSS the canvas and meet the sweep.
         var wide = new DeviceFrame(0, "keeb:keys", 5, x: 100, y: 100, w: 250, h: 40, rotation: 0);
@@ -91,19 +92,31 @@ public class StaticDeviceEffectTests
     }
 
     [Fact]
-    public async Task Assignment_is_ignored_outside_static_mode()
+    public async Task A_static_pin_applies_while_the_global_mode_is_animate()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = false };
+        // RenderOnce runs a green fill as the global effect; the pin is red.
+        var tracker = new DevicePinTracker();
         tracker.Set("keeb:keys", Assign("red"));
         var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
+        Assert.Equal(255, leds[0]);
+        Assert.Equal(0, leds[1]);
+    }
+
+    [Fact]
+    public async Task Clearing_a_pin_returns_the_device_to_the_global_source()
+    {
+        var tracker = new DevicePinTracker();
+        tracker.Set("keeb:keys", Assign("red"));
+        tracker.Clear("keeb:keys");
+        var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
         Assert.Equal(0, leds[0]);
-        Assert.Equal(255, leds[1]);   // shared canvas green
+        Assert.Equal(255, leds[1]);
     }
 
     [Fact]
     public async Task Unassigned_device_still_samples_the_canvas()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
+        var tracker = new DevicePinTracker();
         tracker.Set("someone-else", Assign("red"));
         var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
         Assert.Equal(255, leds[1]);
@@ -112,7 +125,7 @@ public class StaticDeviceEffectTests
     [Fact]
     public async Task A_factory_that_throws_falls_back_to_the_canvas()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
+        var tracker = new DevicePinTracker();
         tracker.Set("keeb:keys", Assign("boom"));
         var leds = await RenderOnce(MakeDevice(), tracker, _ => throw new InvalidOperationException("no gpu"));
         Assert.Equal(255, leds[1]);
@@ -139,7 +152,7 @@ public class StaticDeviceEffectTests
     {
         // Sampling a fixed horizontal midline collapsed this to one colour on
         // the bench: every LED of a tall strip read the same pixel.
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
+        var tracker = new DevicePinTracker();
         tracker.Set("keeb:keys", Assign("vramp"));
         // Taller than wide, so its LEDs run down the canvas.
         var tall = new DeviceFrame(0, "keeb:keys", 5, x: 300, y: 100, w: 40, h: 250, rotation: 0);
@@ -151,21 +164,19 @@ public class StaticDeviceEffectTests
     [Fact]
     public void Key_changes_when_any_control_moves()
     {
-        var baseline = new StaticDeviceAssignment { Effect = "gradientlinear", Hue = 0.5f };
-        Assert.Equal(baseline.Key(), new StaticDeviceAssignment { Effect = "gradientlinear", Hue = 0.5f }.Key());
-        Assert.NotEqual(baseline.Key(), new StaticDeviceAssignment { Effect = "gradientlinear", Hue = 0.6f }.Key());
-        Assert.NotEqual(baseline.Key(), new StaticDeviceAssignment { Effect = "gradientlinear", Hue = 0.5f, Colorize = 0.3f }.Key());
-        Assert.NotEqual(baseline.Key(), new StaticDeviceAssignment
-        {
-            Effect = "gradientlinear", Hue = 0.5f,
-            Params = new Dictionary<string, float> { ["u_angle"] = 90f },
-        }.Key());
+        static DevicePin P(float hue, float? colorize = null, Dictionary<string, float>? ps = null) =>
+            new() { Kind = DevicePinKinds.Static, Effect = "gradientlinear", Hue = hue, Colorize = colorize, Params = ps };
+        var baseline = DevicePinLook.StaticKey(P(0.5f));
+        Assert.Equal(baseline, DevicePinLook.StaticKey(P(0.5f)));
+        Assert.NotEqual(baseline, DevicePinLook.StaticKey(P(0.6f)));
+        Assert.NotEqual(baseline, DevicePinLook.StaticKey(P(0.5f, 0.3f)));
+        Assert.NotEqual(baseline, DevicePinLook.StaticKey(P(0.5f, null, new Dictionary<string, float> { ["u_angle"] = 90f })));
     }
 
     [Fact]
     public void Version_bumps_so_the_engine_drops_stale_renders()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
+        var tracker = new DevicePinTracker();
         var v0 = tracker.Version;
         tracker.Set("a", Assign("x"));
         Assert.NotEqual(v0, tracker.Version);
@@ -184,33 +195,33 @@ public class StaticDeviceEffectTests
     public void Assignments_are_persisted_and_rehydrated()
     {
         var store = new InMemoryConfigStore();
-        var first = new StaticDeviceEffectTracker(store) { Enabled = true };
-        first.Set("keeb:keys", new StaticDeviceAssignment
-        {
+        var first = new DevicePinTracker(store);
+        first.Set("keeb:keys", new DevicePin
+        { Kind = DevicePinKinds.Static,
             Effect = "gradientlinear",
             Colorize = 0.25f,
             Params = new Dictionary<string, float> { ["u_angle"] = 90f },
         });
 
         // A fresh tracker over the same store is the restart.
-        var reborn = new StaticDeviceEffectTracker(store) { Enabled = true };
+        var reborn = new DevicePinTracker(store);
         Assert.True(reborn.TryGet("keeb:keys", out var back));
         Assert.Equal("gradientlinear", back.Effect);
-        Assert.Equal(0.25f, back.Colorize, 3);
+        Assert.Equal(0.25f, back.Colorize!.Value, 3);
         Assert.NotNull(back.Params);
         Assert.Equal(90f, back.Params!["u_angle"], 3);
-        Assert.Equal(first.TryGet("keeb:keys", out var orig) ? orig.Key() : "", back.Key());
+        Assert.Equal(first.TryGet("keeb:keys", out var orig) ? DevicePinLook.StaticKey(orig) : "", DevicePinLook.StaticKey(back));
     }
 
     [Fact]
     public void Clearing_an_assignment_removes_it_from_the_store_too()
     {
         var store = new InMemoryConfigStore();
-        var tracker = new StaticDeviceEffectTracker(store) { Enabled = true };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "simplered" });
+        var tracker = new DevicePinTracker(store);
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "simplered" });
         tracker.Clear("keeb:keys");
-        Assert.Empty(store.Load().Lighting.StaticDeviceLooks);
-        Assert.False(new StaticDeviceEffectTracker(store) { Enabled = true }.TryGet("keeb:keys", out _));
+        Assert.Empty(store.Load().Lighting.DevicePins);
+        Assert.False(new DevicePinTracker(store).TryGet("keeb:keys", out _));
     }
 
     /// <summary>
@@ -222,17 +233,14 @@ public class StaticDeviceEffectTests
     public void A_profile_switch_rehydrates_the_tracker()
     {
         var store = new InMemoryConfigStore();
-        var tracker = new StaticDeviceEffectTracker(store) { Enabled = true };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "simplered" });
+        var tracker = new DevicePinTracker(store);
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "simplered" });
 
         // What a profile activate does: swap the Lighting object wholesale.
         store.Update(s =>
         {
             s.Lighting = new Nexus.Service.Persistence.LightingSettings();
-            s.Lighting.StaticDeviceLooks["keeb:keys"] = new Nexus.Service.Persistence.StaticDeviceLook
-            {
-                Effect = "simplecyan",
-            };
+            s.Lighting.DevicePins["keeb:keys"] = new DevicePin { Kind = DevicePinKinds.Static, Effect = "simplecyan" };
         });
 
         Assert.True(tracker.TryGet("keeb:keys", out var now));
@@ -243,8 +251,8 @@ public class StaticDeviceEffectTests
     public void A_profile_without_assignments_drops_them()
     {
         var store = new InMemoryConfigStore();
-        var tracker = new StaticDeviceEffectTracker(store) { Enabled = true };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "simplered" });
+        var tracker = new DevicePinTracker(store);
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "simplered" });
         store.Update(s => s.Lighting = new Nexus.Service.Persistence.LightingSettings());
         Assert.False(tracker.TryGet("keeb:keys", out _));
     }
@@ -258,10 +266,10 @@ public class StaticDeviceEffectTests
     public void Rewriting_the_same_look_does_not_bump_the_version()
     {
         var store = new InMemoryConfigStore();
-        var tracker = new StaticDeviceEffectTracker(store) { Enabled = true };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "simplered" });
+        var tracker = new DevicePinTracker(store);
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "simplered" });
         var settled = tracker.Version;
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "simplered" });
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "simplered" });
         // One bump for the write itself, and no extra from the re-entrant hydrate.
         Assert.Equal(settled + 1, tracker.Version);
     }
@@ -273,8 +281,8 @@ public class StaticDeviceEffectTests
     [Fact]
     public async Task A_palette_colour_paints_without_rendering_an_effect()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "flat", Color = "#ff8000" });
+        var tracker = new DevicePinTracker();
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#ff8000" });
         var leds = await RenderOnce(MakeDevice(), tracker, _ => throw new InvalidOperationException("must not render"));
         Assert.Equal(255, leds[0]);
         Assert.Equal(0x80, leds[1]);
@@ -287,8 +295,8 @@ public class StaticDeviceEffectTests
     [Fact]
     public async Task An_unparseable_colour_falls_back_to_the_effect_path()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "red", Color = "not-a-colour" });
+        var tracker = new DevicePinTracker();
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "red", Color = "not-a-colour" });
         var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
         Assert.Equal(255, leds[0]);
         Assert.Equal(0, leds[1]);
@@ -298,21 +306,21 @@ public class StaticDeviceEffectTests
     public void A_palette_colour_survives_a_restart()
     {
         var store = new InMemoryConfigStore();
-        var first = new StaticDeviceEffectTracker(store) { Enabled = true };
-        first.Set("keeb:keys", new StaticDeviceAssignment { Effect = "flat", Color = "#00ff7f" });
+        var first = new DevicePinTracker(store);
+        first.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#00ff7f" });
 
-        var reborn = new StaticDeviceEffectTracker(store) { Enabled = true };
+        var reborn = new DevicePinTracker(store);
         Assert.True(reborn.TryGet("keeb:keys", out var back));
         Assert.Equal("#00ff7f", back.Color);
-        Assert.Equal(first.TryGet("keeb:keys", out var orig) ? orig.Key() : "", back.Key());
+        Assert.Equal(first.TryGet("keeb:keys", out var orig) ? DevicePinLook.StaticKey(orig) : "", DevicePinLook.StaticKey(back));
     }
 
     [Fact]
     public void Two_colours_of_the_same_effect_are_different_looks()
     {
-        var a = new StaticDeviceAssignment { Effect = "flat", Color = "#ff0000" };
-        var b = new StaticDeviceAssignment { Effect = "flat", Color = "#00ff00" };
-        Assert.NotEqual(a.Key(), b.Key());
+        var a = new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#ff0000" };
+        var b = new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#00ff00" };
+        Assert.NotEqual(DevicePinLook.StaticKey(a), DevicePinLook.StaticKey(b));
     }
 
     [Theory]
@@ -348,11 +356,11 @@ public class StaticDeviceEffectTests
     [Fact]
     public async Task An_assigned_device_is_never_observed_holding_the_canvas_colour()
     {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "flat", Color = "#ff0000" });
+        var tracker = new DevicePinTracker();
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#ff0000" });
         var device = MakeDevice(32);
 
-        using var engine = new LightingEngine { StaticEffects = tracker };
+        using var engine = new LightingEngine { Pins = tracker };
         engine.UpdateDevices(new[] { device });
         engine.FrameIntervalMs = 5;
         engine.SetEffect(new FillEffect(0, 255, 0));   // canvas = green, assignment = red
@@ -448,100 +456,12 @@ public class StaticDeviceEffectTests
         Assert.All(leds8, b => Assert.Equal(0, b));
     }
 
-    // --- Locks: a look the device keeps in every mode until the user unlocks it ---
-
-    [Fact]
-    public async Task A_locked_assignment_paints_outside_static_mode()
-    {
-        var tracker = new StaticDeviceEffectTracker { Enabled = false };
-        tracker.Set("keeb:keys", Assign("red"));
-        Assert.True(tracker.SetLocked("keeb:keys", true));
-        var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
-        Assert.Equal(255, leds[0]);
-        Assert.Equal(0, leds[1]);   // not the shared canvas green
-    }
-
-    [Fact]
-    public async Task Unlocking_returns_the_device_to_the_running_mode()
-    {
-        var tracker = new StaticDeviceEffectTracker { Enabled = false };
-        tracker.Set("keeb:keys", Assign("red"));
-        tracker.SetLocked("keeb:keys", true);
-        tracker.SetLocked("keeb:keys", false);
-        var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
-        Assert.Equal(0, leds[0]);
-        Assert.Equal(255, leds[1]);
-    }
-
-    [Fact]
-    public void A_locked_device_refuses_a_new_pick_and_a_clear()
-    {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
-        tracker.Set("keeb:keys", Assign("red"));
-        tracker.SetLocked("keeb:keys", true);
-        Assert.False(tracker.Set("keeb:keys", Assign("blue")));
-        Assert.False(tracker.Clear("keeb:keys"));
-        Assert.True(tracker.TryGet("keeb:keys", out var held));
-        Assert.Equal("red", held.Effect);
-        Assert.True(held.Locked);
-        // Unlocked, the same pick lands.
-        tracker.SetLocked("keeb:keys", false);
-        Assert.True(tracker.Set("keeb:keys", Assign("blue")));
-        Assert.True(tracker.TryGet("keeb:keys", out var now));
-        Assert.Equal("blue", now.Effect);
-    }
-
-    [Fact]
-    public void Locking_needs_a_look_to_hold()
-    {
-        var tracker = new StaticDeviceEffectTracker { Enabled = true };
-        Assert.False(tracker.SetLocked("keeb:keys", true));
-        Assert.False(tracker.IsLocked("keeb:keys"));
-    }
-
-    [Fact]
-    public void A_lock_survives_a_restart_and_a_lock_toggle_does_not_bump_the_version()
-    {
-        var store = new InMemoryConfigStore();
-        var first = new StaticDeviceEffectTracker(store) { Enabled = true };
-        first.Set("keeb:keys", Assign("simplered"));
-        var version = first.Version;
-        first.SetLocked("keeb:keys", true);
-        // The render is unchanged, so the engine's cache must not be dropped.
-        Assert.Equal(version, first.Version);
-
-        var reborn = new StaticDeviceEffectTracker(store) { Enabled = false };
-        Assert.True(reborn.IsLocked("keeb:keys"));
-        Assert.True(reborn.TryGet("keeb:keys", out var back));
-        Assert.True(back.Locked);
-    }
-
     /// <summary>
-    /// A preset restore swaps the looks wholesale. The same colours with a
-    /// different lock still has to land, or a preset could never unlock.
-    /// </summary>
-    [Fact]
-    public void A_profile_switch_that_only_changes_the_lock_still_lands()
-    {
-        var store = new InMemoryConfigStore();
-        var tracker = new StaticDeviceEffectTracker(store) { Enabled = false };
-        tracker.Set("keeb:keys", Assign("simplered"));
-        tracker.SetLocked("keeb:keys", true);
-        store.Update(s =>
-        {
-            s.Lighting = new Nexus.Service.Persistence.LightingSettings();
-            s.Lighting.StaticDeviceLooks["keeb:keys"] = new Nexus.Service.Persistence.StaticDeviceLook { Effect = "simplered" };
-        });
-        Assert.False(tracker.IsLocked("keeb:keys"));
-        Assert.False(tracker.TryGet("keeb:keys", out _));
-    }
-
-    /// <summary>
-    /// Game Sync repaints archetype devices after the sample; a locked look has
+    /// Game Sync repaints archetype devices after the sample; a static pin has
     /// to survive that pass the way it survives the canvas sample.
     /// </summary>
     [Fact]
-    public async Task A_locked_keyboard_keeps_its_look_under_game_sync()
+    public async Task A_pinned_keyboard_keeps_its_look_under_game_sync()
     {
         const int cols = 4, rows = 4, leds = cols * rows;
         var device = new DeviceFrame(0, "keeb:keys", leds, x: 100, y: 100, w: 250, h: 90)
@@ -554,11 +474,10 @@ public class StaticDeviceEffectTests
         gs.IngestAuthoredFill(255, 255, 255, "test");
         gs.IngestFrame("keyboard", "CHROMA_CUSTOM", rows, cols, new int[leds]);   // all black grid
 
-        var tracker = new StaticDeviceEffectTracker { Enabled = false };
-        tracker.Set("keeb:keys", new StaticDeviceAssignment { Effect = "flat", Color = "#ff0000" });
-        tracker.SetLocked("keeb:keys", true);
+        var tracker = new DevicePinTracker();
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#ff0000" });
 
-        using var engine = new LightingEngine { StaticEffects = tracker };
+        using var engine = new LightingEngine { Pins = tracker };
         engine.UpdateDevices(new[] { device });
         engine.FrameIntervalMs = 5;
         var painted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -137,8 +137,7 @@ public static partial class DevicesRoutes
             // Assignments and scales have no cheap equality, and unlike the id
             // lists above they are not replayed on undo/redo, so a straight
             // copy cannot rewrite the outgoing preset on the way past.
-            preset.StaticDeviceLooks = DeepCopyStaticLooks(s.Lighting.StaticDeviceLooks);
-            preset.AnimateDeviceLocks = new Dictionary<string, string>(s.Lighting.AnimateDeviceLocks);
+            preset.DevicePins = DeepCopyPins(s.Lighting.DevicePins);
             preset.DevicePrefs = DeepCopyDevicePrefs(s.Devices.LightingDevicePrefs);
         });
     }
@@ -211,31 +210,16 @@ public static partial class DevicesRoutes
                 }),
         };
 
-    private static Dictionary<string, Nexus.Service.Persistence.StaticDeviceLook> DeepCopyStaticLooks(
-        Dictionary<string, Nexus.Service.Persistence.StaticDeviceLook> source)
+    private static Dictionary<string, Nexus.Service.Persistence.DevicePin> DeepCopyPins(
+        Dictionary<string, Nexus.Service.Persistence.DevicePin> source)
     {
-        var copy = new Dictionary<string, Nexus.Service.Persistence.StaticDeviceLook>(source.Count);
+        var copy = new Dictionary<string, Nexus.Service.Persistence.DevicePin>(source.Count);
         foreach (var kv in source)
         {
-            if (kv.Value is null)
+            if (kv.Value is not null)
             {
-                continue;
+                copy[kv.Key] = kv.Value.Copy();
             }
-            copy[kv.Key] = new Nexus.Service.Persistence.StaticDeviceLook
-            {
-                Effect = kv.Value.Effect,
-                Color = kv.Value.Color,
-                Intensity = kv.Value.Intensity,
-                Hue = kv.Value.Hue,
-                Colorize = kv.Value.Colorize,
-                Saturation = kv.Value.Saturation,
-                Contrast = kv.Value.Contrast,
-                Params = kv.Value.Params is null
-                    ? new Dictionary<string, float>()
-                    : new Dictionary<string, float>(kv.Value.Params),
-                Slot = kv.Value.Slot,
-                Locked = kv.Value.Locked,
-            };
         }
         return copy;
     }
@@ -253,8 +237,7 @@ public static partial class DevicesRoutes
         {
             return;
         }
-        preset.StaticDeviceLooks = DeepCopyStaticLooks(settings.Lighting.StaticDeviceLooks);
-        preset.AnimateDeviceLocks = new Dictionary<string, string>(settings.Lighting.AnimateDeviceLocks);
+        preset.DevicePins = DeepCopyPins(settings.Lighting.DevicePins);
         preset.DevicePrefs = DeepCopyDevicePrefs(settings.Devices.LightingDevicePrefs);
     }
 
@@ -451,40 +434,38 @@ public static partial class DevicesRoutes
             return ApiResponse.Ok();
         });
 
-        app.MapGet("/devices/lighting-devices/static-looks", (
-            Nexus.Service.Persistence.IConfigStore store) =>
+        app.MapGet("/devices/lighting-devices/pins", (
+            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.DevicePinTracker pins) =>
         {
-            Dictionary<string, Nexus.Service.Persistence.StaticDeviceLook> looks = null!;
-            // Snapshot under the store lock: StaticDeviceEffectTracker mutates
-            // this very dictionary in place, so enumerating it on the request
-            // thread throws mid-iteration.
-            store.Update(s => looks = DeepCopyStaticLooks(s.Lighting.StaticDeviceLooks));
-            var dto = new StaticDeviceLooksResponse();
-            foreach (var (id, look) in looks)
-            {
-                if (look is null || string.IsNullOrEmpty(look.Effect))
-                {
-                    continue;
-                }
-                dto.Looks[id] = new StaticDeviceLookDto
-                {
-                    Effect = look.Effect,
-                    Color = look.Color ?? "",
-                    Intensity = look.Intensity,
-                    Hue = look.Hue,
-                    Colorize = look.Colorize,
-                    Saturation = look.Saturation,
-                    Contrast = look.Contrast,
-                    Slot = look.Slot,
-                    Locked = look.Locked,
-                    Params = look.Params is null
-                        ? new Dictionary<string, float>()
-                        : new Dictionary<string, float>(look.Params),
-                };
-            }
             return Results.Json(
-                dto,
-                Nexus.Service.Serialization.AppJsonContext.Default.StaticDeviceLooksResponse);
+                new DevicePinsResponse { Pins = DeepCopyPins(pins.Snapshot()) },
+                Nexus.Service.Serialization.AppJsonContext.Default.DevicePinsResponse);
+        }).AllowPanel();
+
+        // Bulk pin: every id gets the same pin, replacing any it held; a null pin
+        // clears them. A pin is the per-device assignment, so there is no lock.
+        app.MapPost("/devices/lighting-devices/pins", (
+            SetDevicePinsBody body,
+            Nexus.Service.Persistence.IConfigStore store,
+            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.DevicePinTracker pins,
+            FeatureGates gates,
+            Nexus.Service.Sockets.MultiplexHub hub) =>
+        {
+            if (!gates.Lighting)
+            {
+                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
+            }
+            if (body.Pin is not null && Nexus.Service.Lighting.DevicePinTracker.Validate(body.Pin) is { } why)
+            {
+                return Results.Json(
+                    ApiResponse.Fail(why),
+                    Nexus.Service.Serialization.AppJsonContext.Default.ApiResponse,
+                    statusCode: 400);
+            }
+            pins.SetMany(body.Ids ?? new List<string>(), body.Pin);
+            CaptureDeviceStateIntoActive(store);
+            Nexus.Service.Sockets.PanelTopics.BroadcastLighting(hub);
+            return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
 
         app.MapGet("/devices/lighting-devices/layout-presets", (
@@ -912,139 +893,22 @@ public static partial class DevicesRoutes
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
 
+        // Hue and saturation of a colour-capable device (smart lights), as
+        // device metadata the UI reads back. Not a pin: what a device shows on
+        // its own goes through POST /devices/lighting-devices/pins.
         app.MapPost("/devices/lighting-devices/color", (
             SetLightingDeviceColor body,
             ILightingDeviceProvider ld,
             Nexus.Service.Persistence.IConfigStore store,
-            // [FromServices] is load-bearing under AOT: the request-delegate
-            // generator reads a concrete class parameter as a second body
-            // parameter and the route 400s on binding.
-            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.StaticDeviceEffectTracker staticEffects,
             FeatureGates gates) =>
         {
             if (!gates.Lighting)
             {
                 return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
             }
-            // A locked device keeps its look until the user unlocks it; the
-            // hue/sat prefs stay untouched too, so a later unlock restores
-            // exactly what was locked.
-            if (staticEffects.IsLocked(body.Id))
-            {
-                return Results.Conflict(ApiResponse.Fail("device look is locked"));
-            }
             ld.SetHue(body.Id, body.Hue);
             ld.SetSaturation(body.Id, body.Saturation);
-            // The prefs above are device metadata the UI reads back. The
-            // assignment below is what actually reaches the LEDs: a whole look
-            // (effect + tint + params), so patterns and the tint controls apply
-            // instead of being flattened to one swatch.
-            if (string.IsNullOrEmpty(body.Effect))
-            {
-                staticEffects.Clear(body.Id);
-            }
-            else
-            {
-                staticEffects.Set(body.Id, new Nexus.Service.Lighting.StaticDeviceAssignment
-                {
-                    Effect = body.Effect,
-                    Color = body.Color ?? "",
-                    Intensity = body.Intensity <= 0 ? 1f : body.Intensity,
-                    Hue = body.Hue,
-                    Colorize = body.Colorize,
-                    Saturation = body.Saturation,
-                    Contrast = body.Contrast <= 0 ? 1f : body.Contrast,
-                    Params = body.Params,
-                    Slot = body.Slot,
-                });
-            }
             CaptureDeviceStateIntoActive(store);
-            return Results.Ok(ApiResponse.Ok());
-        }).AllowPanel();
-
-        // Locks a device onto its Static look: the engine paints it in every
-        // mode and no pick can replace it until it is unlocked. Locking needs a
-        // look to hold, so a device without one answers 404.
-        app.MapPost("/devices/lighting-devices/static-lock", (
-            SetStaticLockBody body,
-            Nexus.Service.Persistence.IConfigStore store,
-            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.StaticDeviceEffectTracker staticEffects,
-            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.AnimateDeviceLockTracker animateLocks,
-            FeatureGates gates,
-            Nexus.Service.Sockets.MultiplexHub hub) =>
-        {
-            if (!gates.Lighting)
-            {
-                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
-            }
-            // One lock kind per device: the animation lock would outrank the
-            // static look being locked, so refuse rather than hide it.
-            if (body.Locked && animateLocks.IsLocked(body.Id))
-            {
-                return Results.Conflict(ApiResponse.Fail("device is locked onto an animation"));
-            }
-            if (!staticEffects.SetLocked(body.Id, body.Locked))
-            {
-                return Results.NotFound(ApiResponse.Fail("device has no static look to lock"));
-            }
-            CaptureDeviceStateIntoActive(store);
-            // Unlike a pick, a lock changes what OTHER clients may write, so
-            // they re-read the lock flags off this frame.
-            Nexus.Service.Sockets.PanelTopics.BroadcastLighting(hub);
-            return Results.Ok(ApiResponse.Ok());
-        }).AllowPanel();
-
-        app.MapGet("/devices/lighting-devices/animate-locks", (
-            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.AnimateDeviceLockTracker animateLocks) =>
-        {
-            return Results.Json(
-                new AnimateDeviceLocksResponse { Locks = new Dictionary<string, string>(animateLocks.Snapshot()) },
-                Nexus.Service.Serialization.AppJsonContext.Default.AnimateDeviceLocksResponse);
-        }).AllowPanel();
-
-        // Locks a device onto an Animate shader: the engine runs it on that
-        // device in every mode. Only the assignment is stored; the shader's
-        // look stays the global per-effect state. A null effect unlocks.
-        app.MapPost("/devices/lighting-devices/animate-lock", (
-            SetAnimateLockBody body,
-            Nexus.Service.Persistence.IConfigStore store,
-            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.StaticDeviceEffectTracker staticEffects,
-            [Microsoft.AspNetCore.Mvc.FromServices] Nexus.Service.Lighting.AnimateDeviceLockTracker animateLocks,
-            FeatureGates gates,
-            Nexus.Service.Sockets.MultiplexHub hub) =>
-        {
-            if (!gates.Lighting)
-            {
-                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
-            }
-            if (string.IsNullOrEmpty(body.Id))
-            {
-                return Results.Json(
-                    ApiResponse.Fail("device id required"),
-                    Nexus.Service.Serialization.AppJsonContext.Default.ApiResponse,
-                    statusCode: 400);
-            }
-            if (string.IsNullOrEmpty(body.Effect))
-            {
-                animateLocks.Clear(body.Id);
-            }
-            else
-            {
-                if (!Nexus.Service.Lighting.AnimateDeviceLockTracker.IsAnimateEffect(body.Effect))
-                {
-                    return Results.Json(
-                    ApiResponse.Fail("not an animate effect"),
-                    Nexus.Service.Serialization.AppJsonContext.Default.ApiResponse,
-                    statusCode: 400);
-                }
-                if (staticEffects.IsLocked(body.Id))
-                {
-                    return Results.Conflict(ApiResponse.Fail("device look is locked"));
-                }
-                animateLocks.Set(body.Id, body.Effect);
-            }
-            CaptureDeviceStateIntoActive(store);
-            Nexus.Service.Sockets.PanelTopics.BroadcastLighting(hub);
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
 

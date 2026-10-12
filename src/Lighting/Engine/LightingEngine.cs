@@ -146,47 +146,48 @@ public sealed class LightingEngine : IDisposable
         _stackSlots = Nexus.Service.Lighting.StackSlots.Index(stacks);
     }
 
-    /// <summary>
-    /// Per-device Static assignments. Set once at wire-up; null in tests and any
-    /// host that never assigns one, in which case sampling is unchanged.
-    /// </summary>
-    public Nexus.Service.Lighting.StaticDeviceEffectTracker? StaticEffects { get; set; }
-
     /// <summary>Per-LED colour locks, painted after every other pass. Null in tests.</summary>
     public Nexus.Service.Lighting.LedColorLockTracker? LedColorLocks { get; set; }
     /// <summary>Lights keyboards as keys are pressed; painted after the canvas sample, under the colour locks.</summary>
     public Nexus.Service.Lighting.KeyReactive.KeyReactiveOverlay? KeyReactive { get; set; }
 
     /// <summary>
-    /// Builds the IEffect for an assignment. Supplied by the provider, which
+    /// Per-device pins. Set once at wire-up; null in tests and any host that
+    /// never pins one, in which case sampling is unchanged.
+    /// </summary>
+    public Nexus.Service.Lighting.DevicePinTracker? Pins { get; set; }
+
+    /// <summary>
+    /// Builds the IEffect for a static pin. Supplied by the provider, which
     /// owns shader construction - the engine only renders what it is handed.
     /// </summary>
-    public Func<Nexus.Service.Lighting.StaticDeviceAssignment, IEffect?>? StaticEffectFactory { get; set; }
+    public Func<Nexus.Service.Persistence.DevicePin, IEffect?>? StaticPinEffectFactory { get; set; }
 
     /// <summary>
-    /// Per-device animation locks. Set once at wire-up; null in tests and any
-    /// host that never locks one, in which case sampling is unchanged.
+    /// Content tag of a pinned source's resolved current look, so the engine can
+    /// tell when a pinned effect needs updating. The key is an Animate shader key
+    /// or <see cref="MirrorPinKey"/>. Supplied by the provider, which owns where
+    /// that look lives.
     /// </summary>
-    public Nexus.Service.Lighting.AnimateDeviceLockTracker? AnimateLocks { get; set; }
+    public Func<string, string?>? PinLookTag { get; set; }
 
     /// <summary>
-    /// Content tag of an effect's resolved current look, so the engine can tell
-    /// when a locked effect needs updating. Supplied by the provider, which owns
-    /// where that look lives.
-    /// </summary>
-    public Func<string, string?>? AnimateLockLookTag { get; set; }
-
-    /// <summary>
-    /// Builds a locked effect at its resolved current look. Given the instance
+    /// Builds a pinned effect at its resolved current look. Given the instance
     /// built before (or null), it may update that one in place and return it,
     /// which avoids a shader recompile per slider drag; any other return value
     /// replaces it and the engine disposes the old one.
     /// </summary>
-    public Func<string, IEffect?, IEffect?>? AnimateLockEffectFactory { get; set; }
+    public Func<string, IEffect?, IEffect?>? PinEffectFactory { get; set; }
 
-    // One live instance per distinct locked effect key. Engine thread only: the
+    /// <summary>Render key of the screen capture shared by every mirror pin.</summary>
+    public const string MirrorPinKey = "@mirror";
+
+    /// <summary>Name of the global Screen Mirror effect; a mirror pin shares its canvas while it runs.</summary>
+    public const string ScreenEffectName = "screen";
+
+    // One live instance per distinct pinned source (Animate shader or the mirror capture). Engine thread only: the
     // GL context lives there.
-    private sealed class LockedRender
+    private sealed class PinRender
     {
         public IEffect? Effect;
         public CanvasBuffer Canvas = null!;
@@ -196,11 +197,11 @@ public sealed class LightingEngine : IDisposable
         public long UsedTick = -1;
         public long RetryAtMs;
     }
-    private readonly Dictionary<string, LockedRender> _lockRenders = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PinRender> _pinRenders = new(StringComparer.Ordinal);
     // Device id to the canvas it samples this tick; a null canvas means the
-    // main one. Absent means no animation lock (or its effect failed to render).
-    private readonly Dictionary<string, CanvasBuffer?> _lockedDevices = new(StringComparer.Ordinal);
-    private long _lockTick;
+    // main one. Absent means no animate/mirror pin (or its source failed to render).
+    private readonly Dictionary<string, CanvasBuffer?> _pinnedDevices = new(StringComparer.Ordinal);
+    private long _pinTick;
     private bool[] _gameSkip = Array.Empty<bool>();
 
     // One assignment renders once into this scratch canvas and every device
@@ -677,12 +678,12 @@ public sealed class LightingEngine : IDisposable
                         // publish: UpdateDevices swaps the array lock-free,
                         // and the skip mask below is indexed against it.
                         var devices = _devices;
-                        RenderAnimateLocks(effect, devices);
+                        RenderPins(effect, devices);
                         SampleDevicesFromCanvas(devices);
                         ApplyLedColorLocks(devices);
                         if (effect is GameSyncEffect gs)
                         {
-                            // A locked look (or a highlight / test pattern)
+                            // A static pin (or a highlight / test pattern)
                             // already owns its device; the game frame must
                             // not paint over it.
                             gs.WriteToDevices(devices, GameSkipMask(devices));
@@ -763,7 +764,7 @@ public sealed class LightingEngine : IDisposable
         }
         finally
         {
-            DisposeLockRenders();
+            DisposePinRenders();
             _canvas.Clear();
             foreach (var dev in _devices)
             {
@@ -772,65 +773,82 @@ public sealed class LightingEngine : IDisposable
         }
     }
 
-    private void DisposeLockRenders()
+    private void DisposePinRenders()
     {
-        foreach (var r in _lockRenders.Values)
+        foreach (var r in _pinRenders.Values)
         {
             try { r.Effect?.Dispose(); } catch { /* best-effort */ }
         }
-        _lockRenders.Clear();
-        _lockedDevices.Clear();
+        _pinRenders.Clear();
+        _pinnedDevices.Clear();
     }
 
     /// <summary>
-    /// Renders each distinct locked effect that is not the active one onto its
-    /// own canvas and records which canvas every locked device samples. The
-    /// active effect's devices simply keep the main canvas. Only locks whose
-    /// device is present render. Engine thread.
+    /// Renders each distinct pinned source (an Animate shader, or the one screen
+    /// capture every mirror pin shares) that is not the active effect onto its
+    /// own canvas and records which canvas every animate/mirror-pinned device
+    /// samples. A device pinned to the active effect keeps the main canvas. Only
+    /// pins whose device is present render, so the mirror capture runs while any
+    /// mirror-pinned device exists and is disposed when none remain. Engine thread.
     /// </summary>
-    private void RenderAnimateLocks(IEffect active, DeviceFrame[] devices)
+    private void RenderPins(IEffect active, DeviceFrame[] devices)
     {
-        var tracker = AnimateLocks;
-        _lockedDevices.Clear();
+        var tracker = Pins;
+        _pinnedDevices.Clear();
         if (tracker is null || !tracker.Any)
         {
-            if (_lockRenders.Count > 0)
+            if (_pinRenders.Count > 0)
             {
-                DisposeLockRenders();
+                DisposePinRenders();
             }
             return;
         }
-        var factory = AnimateLockEffectFactory;
+        var factory = PinEffectFactory;
         if (factory is null)
         {
             return;
         }
-        var locks = tracker.Snapshot();
+        var pins = tracker.Snapshot();
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var tick = ++_lockTick;
+        var tick = ++_pinTick;
         var used = 0;
         var activeName = active.Name;
         foreach (var dev in devices)
         {
-            if (!locks.TryGetValue(dev.Id, out var key))
+            if (!pins.TryGetValue(dev.Id, out var pin))
             {
                 continue;
             }
-            if (string.Equals(activeName, key, StringComparison.Ordinal))
+            string key;
+            if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate && !string.IsNullOrEmpty(pin.Effect))
             {
-                _lockedDevices[dev.Id] = null;
+                key = pin.Effect;
+            }
+            else if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Mirror)
+            {
+                key = MirrorPinKey;
+            }
+            else
+            {
                 continue;
             }
-            if (!_lockRenders.TryGetValue(key, out var render))
+            // Pinned to what is already running globally: share its canvas.
+            var shared = key == MirrorPinKey ? ScreenEffectName : key;
+            if (string.Equals(activeName, shared, StringComparison.Ordinal))
             {
-                render = new LockedRender { Canvas = new CanvasBuffer(_canvas.Width, _canvas.Height) };
-                _lockRenders[key] = render;
+                _pinnedDevices[dev.Id] = null;
+                continue;
+            }
+            if (!_pinRenders.TryGetValue(key, out var render))
+            {
+                render = new PinRender { Canvas = new CanvasBuffer(_canvas.Width, _canvas.Height) };
+                _pinRenders[key] = render;
             }
             if (render.UsedTick != tick)
             {
                 render.UsedTick = tick;
                 used++;
-                UpdateLockRender(key, render, factory, nowMs);
+                UpdatePinRender(key, render, factory, nowMs);
                 if (!render.Failed && render.Effect is not null)
                 {
                     try
@@ -840,12 +858,12 @@ public sealed class LightingEngine : IDisposable
                     }
                     catch (Exception ex)
                     {
-                        // A locked effect that cannot render must not take the
+                        // A pinned effect that cannot render must not take the
                         // frame down; its devices fall through to the canvas.
                         render.Failed = true;
                         render.Rendered = false;
-                        render.RetryAtMs = nowMs + LockRetryMs;
-                        Gpu.GpuContext.Log($"[animate-lock] render failed for {key}: {ex.GetType().Name}: {ex.Message}");
+                        render.RetryAtMs = nowMs + PinRetryMs;
+                        Gpu.GpuContext.Log($"[pin] render failed for {key}: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
                 else
@@ -855,14 +873,14 @@ public sealed class LightingEngine : IDisposable
             }
             if (render.Rendered)
             {
-                _lockedDevices[dev.Id] = render.Canvas;
+                _pinnedDevices[dev.Id] = render.Canvas;
             }
         }
-        if (used < _lockRenders.Count)
+        if (used < _pinRenders.Count)
         {
             // Drop instances nothing present references any more.
             List<string>? stale = null;
-            foreach (var (key, r) in _lockRenders)
+            foreach (var (key, r) in _pinRenders)
             {
                 if (r.UsedTick != tick) (stale ??= new List<string>()).Add(key);
             }
@@ -870,20 +888,20 @@ public sealed class LightingEngine : IDisposable
             {
                 foreach (var key in stale)
                 {
-                    try { _lockRenders[key].Effect?.Dispose(); } catch { /* best-effort */ }
-                    _lockRenders.Remove(key);
+                    try { _pinRenders[key].Effect?.Dispose(); } catch { /* best-effort */ }
+                    _pinRenders.Remove(key);
                 }
             }
         }
     }
 
-    private const long LockRetryMs = 1000;
+    private const long PinRetryMs = 1000;
 
-    private void UpdateLockRender(string key, LockedRender render, Func<string, IEffect?, IEffect?> factory, long nowMs)
+    private void UpdatePinRender(string key, PinRender render, Func<string, IEffect?, IEffect?> factory, long nowMs)
     {
         try
         {
-            var tag = AnimateLockLookTag?.Invoke(key);
+            var tag = PinLookTag?.Invoke(key);
             if (render.Effect is not null && !render.Failed && tag is not null && tag == render.Tag)
             {
                 return;
@@ -902,34 +920,34 @@ public sealed class LightingEngine : IDisposable
             render.Effect = built;
             render.Tag = tag;
             render.Failed = built is null;
-            render.RetryAtMs = nowMs + LockRetryMs;
+            render.RetryAtMs = nowMs + PinRetryMs;
         }
         catch (Exception ex)
         {
             try { render.Effect?.Dispose(); } catch { /* best-effort */ }
             render.Effect = null;
             render.Failed = true;
-            render.RetryAtMs = nowMs + LockRetryMs;
-            Gpu.GpuContext.Log($"[animate-lock] build failed for {key}: {ex.GetType().Name}: {ex.Message}");
+            render.RetryAtMs = nowMs + PinRetryMs;
+            Gpu.GpuContext.Log($"[pin] build failed for {key}: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
     /// <summary>
     /// The skip mask for the game frame: whatever an overlay painted, plus
-    /// animation-locked devices, which the shared game frame must not overwrite.
-    /// The key-reactive pass keeps using the overlay mask alone, so a locked
+    /// pinned devices, which the shared game frame must not overwrite.
+    /// The key-reactive pass keeps using the overlay mask alone, so a pinned
     /// keyboard still reacts to presses.
     /// </summary>
     private bool[] GameSkipMask(DeviceFrame[] devices)
     {
-        if (_lockedDevices.Count == 0)
+        if (_pinnedDevices.Count == 0)
         {
             return _overlaid;
         }
         if (_gameSkip.Length < devices.Length) _gameSkip = new bool[devices.Length];
         for (var i = 0; i < devices.Length; i++)
         {
-            _gameSkip[i] = (i < _overlaid.Length && _overlaid[i]) || _lockedDevices.ContainsKey(devices[i].Id);
+            _gameSkip[i] = (i < _overlaid.Length && _overlaid[i]) || _pinnedDevices.ContainsKey(devices[i].Id);
         }
         return _gameSkip;
     }
@@ -959,8 +977,8 @@ public sealed class LightingEngine : IDisposable
             {
                 return false;
             }
-            // A locked device shows its own effect, which a loop rendered from the active one would miss.
-            if (AnimateLocks?.IsLocked(d.Id) == true && deviceIds.Contains(d.Id))
+            // A pinned device shows its own source, which a loop rendered from the active effect would miss.
+            if (Pins?.IsPinned(d.Id) == true && deviceIds.Contains(d.Id))
             {
                 return false;
             }
@@ -1026,7 +1044,7 @@ public sealed class LightingEngine : IDisposable
                 var shadow = req.NewShadowFrames();
                 effect.RenderFrame(_aheadCanvas, req.TickMs[req.NextFrame]);
                 _sampleCanvas = _aheadCanvas;
-                SampleDevicesFromCanvas(shadow, honorAnimateLocks: false);
+                SampleDevicesFromCanvas(shadow, honorPins: false);
                 ApplyLedColorLocks(shadow);
                 foreach (var d in shadow)
                 {
@@ -1054,12 +1072,12 @@ public sealed class LightingEngine : IDisposable
         }
     }
 
-    private void SampleDevicesFromCanvas(DeviceFrame[] devices, bool honorAnimateLocks = true)
+    private void SampleDevicesFromCanvas(DeviceFrame[] devices, bool honorPins = true)
     {
         var baseCanvas = _sampleCanvas;
         try
         {
-            SampleDevicesCore(devices, baseCanvas, honorAnimateLocks && _lockedDevices.Count > 0);
+            SampleDevicesCore(devices, baseCanvas, honorPins && _pinnedDevices.Count > 0);
         }
         finally
         {
@@ -1075,17 +1093,17 @@ public sealed class LightingEngine : IDisposable
         // Overlays first, so an LED they own never gets a canvas colour it is
         // about to lose. Correctness no longer rests on this - DeviceFrame
         // publishes once per tick - but painting an LED twice is wasted work.
-        var overlaid = ApplyTestOverlays(devices, useLocks);
+        var overlaid = ApplyTestOverlays(devices);
         // Placed devices follow the scene camera under every sampling mode: a
         // sweep in 3D crosses the whole scene instead of each device end to end.
         var scene = _scene;
         for (var di = 0; di < devices.Length; di++)
         {
             var dev = devices[di];
-            // An animation-locked device samples its effect's canvas, the main
-            // one when it is locked onto the active effect.
-            _sampleCanvas = useLocks && _lockedDevices.TryGetValue(dev.Id, out var lockCanvas) && lockCanvas is not null
-                ? lockCanvas
+            // An animate or mirror pinned device samples its source's canvas, the main
+            // one when it is pinned to what is running globally.
+            _sampleCanvas = useLocks && _pinnedDevices.TryGetValue(dev.Id, out var pinCanvas) && pinCanvas is not null
+                ? pinCanvas
                 : baseCanvas;
             // Preview LED count from the editor's unsaved draft; clamped to the
             // physical buffer size because SetLed bounds-guards on LedCount.
@@ -1468,12 +1486,11 @@ public sealed class LightingEngine : IDisposable
 
     /// <summary>
     /// Paint the devices whose frame comes from something other than the canvas:
-    /// a zone highlight, a per-device Static assignment (every one in Static,
-    /// only locked ones elsewhere), or a test pattern.
+    /// a zone highlight, a static pin (in every mode), or a test pattern.
     /// Returns, per device, whether it painted the whole preview range, so the
     /// caller can skip a canvas sample that would only be overwritten.
     /// </summary>
-    private bool[] ApplyTestOverlays(DeviceFrame[] devices, bool useLocks)
+    private bool[] ApplyTestOverlays(DeviceFrame[] devices)
     {
         if (_overlaid.Length < devices.Length) _overlaid = new bool[devices.Length];
         var owned = _overlaid;
@@ -1501,11 +1518,11 @@ public sealed class LightingEngine : IDisposable
                 continue;
             }
 
-            // An animation lock outranks a static look, locked or not.
-            if (StaticEffects is not null
+            // Identify and test overlays outrank a pin; a pin outranks the global source.
+            if (Pins is not null
                 && dev.TestPattern is null
-                && !(useLocks && _lockedDevices.ContainsKey(dev.Id))
-                && StaticEffects.TryGet(dev.Id, out var assignment))
+                && Pins.TryGet(dev.Id, out var assignment)
+                && assignment.Kind == Nexus.Service.Persistence.DevicePinKinds.Static)
             {
                 // A palette pick is a colour, not an effect: nothing to render,
                 // nothing to sample, no canvas. Paint it and move on.
@@ -1629,10 +1646,10 @@ public sealed class LightingEngine : IDisposable
     /// Rendered pixels for an assignment, rendering it if this look has not been
     /// seen. Runs on the engine thread, which is where the GL context lives.
     /// </summary>
-    private byte[]? RenderAssignment(Nexus.Service.Lighting.StaticDeviceAssignment assignment)
+    private byte[]? RenderAssignment(Nexus.Service.Persistence.DevicePin assignment)
     {
-        var tracker = StaticEffects;
-        var factory = StaticEffectFactory;
+        var tracker = Pins;
+        var factory = StaticPinEffectFactory;
         if (tracker is null || factory is null) return null;
         if (tracker.Version != _assignVersionSeen)
         {
@@ -1640,7 +1657,7 @@ public sealed class LightingEngine : IDisposable
             _assignVersionSeen = tracker.Version;
             _assignRenders.Clear();
         }
-        var key = assignment.Key();
+        var key = Nexus.Service.Lighting.DevicePinLook.StaticKey(assignment);
         if (_assignRenders.TryGetValue(key, out var cached)) return cached;
 
         IEffect? effect = null;
@@ -1660,7 +1677,7 @@ public sealed class LightingEngine : IDisposable
         {
             // A look that cannot render must not take the whole frame down; the
             // device falls through to the shared canvas.
-            Gpu.GpuContext.Log($"[static-assign] render failed for {assignment.Effect}: {ex.GetType().Name}: {ex.Message}");
+            Gpu.GpuContext.Log($"[static-pin] render failed for {assignment.Effect}: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
         finally

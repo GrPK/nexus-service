@@ -24,9 +24,9 @@ public class LedColorLockTests
     private static DeviceFrame MakeDevice(int leds = 5) =>
         new(0, Id, leds, x: 300, y: 100, w: 40, h: 250, rotation: 90);
 
-    private static async Task<byte[]> RenderOnce(DeviceFrame device, LedColorLockTracker locks, StaticDeviceEffectTracker? statics = null)
+    private static async Task<byte[]> RenderOnce(DeviceFrame device, LedColorLockTracker locks, DevicePinTracker? statics = null)
     {
-        using var engine = new LightingEngine { LedColorLocks = locks, StaticEffects = statics };
+        using var engine = new LightingEngine { LedColorLocks = locks, Pins = statics };
         engine.UpdateDevices(new[] { device });
         engine.FrameIntervalMs = 10;
         var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -52,11 +52,10 @@ public class LedColorLockTests
     }
 
     [Fact]
-    public async Task Locked_leds_override_a_locked_static_look()
+    public async Task Locked_leds_override_a_static_pin()
     {
-        var statics = new StaticDeviceEffectTracker();
-        statics.Set(Id, new StaticDeviceAssignment { Effect = "flat", Color = "#0000ff" });
-        statics.SetLocked(Id, true);
+        var statics = new DevicePinTracker();
+        statics.Set(Id, new Nexus.Service.Persistence.DevicePin { Kind = Nexus.Service.Persistence.DevicePinKinds.Static, Effect = "flat", Color = "#0000ff" });
         var locks = new LedColorLockTracker();
         locks.Set(Id, new[] { 0 }, "#ffffff");
 

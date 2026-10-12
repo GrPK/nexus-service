@@ -531,8 +531,59 @@ public sealed class UnitsSettingsPatch
     public string? DateFormat { get; set; }
 }
 
-/// <summary>One device's Static look: the effect plus the exact tint it was
-/// assigned with. Mirrors Nexus.Service.Lighting.StaticDeviceAssignment.</summary>
+/// <summary>Pin kinds a device can hold; see <see cref="DevicePin"/>.</summary>
+public static class DevicePinKinds
+{
+    public const string Static = "static";
+    public const string Animate = "animate";
+    public const string Mirror = "mirror";
+
+    public static bool IsKnown(string? kind) => kind is Static or Animate or Mirror;
+}
+
+/// <summary>
+/// A device pinned to its own source instead of following the global mode, in
+/// every mode, until the pin is cleared. <c>static</c> carries a whole Static
+/// look (the fields below); <c>animate</c> names an Animate shader whose look
+/// is that shader's global setting; <c>mirror</c> samples the screen capture at
+/// the device's own spot with the global Mirror settings. The same shape is the
+/// persisted form and the wire form.
+/// </summary>
+public sealed class DevicePin
+{
+    /// <summary>"static", "animate" or "mirror".</summary>
+    public string Kind { get; set; } = "";
+    /// <summary>Static: the effect key. Animate: the shader key. Unused for mirror.</summary>
+    public string? Effect { get; set; }
+    /// <summary>Static: a flat palette pick, "#rrggbb". Set means the look is that colour and every field below is inert.</summary>
+    public string? Color { get; set; }
+    public float? Intensity { get; set; }
+    public float? Hue { get; set; }
+    public float? Colorize { get; set; }
+    public float? Saturation { get; set; }
+    public float? Contrast { get; set; }
+    public Dictionary<string, float>? Params { get; set; }
+    /// <summary>Static: the template slot the look came from, carried for the UI.</summary>
+    public int? Slot { get; set; }
+
+    public DevicePin Copy() => new()
+    {
+        Kind = Kind,
+        Effect = Effect,
+        Color = Color,
+        Intensity = Intensity,
+        Hue = Hue,
+        Colorize = Colorize,
+        Saturation = Saturation,
+        Contrast = Contrast,
+        Params = Params is null ? null : new Dictionary<string, float>(Params),
+        Slot = Slot,
+    };
+}
+
+/// <summary>Pre-pin per-device Static look. Read only so an older settings file,
+/// profile or preset still loads; <see cref="Nexus.Service.Lighting.PinMigration"/>
+/// turns every entry into a static <see cref="DevicePin"/> and clears the field.</summary>
 public sealed class StaticDeviceLook
 {
     public string Effect { get; set; } = "";
@@ -545,12 +596,7 @@ public sealed class StaticDeviceLook
     public float Saturation { get; set; } = 1f;
     public float Contrast { get; set; } = 1f;
     public Dictionary<string, float> Params { get; set; } = new();
-    /// <summary>Template slot the look came from. Carried for the UI's benefit -
-    /// nothing in the render path reads it - so a preset can restore the pick
-    /// exactly as it was made.</summary>
     public int Slot { get; set; }
-    /// <summary>Held in every mode; picks are refused until unlocked.</summary>
-    public bool Locked { get; set; }
 }
 
 /// <summary>
@@ -613,16 +659,15 @@ public sealed class LightingSettings
     /// <summary>Sets of cards stacked on one canvas frame and one selection. Same shape as the groups, no cap; a card is in at most one stack.</summary>
     public List<DeviceGroup> DeviceStacks { get; set; } = new();
     /// <summary>
-    /// Per-device Static assignments, keyed by lighting-device id. A device
-    /// listed here wears its own look in Static instead of the shared canvas.
-    /// Persisted so the assignment survives a service restart - it is what the
-    /// hardware is meant to show, not a UI preference.
+    /// Per-device pins, keyed by lighting-device id. A pinned device shows its
+    /// own source in every mode instead of the global one; an unlisted device
+    /// follows the global mode. Persisted so the pin survives a restart.
     /// </summary>
-    public Dictionary<string, StaticDeviceLook> StaticDeviceLooks { get; set; } = new();
-    /// <summary>Per-device animation locks, effect key by lighting-device id. A
-    /// locked device runs that Animate shader in every mode; the shader's look
-    /// stays the global per-effect state.</summary>
-    public Dictionary<string, string> AnimateDeviceLocks { get; set; } = new();
+    public Dictionary<string, DevicePin> DevicePins { get; set; } = new();
+    /// <summary>Pre-pin per-device Static looks; migration input only, null once folded into <see cref="DevicePins"/>.</summary>
+    public Dictionary<string, StaticDeviceLook>? StaticDeviceLooks { get; set; }
+    /// <summary>Pre-pin per-device animation locks (effect key by device id); migration input only, null once folded into <see cref="DevicePins"/>.</summary>
+    public Dictionary<string, string>? AnimateDeviceLocks { get; set; }
     /// <summary>Per-LED colour locks, "#rrggbb" by lighting-device id then LED index; held in every mode.</summary>
     public Dictionary<string, Dictionary<int, string>> LedColorLocks { get; set; } = new();
     /// <summary>Per-keyboard key reactions by lighting-device id; rendered by <see cref="Nexus.Service.Lighting.KeyReactive.KeyReactiveOverlay"/>.</summary>
@@ -861,12 +906,12 @@ public sealed class LayoutPreset : IAppBoundPreset
     // Mode + effect selection captured at save time. Null on a preset saved
     // before per-preset looks - activate then leaves the live look untouched.
     public LightingPresetLook? Look { get; set; }
-    /// <summary>Per-device Static assignments captured at save time - what each
-    /// device wears instead of the shared canvas. Null on a preset saved before
-    /// per-preset assignments; activate then leaves the live ones untouched.</summary>
+    /// <summary>Per-device pins captured at save time. Null on a preset saved
+    /// before per-preset pins; activate then leaves the live pins untouched.</summary>
+    public Dictionary<string, DevicePin>? DevicePins { get; set; }
+    /// <summary>Pre-pin Static looks of a preset; migration input only.</summary>
     public Dictionary<string, StaticDeviceLook>? StaticDeviceLooks { get; set; }
-    /// <summary>Per-device animation locks captured at save time, same
-    /// null-means-untouched contract as <see cref="StaticDeviceLooks"/>.</summary>
+    /// <summary>Pre-pin animation locks of a preset; migration input only.</summary>
     public Dictionary<string, string>? AnimateDeviceLocks { get; set; }
     /// <summary>Per-device brightness / hue / saturation captured at save time,
     /// same null-means-untouched contract as the fields above.</summary>
@@ -1009,13 +1054,15 @@ public sealed class CoolingSettings
     public Dictionary<string, int> ManualSpeeds { get; set; } = new();
     /// <summary>Per-channel duty offset in points, added to whatever a curve computes for that channel and clamped at the write. Absent entry means 0.</summary>
     public Dictionary<string, int> FanOffsets { get; set; } = new();
-    /// <summary>Per-channel lock override keyed by channel ID. A locked channel is exempt from Silent/Balanced/Turbo/Max/Off/Custom preset applies. An absent entry defaults to locked for pumps, unlocked otherwise; see <see cref="Nexus.Service.Cooling.FanProfiles.IsLocked"/>.</summary>
-    public Dictionary<string, bool> FanLockOverrides { get; set; } = new();
+    /// <summary>Per-channel pin override keyed by channel ID. A pinned channel is exempt from Silent/Balanced/Turbo/Max/Off/Custom preset applies. An absent entry defaults to pinned for pumps, unpinned otherwise; see <see cref="Nexus.Service.Cooling.FanProfiles.IsPinned"/>.</summary>
+    public Dictionary<string, bool> FanPinOverrides { get; set; } = new();
+    /// <summary>Pre-rename name of <see cref="FanPinOverrides"/>. Read only so an older settings file or profile still loads; <see cref="Nexus.Service.Lighting.PinMigration"/> folds it into the new field and clears it.</summary>
+    public Dictionary<string, bool>? FanLockOverrides { get; set; }
     /// <summary>Channel ids Nexus stops driving entirely, so the motherboard or a vendor app owns them. Distinct from an unassigned channel, which is merely idle: this survives preset applies. Mirrors <see cref="DevicesSettings.UncontrolledLightingDevices"/>; see <see cref="Nexus.Service.Cooling.FanControlledState"/>.</summary>
     public List<string> UncontrolledFanChannels { get; set; } = new();
     /// <summary>Where a hub with a shared control mode goes when Nexus stops driving it, keyed by device id: "firmware" (the cooler's onboard curve) or "motherboard" (PWM pass-through). An absent entry means firmware wherever the hub has one, so a stock install and a cooling reset both land there; only an explicit Hardware-control pick writes an entry. See <see cref="Nexus.Service.Cooling.QSeriesCoolerCoolingProvider"/>.</summary>
     public Dictionary<string, string> HubControlModes { get; set; } = new();
-    /// <summary>User-assigned display/monitoring-grouping role keyed by raw channel ID: one of <see cref="Nexus.Service.Models.Cooling.FanRoleKind.Cpu"/> / <see cref="Nexus.Service.Models.Cooling.FanRoleKind.Gpu"/>. An absent entry means <see cref="Nexus.Service.Models.Cooling.FanRoleKind.None"/>. Metadata only - does not affect fan control, locking, or preset logic.</summary>
+    /// <summary>User-assigned display/monitoring-grouping role keyed by raw channel ID: one of <see cref="Nexus.Service.Models.Cooling.FanRoleKind.Cpu"/> / <see cref="Nexus.Service.Models.Cooling.FanRoleKind.Gpu"/>. An absent entry means <see cref="Nexus.Service.Models.Cooling.FanRoleKind.None"/>. Metadata only - does not affect fan control, pinning, or preset logic.</summary>
     public Dictionary<string, string> FanRoles { get; set; } = new();
     /// <summary>Active cooling preset: "off" | "silent" | "balanced" | "turbo" | "max" | "custom".</summary>
     public string ActivePreset { get; set; } = InstallDefaults.Cooling.ActivePreset;

@@ -14,18 +14,18 @@ namespace Nexus.Service.Cooling;
 /// other three ride a multi-point Graph.
 ///
 /// Applying Silent / Balanced / Turbo / Max ensures a single shared "preset
-/// curve" exists with id `preset-{name}`, attaches every non-locked fan to
+/// curve" exists with id `preset-{name}`, attaches every non-pinned fan to
 /// it, and detaches those fans from any user curve. User curves are NOT
-/// deleted. Locked channels (pumps by default, or any channel the user
-/// locked via <see cref="IsLocked"/>) are exempt and keep whatever already
+/// deleted. Pinned channels (pumps by default, or any channel the user
+/// pinned via <see cref="IsPinned"/>) are exempt and keep whatever already
 /// drives them.
 ///
 /// Applying Custom restores the last-known per-fan curve assignments and
-/// manual duties that were active before a preset took over. Locked channels
+/// manual duties that were active before a preset took over. Pinned channels
 /// are exempt.
 ///
-/// Applying Off detaches every non-locked fan from every curve and releases
-/// every non-locked fan to BIOS Control.
+/// Applying Off detaches every non-pinned fan from every curve and releases
+/// every non-pinned fan to BIOS Control.
 ///
 /// The preset curve's parameters survive round-trips: re-applying a preset
 /// after the user edits its MinTemp/MaxTemp/etc. keeps the user's edits.
@@ -37,10 +37,10 @@ public static class FanProfiles
     /// <summary>
     /// True when a channel is exempt from Silent/Balanced/Turbo/Max/Off/Custom
     /// preset applies. An explicit entry in <paramref name="overrides"/> wins;
-    /// absent from the dict falls back to <see cref="IsLockedByDefault"/>.
+    /// absent from the dict falls back to <see cref="IsPinnedByDefault"/>.
     /// </summary>
-    public static bool IsLocked(FanChannel ch, IReadOnlyDictionary<string, bool> overrides) =>
-        overrides.TryGetValue(ch.Id, out var v) ? v : IsLockedByDefault(ch);
+    public static bool IsPinned(FanChannel ch, IReadOnlyDictionary<string, bool> overrides) =>
+        overrides.TryGetValue(ch.Id, out var v) ? v : IsPinnedByDefault(ch);
 
     /// <summary>
     /// Channels a preset must not retarget unless the user says otherwise,
@@ -53,29 +53,29 @@ public static class FanProfiles
     /// <item>Every channel on an AIO, radiator fans included - the cooler ships
     /// its own curve and owns the loop.</item>
     /// </list>
-    /// Each of these keeps whatever already drives it; the user can still lock
+    /// Each of these keeps whatever already drives it; the user can still pin
     /// or unlock any of them from the fan card.
     /// </summary>
-    public static bool IsLockedByDefault(FanChannel ch) =>
+    public static bool IsPinnedByDefault(FanChannel ch) =>
         ch.Kind == FanKinds.Pump || ch.IsGpu || ch.IsAio;
 
     /// <summary>
-    /// Write ch's lock override, collapsing to "no entry" when the requested
-    /// value matches the channel's default (see <see cref="IsLocked"/>) so
+    /// Write ch's pin override, collapsing to "no entry" when the requested
+    /// value matches the channel's default (see <see cref="IsPinned"/>) so
     /// the dict only holds real deviations.
     /// </summary>
-    public static void SetLockOverride(FanChannel ch, bool locked, IConfigStore store)
+    public static void SetPinOverride(FanChannel ch, bool pinned, IConfigStore store)
     {
-        var def = IsLockedByDefault(ch);
+        var def = IsPinnedByDefault(ch);
         store.Update(s =>
         {
-            if (locked == def)
+            if (pinned == def)
             {
-                s.Cooling.FanLockOverrides.Remove(ch.Id);
+                s.Cooling.FanPinOverrides.Remove(ch.Id);
             }
             else
             {
-                s.Cooling.FanLockOverrides[ch.Id] = locked;
+                s.Cooling.FanPinOverrides[ch.Id] = pinned;
             }
         });
     }
@@ -84,7 +84,7 @@ public static class FanProfiles
     /// Write ch's display/monitoring-grouping role, collapsing to "no entry"
     /// when the requested role is <see cref="FanRoleKind.None"/> so the dict only
     /// holds real assignments. Display metadata only: never touches fan
-    /// control, locking, or preset logic.
+    /// control, pinning, or preset logic.
     /// </summary>
     public static void SetFanRole(FanChannel ch, string role, IConfigStore store)
     {
@@ -136,12 +136,12 @@ public static class FanProfiles
         var temps = fans.GetTemperatureSources();
         var inputSensor = PreferredInput(temps);
         var fanIds = channels.Select(c => c.Id).ToHashSet();
-        // Locked channels (pumps by default, or any channel the user locked) are
+        // Pinned channels (pumps by default, or any channel the user pinned) are
         // excluded from the Silent/Balanced/Turbo/Max and Custom presets, which must
         // not retarget what drives them. Off still releases every channel to
-        // BIOS, locked or not.
-        var lockOverrides = store.Load().Cooling.FanLockOverrides;
-        var lockedIds = channels.Where(c => IsLocked(c, lockOverrides)).Select(c => c.Id).ToHashSet();
+        // BIOS, pinned or not.
+        var pinOverrides = store.Load().Cooling.FanPinOverrides;
+        var pinnedIds = channels.Where(c => IsPinned(c, pinOverrides)).Select(c => c.Id).ToHashSet();
 
         List<(string FanId, int Duty)>? restoredManual = null;
         store.Update(s =>
@@ -165,31 +165,31 @@ public static class FanProfiles
                 case "max":
                     {
                         var presetCurve = EnsurePresetCurve(s.Cooling.Curves, canonical, inputSensor);
-                        // Detach fans (not locked channels) from non-preset curves so the
-                        // preset curve owns them; a locked channel on its own curve stays
+                        // Detach fans (not pinned channels) from non-preset curves so the
+                        // preset curve owns them; a pinned channel on its own curve stays
                         // attached.
                         foreach (var curve in s.Cooling.Curves)
                         {
                             if (curve.Preset is null && curve.Id != presetCurve.Id)
                             {
-                                curve.Outputs.RemoveAll(o => fanIds.Contains(o.Id) && !lockedIds.Contains(o.Id));
+                                curve.Outputs.RemoveAll(o => fanIds.Contains(o.Id) && !pinnedIds.Contains(o.Id));
                             }
                             else if (curve.Preset is not null && curve.Id != presetCurve.Id)
                             {
                                 // Other preset curves (not the active one) keep only
-                                // locked channels, so a fan locked onto that preset stays
+                                // pinned channels, so a fan pinned onto that preset stays
                                 // put when the user activates a different one.
-                                curve.Outputs.RemoveAll(o => !lockedIds.Contains(o.Id));
+                                curve.Outputs.RemoveAll(o => !pinnedIds.Contains(o.Id));
                             }
                         }
-                        // Preserve locked channels already attached to THIS curve (e.g. a
-                        // fan locked while sitting on this preset) alongside every
-                        // non-locked channel, which this preset now claims.
-                        var keepLocked = presetCurve.Outputs.Where(o => lockedIds.Contains(o.Id)).ToList();
+                        // Preserve pinned channels already attached to THIS curve (e.g. a
+                        // fan pinned while sitting on this preset) alongside every
+                        // non-pinned channel, which this preset now claims.
+                        var keepPinned = presetCurve.Outputs.Where(o => pinnedIds.Contains(o.Id)).ToList();
                         presetCurve.Outputs = channels
-                            .Where(c => !lockedIds.Contains(c.Id))
+                            .Where(c => !pinnedIds.Contains(c.Id))
                             .Select(c => new CurveOutputDocument { Id = c.Id, Type = "Fan" })
-                            .Concat(keepLocked)
+                            .Concat(keepPinned)
                             .ToList();
                         s.Cooling.ActivePreset = canonical;
                         break;
@@ -200,25 +200,25 @@ public static class FanProfiles
                         // custom must restore its manual duties even when custom is
                         // already active, which the plain re-apply deliberately skips.
                         var wasCustom = s.Cooling.ActivePreset == "custom" && !forceCustomRestore;
-                        // Detach every preset curve, except locked channels already
-                        // sitting on one - a locked channel must not move.
+                        // Detach every preset curve, except pinned channels already
+                        // sitting on one - a pinned channel must not move.
                         foreach (var curve in s.Cooling.Curves.Where(c => c.Preset is not null))
                         {
-                            curve.Outputs.RemoveAll(o => !lockedIds.Contains(o.Id));
+                            curve.Outputs.RemoveAll(o => !pinnedIds.Contains(o.Id));
                         }
                         // Restore the saved custom mapping. Any fan missing from the
                         // snapshot stays unattached -> falls through to BIOS Control.
                         var snapshot = s.Cooling.CustomFanCurveAssignments ?? new Dictionary<string, string>();
                         // First clear every non-preset curve's outputs for fans we know about,
-                        // so we don't leave stale attachments from a prior state. Locked
+                        // so we don't leave stale attachments from a prior state. Pinned
                         // channels are left alone.
                         foreach (var curve in s.Cooling.Curves.Where(c => c.Preset is null))
                         {
-                            curve.Outputs.RemoveAll(o => fanIds.Contains(o.Id) && !lockedIds.Contains(o.Id));
+                            curve.Outputs.RemoveAll(o => fanIds.Contains(o.Id) && !pinnedIds.Contains(o.Id));
                         }
                         foreach (var (fanId, curveId) in snapshot)
                         {
-                            if (!fanIds.Contains(fanId) || lockedIds.Contains(fanId)) continue;
+                            if (!fanIds.Contains(fanId) || pinnedIds.Contains(fanId)) continue;
                             var curve = s.Cooling.Curves.FirstOrDefault(c => c.Id == curveId && c.Preset is null);
                             if (curve is null) continue;
                             if (!curve.Outputs.Any(o => o.Id == fanId))
@@ -233,20 +233,20 @@ public static class FanProfiles
                         // with the stale exit snapshot. Unlike the assignment
                         // restore, absent channels keep their restored entry:
                         // the engine replays it when the channel appears. The
-                        // explicit lock-override check covers locked fans whose
-                        // hub is disconnected right now (absent from lockedIds).
+                        // explicit pin-override check covers pinned fans whose
+                        // hub is disconnected right now (absent from pinnedIds).
                         if (!wasCustom)
                         {
                             var manualSnapshot = s.Cooling.CustomManualSpeeds ?? new Dictionary<string, int>();
                             foreach (var (fanId, duty) in manualSnapshot)
                             {
-                                if (lockedIds.Contains(fanId)) continue;
-                                // Uncontrolled channels are absent from lockedIds
+                                if (pinnedIds.Contains(fanId)) continue;
+                                // Uncontrolled channels are absent from pinnedIds
                                 // AND from fanIds, so the write is suppressed but
                                 // the entry would persist - and replay onto
                                 // hardware the moment control came back.
                                 if (uncontrolledIds.Contains(fanId)) continue;
-                                if (s.Cooling.FanLockOverrides.TryGetValue(fanId, out var lockedOverride) && lockedOverride) continue;
+                                if (s.Cooling.FanPinOverrides.TryGetValue(fanId, out var pinnedOverride) && pinnedOverride) continue;
                                 if (s.Cooling.Curves.Any(c => c.Outputs.Any(o => o.Id == fanId))) continue;
                                 s.Cooling.ManualSpeeds[fanId] = duty;
                                 (restoredManual ??= new()).Add((fanId, duty));
@@ -258,7 +258,7 @@ public static class FanProfiles
                 case "off":
                 default:
                     {
-                        // Off releases every channel to BIOS, locked or not:
+                        // Off releases every channel to BIOS, pinned or not:
                         // detach all fans from all curves.
                         foreach (var curve in s.Cooling.Curves)
                         {
@@ -319,7 +319,7 @@ public static class FanProfiles
     /// fan resolves to one of: BIOS, Manual, or attached to a specific curve.
     /// Rules:
     ///   - Every fan BIOS (no curve attachment, no manual override) -> "off".
-    ///     Locked fans count for this check even though the preset checks below
+    ///     Pinned fans count for this check even though the preset checks below
     ///     skip them: one still driven by a curve or a manual duty means the
     ///     system is not off.
     ///   - Every fan attached to the same `preset-{name}` curve and no manual
@@ -327,7 +327,7 @@ public static class FanProfiles
     ///   - Anything else -> "custom".
     /// "Manual on at least one fan" never resolves to "off" or a preset; the
     /// user explicitly broke out of the shared regime. For the preset half that
-    /// means an unlocked fan - a locked one is off the preset's books either
+    /// means an unpinned fan - a pinned one is off the preset's books either
     /// way, and only weighs on the "off" check above.
     /// Fans classified as Unresponsive are ignored: they're physically
     /// disconnected, can't be wired to any curve, and would otherwise force
@@ -337,18 +337,18 @@ public static class FanProfiles
     {
         var channels = fans.GetFanChannels();
         var settings = store.Load();
-        // Locked channels never join a preset curve (Apply excludes them), so
+        // Pinned channels never join a preset curve (Apply excludes them), so
         // they must be excluded here too - otherwise their absence from the
         // preset curve would fail the "all fans on the preset" check and force
         // "custom".
-        // Uncontrolled channels are excluded for the same reason as locked
+        // Uncontrolled channels are excluded for the same reason as pinned
         // ones: Apply never attaches them, so counting them would fail the
         // "all fans on the preset" check and pin the bar to "custom" forever.
         var uncontrolled = settings.Cooling.UncontrolledFanChannels;
-        var lockOverrides = settings.Cooling.FanLockOverrides;
+        var pinOverrides = settings.Cooling.FanPinOverrides;
         var fanIds = channels
             .Where(c => c.Classification != "Unresponsive"
-                && !IsLocked(c, lockOverrides)
+                && !IsPinned(c, pinOverrides)
                 && !uncontrolled.Contains(c.Id))
             .Select(c => c.Id)
             .ToHashSet();
@@ -376,20 +376,20 @@ public static class FanProfiles
             .Where(id => fanIds.Contains(id) && !attachment.ContainsKey(id))
             .ToHashSet();
 
-        // A locked fan is out of `fanIds` but is still a fan Nexus drives, so
+        // A pinned fan is out of `fanIds` but is still a fan Nexus drives, so
         // its curve attachment or manual duty has to be counted here: without
-        // it, locking every curve-driven fan leaves only BIOS fans in the set
-        // and derives "off" while software still drives the locked ones.
+        // it, pinning every curve-driven fan leaves only BIOS fans in the set
+        // and derives "off" while software still drives the pinned ones.
         // Uncontrolled fans stay out - the write gate keeps them inert whatever
         // a stale attachment says.
-        var lockedDriven = channels.Any(c => c.Classification != "Unresponsive"
-            && IsLocked(c, lockOverrides)
+        var pinnedDriven = channels.Any(c => c.Classification != "Unresponsive"
+            && IsPinned(c, pinOverrides)
             && !uncontrolled.Contains(c.Id)
             && (settings.Cooling.ManualSpeeds.ContainsKey(c.Id)
                 || curves.Any(cv => cv.Outputs.Any(o => o.Id == c.Id))));
 
         // All fans BIOS = no attachment AND no manual override.
-        if (attachment.Count == 0 && manualUnattached.Count == 0 && !lockedDriven) return "off";
+        if (attachment.Count == 0 && manualUnattached.Count == 0 && !pinnedDriven) return "off";
 
         // All fans on the same preset curve, with no manual overrides.
         if (manualUnattached.Count == 0)
