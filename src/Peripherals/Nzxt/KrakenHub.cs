@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Nexus.Service.Lighting;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Peripherals.PixelFormats;
 using Nexus.Service.Platform;
@@ -69,6 +70,273 @@ public sealed class KrakenHub : IDisposable
     public KrakenHub(IKrakenLcdTransportFactory? lcdFactory = null)
     {
         _lcdFactory = lcdFactory;
+    }
+
+    // Session lock. The backlight lives on the cooler, so the user's value is held here
+    // while it is dark and never written into the snapshot or the settings. Guarded by _lock.
+    private const string LockKey = "lcd";
+    private LcdLockState? _lockState;
+    private LcdLockSleepSet? _lockSleep;
+    private Func<bool>? _lockSetting;
+    private Func<int?>? _loadRestore;
+    private Action<int?>? _saveRestore;
+    private bool _lockDimmed;
+    private bool _lockRestorePending;
+    private int _lockSavedBrightness;
+    // Changes made while dark are stored and applied on unlock, ahead of the backlight, so
+    // nothing here can put an image on a glass the lock is holding at zero.
+    private bool _lockPendingReupload;
+    // The lock fade in flight. Sampled by the runner; the level it returns to is _lockSavedBrightness,
+    // fixed before the first step, and no step ever reaches the snapshot or the settings.
+    private LcdFade? _fade;
+    private int _fadeLastSent = -1;
+    private LcdFadeRunner? _fadeRunner;
+
+    /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
+    internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
+
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: FaultFade);
+    private KrakenDisplayMode? _lockPendingMode;
+
+    /// <summary>True while the lock holds the backlight at zero. Streamed frames are dropped meanwhile.</summary>
+    public bool LockDimmed
+    {
+        get { lock (_lock) { return _lockDimmed; } }
+    }
+
+    /// <summary>
+    /// Wires the session lock. <paramref name="sleepWhenLocked"/> is read once per lock.
+    /// The restore pair persists the pre-lock level in its own field, so a restart while dark
+    /// still brings the glass back; it is never the user's brightness.
+    /// </summary>
+    public void BindLockSleep(LcdLockState state, Func<bool> sleepWhenLocked, Func<int?>? loadRestore = null, Action<int?>? saveRestore = null)
+    {
+        _lockState = state;
+        _lockSleep = new LcdLockSleepSet(state);
+        _lockSetting = sleepWhenLocked;
+        _loadRestore = loadRestore;
+        _saveRestore = saveRestore;
+        state.Changed += OnLockChanged;
+    }
+
+    internal void OnLockChanged(bool locked)
+    {
+        if (_lockSleep is null || _lockSetting is null)
+        {
+            return;
+        }
+        if (locked)
+        {
+            EnterLockSleep();
+        }
+        else
+        {
+            _lockSleep.Drain();
+            ExitLockSleep();
+        }
+    }
+
+    // Same lock order as SetLcdBacklight: transfer lock first, so a rotation re-upload in
+    // flight finishes before the backlight moves. The decision is taken under both locks:
+    // a handler that waited behind a bucket upload while the PC was unlocked meanwhile sees
+    // the unlock here and does nothing.
+    /// <summary>Test seam: runs where a handler that already knows it is locked waits for the device locks.</summary>
+    internal Action? TestHookBeforeLockEnter { get; set; }
+
+    private void EnterLockSleep()
+    {
+        TestHookBeforeLockEnter?.Invoke();
+        lock (_lcdTransferLock)
+        lock (_lock)
+        {
+            if (_lockSleep is null || _lockSetting is null || !_lockSleep.IsSleeping(LockKey, _lockSetting))
+            {
+                return;
+            }
+            // Not connected yet: Connect applies the lock itself, from the same decision.
+            if (_lockDimmed || !_isConnected || _device == null || !_model.HasLcd)
+            {
+                return;
+            }
+            // The snapshot always holds the user's level, never a fade step, so this is the level to
+            // come back to even when an unlock's fade up is caught half way.
+            _lockSavedBrightness = _snapshot.LcdBrightness;
+            _lockDimmed = true;
+            _saveRestore?.Invoke(_lockSavedBrightness);
+            var from = _fade is { Down: false } rising ? rising.LevelAt(Clock()) : _lockSavedBrightness;
+            StartFadeLocked(from, 0, SleepBlackoutCoordinator.LockFadeDuration);
+            ServiceLog.Info($"[lcd-lock] kraken LCD sleeping (backlight {_lockSavedBrightness}% kept)");
+        }
+    }
+
+    private void ExitLockSleep()
+    {
+        lock (_lcdTransferLock)
+        lock (_lock)
+        {
+            if (!_lockDimmed)
+            {
+                return;
+            }
+            _lockDimmed = false;
+            if (_isConnected && _device != null)
+            {
+                ApplyPendingWhileDarkLocked();
+                // Up from 0, or from the step a fade down was caught on.
+                var from = _fade is { Down: true } falling ? falling.LevelAt(Clock()) : 0;
+                if (from == _lockSavedBrightness)
+                {
+                    _fade = null;
+                    FinishRestoreLocked(WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns)));
+                }
+                else
+                {
+                    StartFadeLocked(from, _lockSavedBrightness, SleepBlackoutCoordinator.UnlockFadeDuration);
+                }
+            }
+            else
+            {
+                // The cooler stays dark and its read-back will say zero; Connect restores the real value.
+                _lockRestorePending = true;
+            }
+        }
+    }
+
+    // Caller holds _lock. Cleared only once the write lands; Poll and the next Connect retry it.
+    private void FinishRestoreLocked(bool wrote)
+    {
+        if (wrote)
+        {
+            _saveRestore?.Invoke(null);
+            ServiceLog.Info($"[lcd-lock] kraken LCD waking to {_lockSavedBrightness}%");
+        }
+        else
+        {
+            _lockRestorePending = true;
+        }
+    }
+
+    // Caller holds _lock. A ramp that starts and ends at the same level is just the write.
+    private void StartFadeLocked(int from, int to, TimeSpan duration)
+    {
+        var turns = _snapshot.LcdOrientationQuarterTurns;
+        if (from == to)
+        {
+            _fade = null;
+            var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(to, turns));
+            if (to > 0)
+            {
+                FinishRestoreLocked(wrote);
+            }
+            return;
+        }
+        _fade = new LcdFade(from, to, duration, Clock());
+        // The cooler already shows the level the ramp starts at (a fade up starts from 0, which
+        // the dark write or the fade down left there).
+        _fadeLastSent = from;
+        FadeRunner.Kick();
+    }
+
+    /// <summary>A step threw: the ramp is dropped and its end state is applied (dark for a fade down, the level it was returning to for a fade up), so the glass is not left on a half step.</summary>
+    internal void FaultFade()
+    {
+        lock (_lock)
+        {
+            if (_fade is not { } fade)
+            {
+                return;
+            }
+            _fade = null;
+            try
+            {
+                var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(fade.To, _snapshot.LcdOrientationQuarterTurns));
+                if (!fade.Down)
+                {
+                    FinishRestoreLocked(wrote);
+                }
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warn($"[nzxt-kraken] settling after a failed fade step: {ex.GetType().Name}: {ex.Message}");
+                if (!fade.Down)
+                {
+                    // The poll retries the restore.
+                    _lockRestorePending = true;
+                }
+            }
+        }
+    }
+
+    /// <summary>One sample of the fade: writes the stepped level when it changed, finishes the ramp when it lands.</summary>
+    internal bool StepFade()
+    {
+        lock (_lock)
+        {
+            if (_fade is not { } fade || !_isConnected || _device == null)
+            {
+                _fade = null;
+                return false;
+            }
+            var now = Clock();
+            var level = fade.LevelAt(now);
+            var done = fade.IsDoneAt(now);
+            if (!done && level == _fadeLastSent)
+            {
+                return true;
+            }
+            var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(level, _snapshot.LcdOrientationQuarterTurns));
+            if (wrote)
+            {
+                _fadeLastSent = level;
+            }
+            if (!done)
+            {
+                return true;
+            }
+            _fade = null;
+            if (!fade.Down)
+            {
+                FinishRestoreLocked(wrote);
+            }
+            return false;
+        }
+    }
+
+    // A restoring backlight write that failed at unlock is retried on every poll until it lands.
+    private void RetryRestoreLocked()
+    {
+        if (!_lockRestorePending || _lockDimmed || !_isConnected || !_model.HasLcd)
+        {
+            return;
+        }
+        if (WriteLocked(KrakenProtocol.EncodeSetBacklight(_lockSavedBrightness, _snapshot.LcdOrientationQuarterTurns)))
+        {
+            _lockRestorePending = false;
+            _saveRestore?.Invoke(null);
+            ServiceLog.Info($"[lcd-lock] kraken LCD restored to {_lockSavedBrightness}% on retry");
+        }
+    }
+
+    // Image and mode changes that arrived while the glass was held dark.
+    private void ApplyPendingWhileDarkLocked()
+    {
+        var reupload = _lockPendingReupload;
+        var mode = _lockPendingMode;
+        _lockPendingReupload = false;
+        _lockPendingMode = null;
+        if (reupload && _lastLcdFrame != null)
+        {
+            UploadLcdFrameLocked(_lastLcdFrame, _snapshot.LcdOrientationQuarterTurns);
+        }
+        else if (mode is { } wanted)
+        {
+            var reply = ExchangeLocked(
+                KrakenProtocol.EncodeSetDisplayMode(wanted, 0), 0x39, 0x01, CommandReadTimeoutMs);
+            if (reply != null && KrakenProtocol.IsAck(reply))
+            {
+                _snapshot = _snapshot.WithDisplayMode(wanted);
+            }
+        }
     }
 
     public const string DeviceId = "nzxt-kraken";
@@ -234,11 +502,32 @@ public sealed class KrakenHub : IDisposable
                     ?? KrakenDisplayMode.Liquid;
             }
 
+            // A cooler that stayed dark across a reconnect, or across a restart, reads back
+            // zero, which is not the user's value; the one held here (or persisted) is.
+            var sleepNow = _model.HasLcd && _lockSleep is not null && _lockSetting is not null
+                && _lockSleep.IsSleeping(LockKey, _lockSetting);
+            if (!_lockDimmed && !_lockRestorePending && _model.HasLcd && _loadRestore?.Invoke() is { } persisted)
+            {
+                _lockSavedBrightness = persisted;
+                _lockRestorePending = true;
+            }
+            _fade = null;
+            var restore = _lockRestorePending || (_lockDimmed && !sleepNow);
+            if (_lockDimmed || restore)
+            {
+                brightness = _lockSavedBrightness;
+            }
+            else if (sleepNow)
+            {
+                _lockSavedBrightness = brightness;
+                _saveRestore?.Invoke(brightness);
+            }
+            _lockDimmed = sleepNow;
+
             _snapshot = new KrakenSnapshot(
                 0, 0, 0, 0, 0,
                 fw?.ToString() ?? "",
                 brightness, orientation, mode, channels);
-
             if (_model.HasLcd)
             {
                 _lcd = _lcdFactory?.Open(_device.Serial);
@@ -247,6 +536,32 @@ public sealed class KrakenHub : IDisposable
                     ServiceLog.Info("[nzxt-kraken] connected without an LCD bulk pipe; image upload unavailable");
                 }
             }
+
+            if (_model.HasLcd && !sleepNow)
+            {
+                // Changes made while the glass was held dark and not yet shown.
+                ApplyPendingWhileDarkLocked();
+            }
+            var restoreFailed = false;
+            if (_model.HasLcd && (sleepNow || restore))
+            {
+                var wrote = WriteLocked(KrakenProtocol.EncodeSetBacklight(sleepNow ? 0 : brightness, orientation));
+                if (!sleepNow)
+                {
+                    if (wrote)
+                    {
+                        _saveRestore?.Invoke(null);
+                    }
+                    else
+                    {
+                        restoreFailed = true;
+                    }
+                }
+                ServiceLog.Info(sleepNow
+                    ? "[lcd-lock] kraken LCD attached while locked; staying dark"
+                    : $"[lcd-lock] kraken LCD restored to {brightness}% after reconnect");
+            }
+            _lockRestorePending = restoreFailed;
 
             _isConnected = true;
             return true;
@@ -331,6 +646,7 @@ public sealed class KrakenHub : IDisposable
                 return false;
             }
             DrainLocked();
+            RetryRestoreLocked();
             if (!WriteLocked(KrakenProtocol.EncodeStatusRequest()))
             {
                 return false;
@@ -393,12 +709,35 @@ public sealed class KrakenHub : IDisposable
     /// </summary>
     public bool SetLcdBacklight(int brightnessPercent, int orientationQuarterTurns)
     {
+        // Taken before the transfer lock; the flag only flips under both, so a stale read at
+        // worst sends one command that the lock path then corrects.
         var report = KrakenProtocol.EncodeSetBacklight(brightnessPercent, orientationQuarterTurns);
         // A rotation re-uploads the stored frame, which is a full bulk transfer, so this
         // takes the transfer lock first - same order as PushStreamFrame, never the reverse.
         lock (_lcdTransferLock)
         lock (_lock)
         {
+            // While the lock holds the glass dark a new level is remembered, not shown.
+            if (_lockDimmed)
+            {
+                _lockSavedBrightness = Math.Clamp(brightnessPercent, 0, 100);
+                // A restart mid-lock restores this level, not the one from before the change.
+                _saveRestore?.Invoke(_lockSavedBrightness);
+                // Dark, or the step a fade down is on: the change must not jump the ramp.
+                var shown = _fade is { } running ? running.LevelAt(Clock()) : 0;
+                report = KrakenProtocol.EncodeSetBacklight(shown, orientationQuarterTurns);
+            }
+            else
+            {
+                // An explicit level after the unlock wins over a fade up still in flight, and with
+                // the fade gone nothing else would clear the marker it was returning to.
+                if (_fade is { Down: false })
+                {
+                    _saveRestore?.Invoke(null);
+                    _lockRestorePending = false;
+                }
+                _fade = null;
+            }
             if (_device == null || !WriteLocked(report))
             {
                 return false;
@@ -409,7 +748,15 @@ public sealed class KrakenHub : IDisposable
             // The panel will not re-orient a stored image on its own.
             if (rotated && _lastLcdFrame != null && _snapshot.DisplayMode == KrakenDisplayMode.Bucket)
             {
-                UploadLcdFrameLocked(_lastLcdFrame, turns);
+                if (_lockDimmed)
+                {
+                    _lockPendingReupload = true;
+                }
+                else
+                {
+                    _lockPendingReupload = false;
+                    UploadLcdFrameLocked(_lastLcdFrame, turns);
+                }
             }
             return true;
         }
@@ -423,6 +770,17 @@ public sealed class KrakenHub : IDisposable
             {
                 return false;
             }
+            if (_lockDimmed)
+            {
+                // Held until unlock; the glass stays dark and unchanged meanwhile.
+                _lockPendingMode = mode;
+                _lockPendingReupload = false;
+                _snapshot = _snapshot.WithDisplayMode(mode);
+                return true;
+            }
+            // An explicit change after the lock supersedes anything held from before it.
+            _lockPendingMode = null;
+            _lockPendingReupload = false;
             var reply = ExchangeLocked(
                 KrakenProtocol.EncodeSetDisplayMode(mode, bucketIndex), 0x39, 0x01, CommandReadTimeoutMs);
             if (reply == null || !KrakenProtocol.IsAck(reply))
@@ -513,6 +871,16 @@ public sealed class KrakenHub : IDisposable
             }
             _lastLcdFrame = source;
             _streamReady = false;
+            if (_lockDimmed)
+            {
+                // Stored now, shown on unlock.
+                _lockPendingReupload = true;
+                _lockPendingMode = null;
+                _snapshot = _snapshot.WithDisplayMode(KrakenDisplayMode.Bucket);
+                return true;
+            }
+            _lockPendingReupload = false;
+            _lockPendingMode = null;
             return UploadLcdFrameLocked(source, _snapshot.LcdOrientationQuarterTurns);
         }
     }
@@ -640,6 +1008,12 @@ public sealed class KrakenHub : IDisposable
         }
         lock (_lcdTransferLock)
         {
+            // Every pushed frame re-activates bucket mode on the cooler, so frames stop while
+            // the lock holds the glass dark. Reported as taken: a dropped frame is not a fault.
+            if (LockDimmed)
+            {
+                return true;
+            }
             int target;
             int encoded;
             byte format;
@@ -843,6 +1217,7 @@ public sealed class KrakenHub : IDisposable
         lock (_lock)
         {
             _isConnected = false;
+            _fade = null;
             _snapshot = KrakenSnapshot.Empty;
             _lcd?.Dispose();
             _lcd = null;
@@ -861,6 +1236,7 @@ public sealed class KrakenHub : IDisposable
             }
             _disposed = true;
             _isConnected = false;
+            _fade = null;
             _snapshot = KrakenSnapshot.Empty;
             _lcd?.Dispose();
             _lcd = null;

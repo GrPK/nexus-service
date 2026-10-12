@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using Nexus.Service.Lighting;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -161,7 +163,8 @@ public sealed class Slv3Hub : IDisposable
     // A reply opening with 0 is the RX's "no device list this cycle". It does
     // this on its own every ~17 s for a few seconds and recovers without help,
     // so only a busy spell this long is treated as a wedge. A wedge gets a fresh
-    // RX handle; one with no good reply since the last RX recovery gets UsbResetAnother.
+    // RX handle, never UsbResetAnother: the reset re-enumerates the RX, a Windows
+    // device sound each time.
     private const int RxBusyPollsBeforeReset = 60;
     private int _rxBusyStreak;
     private byte[]? _firstBusyReply;
@@ -243,12 +246,25 @@ public sealed class Slv3Hub : IDisposable
     private const int MaxDeviceListPages = 3;
     private int _lastRecordCount;
 
-    public Slv3Hub(ISlv3Discovery discovery, Func<Slv3PortInfo, ISlv3Transport> transportFactory, Func<long>? nowMs = null)
+    public Slv3Hub(
+        ISlv3Discovery discovery,
+        Func<Slv3PortInfo, ISlv3Transport> transportFactory,
+        Func<long>? nowMs = null,
+        Nexus.Service.Lighting.LcdLockState? lockState = null)
     {
         _discovery = discovery;
         _transportFactory = transportFactory;
         _nowMs = nowMs ?? (() => Environment.TickCount64);
+        if (lockState is not null)
+        {
+            _lockSleep = new Nexus.Service.Lighting.LcdLockSleepSet(lockState);
+        }
     }
+
+    // Session lock. The HydroShift II screen's backlight rides in the param block that goes
+    // out every drive tick, so the dark value is written into that block and nothing else is
+    // sent: no extra frames, no timing or link change. Decided once per lock per AIO.
+    private readonly Nexus.Service.Lighting.LcdLockSleepSet? _lockSleep;
 
     // Monotonic ms clock; injectable so tests drive chain expiry deterministically.
     private readonly Func<long> _nowMs;
@@ -1151,12 +1167,28 @@ public sealed class Slv3Hub : IDisposable
             var rpm = control.Percent is int percent
                 ? Slv3Protocol.HydroShiftPumpRpm(percent, record.DevType)
                 : Slv3Protocol.HydroShiftDefaultPumpRpm;
+            var shown = screenSet ? screen : Slv3AioScreen.Default;
+            // With the AIO's USB cable connected and Nexus widgets on, the streamed panel owns the
+            // glass and the panel record's own setting is the only one that applies; this byte
+            // stays at the user's value then, the same condition the web uses to hide this toggle.
+            var sleeping = _lockSleep is not null && _lockSleep.IsSleeping(key, () => shown.SleepWhenLocked) && !UsbPanelOwnsGlass(key, shown.NexusWidgets);
+            shown = shown with { Brightness = AioLockBrightness(key, shown.Brightness, sleeping) };
             var block = Slv3Protocol.BuildAioParamBlock(
                 sensors, Slv3Protocol.HydroShiftPumpTimer(rpm, record.DevType),
-                screenSet ? screen : Slv3AioScreen.Default,
+                shown,
                 RadiatorFanRpm(record));
             var payload = Slv3Protocol.BuildAioParams(record.Mac, _masterMac, record.RxType, record.Channel, BindOrdinalLocked(record.Mac), block);
             SendRfPayloadLocked(record.Channel, record.RxType, payload);
+        }
+        // A screen that left (unbound, unplugged, expired) forgets its lock state, so the next sight of
+        // it counts as a first sight and goes straight to the state, not along a stale ramp.
+        if (_aioLockSlept.Count > 0)
+        {
+            foreach (var gone in _aioLockSlept.Keys.Where(k => bound is null || !bound.Contains(k)).ToList())
+            {
+                _aioLockSlept.Remove(gone);
+                _aioFades.Remove(gone);
+            }
         }
         // A released pump on an AIO that is no longer bound here has nothing left to hold.
         List<string>? released = null;
@@ -1176,6 +1208,52 @@ public sealed class Slv3Hub : IDisposable
             _anyAioControlled = _aioControl.Count > 0;
         }
     }
+
+    // The lock fade for the screen's brightness byte. It rides the param block that already goes out
+    // every drive tick, so the ramp has exactly as many steps as ticks land inside it and adds no
+    // send. Guarded by _lock, like the rest of SyncAioLocked.
+    private readonly Dictionary<string, bool> _aioLockSlept = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LcdFade> _aioFades = new(StringComparer.Ordinal);
+
+    private byte AioLockBrightness(string key, byte user, bool sleeping)
+    {
+        var now = _nowMs();
+        if (!_aioLockSlept.TryGetValue(key, out var was))
+        {
+            // First sight of this screen (it came up mid-lock): go straight to the state, no ramp.
+            _aioLockSlept[key] = sleeping;
+            return sleeping ? (byte)0 : user;
+        }
+        if (sleeping != was)
+        {
+            _aioLockSlept[key] = sleeping;
+            // From the level the screen shows now, or the step a ramp in flight is on, to the other
+            // end. The level it comes back to is the user's setting, which nothing here changes.
+            var from = _aioFades.TryGetValue(key, out var running) ? running.LevelAt(now) : was ? 0 : user;
+            var to = sleeping ? 0 : user;
+            if (from == to)
+            {
+                _aioFades.Remove(key);
+            }
+            else
+            {
+                _aioFades[key] = new LcdFade(from, to, sleeping ? SleepBlackoutCoordinator.LockFadeDuration : SleepBlackoutCoordinator.UnlockFadeDuration, now);
+            }
+        }
+        if (_aioFades.TryGetValue(key, out var fade))
+        {
+            var level = fade.LevelAt(now);
+            if (fade.IsDoneAt(now))
+            {
+                _aioFades.Remove(key);
+            }
+            return (byte)level;
+        }
+        return sleeping ? (byte)0 : user;
+    }
+
+    private bool UsbPanelOwnsGlass(string key, bool nexusWidgets) =>
+        nexusWidgets && string.Equals(_usbAioMac, key, StringComparison.OrdinalIgnoreCase);
 
     private string? ReadUsbAioMac()
     {
@@ -1586,8 +1664,7 @@ public sealed class Slv3Hub : IDisposable
             return true;
         }
         var first = _firstBusyReply is { } b ? Convert.ToHexString(b, 0, Math.Min(b.Length, Slv3Protocol.UsbPacketSize)) : "";
-        // Any earlier RX recovery with no good reply since makes this one reset the RX MCU.
-        return BeginRxRecoveryLocked($"{RxBusyPollsBeforeReset} consecutive busy GetDev replies (first {first})", resetViaTx: _rxRecoveries > 0);
+        return BeginRxRecoveryLocked($"{RxBusyPollsBeforeReset} consecutive busy GetDev replies (first {first})", resetViaTx: false);
     }
 
     // Only a good reply clears the busy and failure streaks, so an RX that

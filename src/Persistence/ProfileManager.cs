@@ -29,6 +29,7 @@ public sealed partial class ProfileManager : IDisposable
     private readonly object _lock = new();
     private ProfileManifest _manifest = new();
     private bool _dirty;
+    private bool _flushFailing;
     private JitteredPeriodicTimer? _flushTimer;
 
     public event Action? OnProfileSwitched;
@@ -705,7 +706,7 @@ public sealed partial class ProfileManager : IDisposable
     {
         _flushTimer?.Dispose();
         lock (_lock)
-        { FlushActiveProfile(); }
+        { TryFlushActiveProfile(); }
     }
 
     /// <summary>Throws <see cref="ProfileNameConflictException"/> when trimmedName (case-insensitive) is already used by a profile other than excludeProfileId.</summary>
@@ -793,14 +794,14 @@ public sealed partial class ProfileManager : IDisposable
             }
         }
 
-        _dirty = false;
-
         var activeEntry = _manifest.Profiles.FirstOrDefault(p => p.Id == _manifest.ActiveProfileId);
         if (activeEntry != null)
         {
             activeEntry.UpdatedAt = DateTimeOffset.UtcNow.ToString("o");
             SaveManifest();
         }
+
+        _dirty = false;
     }
 
     private void FlushIfDirty()
@@ -811,7 +812,24 @@ public sealed partial class ProfileManager : IDisposable
         }
 
         lock (_lock)
-        { FlushActiveProfile(); }
+        { TryFlushActiveProfile(); }
+    }
+
+    // Another process holding a profile file open without delete sharing fails
+    // File.Replace; _dirty stays set, so the next background tick retries.
+    private void TryFlushActiveProfile()
+    {
+        try
+        {
+            FlushActiveProfile();
+            _flushFailing = false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (!_flushFailing)
+                ServiceLog.Warn($"[profiles] flush failed, retrying: {ex.GetType().Name}: {ex.Message}");
+            _flushFailing = true;
+        }
     }
 
     private void SaveProfileFile(string profileId)

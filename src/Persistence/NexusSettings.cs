@@ -1347,6 +1347,8 @@ public sealed class TryxSettings
     public int SlideshowIntervalSec { get; set; } = Nexus.Service.Peripherals.Tryx.Panorama.TryxSlideshowConfig.DefaultIntervalSec;
     public bool SlideshowShuffle { get; set; }
     public bool SlideshowFinishVideos { get; set; } = true;
+    /// <summary>Turn the Panorama screen off while the PC is locked and restore its prior state on unlock.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
 }
 
 /// <summary>One NZXT Kraken channel's firmware animation. <see cref="Colors"/> holds
@@ -1380,6 +1382,10 @@ public sealed class DevicesSettings
     /// way to read it back, so the last write is remembered here to seed the settings UI.
     /// </summary>
     public Dictionary<string, KrakenFirmwareLighting> KrakenFirmwareLighting { get; set; } = new();
+    /// <summary>Put the NZXT Kraken LCD dark while the PC is locked and restore its backlight on unlock. The service drives one Kraken, so this is not keyed per device.</summary>
+    public bool KrakenLcdSleepWhenLocked { get; set; } = true;
+    /// <summary>Service-internal: the Kraken backlight to return to after a lock darkened it. Set while dark, cleared once restored; never the user's brightness.</summary>
+    public int? KrakenLcdLockRestore { get; set; }
     /// <summary>LEGACY (pre-v6, per-card key). Read only by the one-time schema migration that moves entries into <see cref="DeviceLedOverrides"/>; empty afterward. Do not write.</summary>
     public Dictionary<string, List<LedPositionOverride>> LedMapOverrides { get; set; } = new();
     /// <summary>LEGACY (pre-v6, per-card key). Migration source for <see cref="DeviceAspectRatios"/>; empty afterward. Do not write.</summary>
@@ -1688,6 +1694,8 @@ public sealed class LianLiAioScreenSettings
 {
     /// <summary>Backlight, percent.</summary>
     public int Brightness { get; set; } = Nexus.Service.Peripherals.LianLiWireless.Slv3Protocol.AioLcdBrightness;
+    /// <summary>Put the screen dark while the PC is locked and restore <see cref="Brightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     /// <summary>Index of one of the AIO's built-in screen themes.</summary>
     public int Theme { get; set; }
     public string LabelColor { get; set; } = "#FFFFFF";
@@ -1838,6 +1846,8 @@ public sealed class LianLiWirelessScreenSettings
     public string? MediaId { get; set; }
     /// <summary>0-100.</summary>
     public byte Brightness { get; set; } = 100;
+    /// <summary>Put the screen dark while the PC is locked and restore <see cref="Brightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     /// <summary>0 = 0 deg, 1 = 90 deg, 2 = 180 deg, 3 = 270 deg.</summary>
     public byte Rotation { get; set; }
     /// <summary>"cpuLoad" | "cpuTemp" | "gpuLoad" | "gpuTemp" | "memoryUsage" | "vramUsage" | "fanRpm". Used when ContentType is "sensor".</summary>
@@ -2028,6 +2038,8 @@ public sealed class NollieStandaloneSettings
 
 public sealed class CorsairSettings
 {
+    /// <summary>Put the LCD dark while the PC is locked and restore <see cref="LcdBrightness"/> on unlock; the stored brightness is never changed.</summary>
+    public bool SleepWhenLocked { get; set; } = true;
     public string? LcdSelectedMediaId { get; set; }
     /// <summary>LCD brightness 0-100. 0 = display off, 100 = maximum.</summary>
     public byte LcdBrightness { get; set; } = 100;

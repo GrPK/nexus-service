@@ -22,11 +22,28 @@ public sealed class Slv3LcdHub : IDisposable
     private readonly Dictionary<string, ISlv3LcdTransport> _open = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
 
-    public Slv3LcdHub(ISlv3LcdDiscovery discovery, Func<Slv3LcdPortInfo, ISlv3LcdTransport> transportFactory)
+    private readonly Nexus.Service.Lighting.LcdLockSleepSet? _lockSleep;
+
+    public Slv3LcdHub(
+        ISlv3LcdDiscovery discovery,
+        Func<Slv3LcdPortInfo, ISlv3LcdTransport> transportFactory,
+        Nexus.Service.Lighting.LcdLockState? lockState = null)
     {
         _discovery = discovery;
         _transportFactory = transportFactory;
+        if (lockState is not null)
+        {
+            _lockSleep = new Nexus.Service.Lighting.LcdLockSleepSet(lockState);
+        }
     }
+
+    /// <summary>
+    /// True while the session lock holds this screen dark. Decided once per lock from
+    /// <paramref name="sleepWhenLocked"/>, so a screen that attaches mid-lock joins and a
+    /// setting flipped mid-lock changes nothing until the next lock.
+    /// </summary>
+    public bool IsLockSleeping(string serial, Func<bool> sleepWhenLocked) =>
+        _lockSleep is not null && _lockSleep.IsSleeping(serial, sleepWhenLocked);
 
     /// <summary>
     /// Currently discovered screens (serial + fan-position mapping), refreshed
@@ -36,6 +53,27 @@ public sealed class Slv3LcdHub : IDisposable
     public IReadOnlyList<Slv3LcdScreenInfo> Screens { get; private set; } = Array.Empty<Slv3LcdScreenInfo>();
 
     internal void UpdateScreens(IReadOnlyList<Slv3LcdScreenInfo> screens) => Screens = screens;
+
+    /// <summary>
+    /// Pushes the backlight the screen should show now: dark while the lock holds it, else the
+    /// stored value. A fresh attach starts with <paramref name="applied"/> at its sentinel, so
+    /// a screen that arrives mid-lock gets the dark value first. Content keeps streaming.
+    /// </summary>
+    internal void SyncBrightness(string serial, Persistence.LianLiWirelessScreenSettings settings, ref int applied, ref bool lockSlept)
+    {
+        var sleeping = IsLockSleeping(serial, () => settings.SleepWhenLocked);
+        if (sleeping != lockSlept)
+        {
+            lockSlept = sleeping;
+            ServiceLog.Info($"[lcd-lock] lianli screen {serial} {(sleeping ? "sleeping" : "waking")}");
+        }
+        var brightness = sleeping ? (byte)0 : settings.Brightness;
+        if (brightness != applied)
+        {
+            SetBrightness(serial, brightness);
+            applied = brightness;
+        }
+    }
 
     /// <summary>Lists the currently enumerable LCD screens (serial + device path).</summary>
     public IReadOnlyList<Slv3LcdPortInfo> Discover() => _discovery.Discover();

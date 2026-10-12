@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Nexus.Service.Devices;
+using Nexus.Service.Lighting;
 using Nexus.Service.Models.Panel;
 using Nexus.Service.Panel;
 using Nexus.Service.Panel.Streams;
@@ -26,6 +28,7 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
     private long _nowMs = 1_000_000;
     private readonly List<string> _panelChanges = new();
     private StreamedPanelCoordinator? _coordinator;
+    private readonly LcdLockState _lock = new();
 
     public StreamedPanelCoordinatorTests()
     {
@@ -58,12 +61,15 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
             _gate,
             notifyOverlay: null,
             nowMs: () => _nowMs,
-            notifyPanelChanged: _panelChanges.Add);
+            notifyPanelChanged: _panelChanges.Add,
+            lockState: _lock);
+        _coordinator.FadeRunner.AutoRun = false;
         return _coordinator;
     }
 
-    private static StreamedPanelProfile Profile(string kind = "fake-fs", int fps = 30, bool monitor = false) => new()
+    private static StreamedPanelProfile Profile(string kind = "fake-fs", int fps = 30, bool monitor = false, bool dimmable = false) => new()
     {
+        SupportsBrightness = dimmable,
         SupportsSecondaryMonitor = monitor,
         Kind = kind,
         DisplayName = "Fake Panel",
@@ -73,8 +79,8 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         Fps = fps,
     };
 
-    private static StreamedPanelDeviceInfo Device(string serial = "d211_fake", string kind = "fake-fs", int fps = 30, bool monitor = false)
-        => new() { Serial = serial, Profile = Profile(kind, fps, monitor) };
+    private static StreamedPanelDeviceInfo Device(string serial = "d211_fake", string kind = "fake-fs", int fps = 30, bool monitor = false, bool dimmable = false)
+        => new() { Serial = serial, Profile = Profile(kind, fps, monitor, dimmable) };
 
     private sealed class FakeTransport : IStreamedPanelTransport
     {
@@ -99,6 +105,38 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         public int ApplyCalls { get; private set; }
         public int? LastApplied { get; private set; }
         private Func<int?>? _source;
+        private readonly object _gate = new();
+
+        // Mirrors the real transports: what was last put on the glass, and what it replaced.
+        public int? Applied { get; set; }
+        public int? Previous { get; set; }
+        public bool FailWrites { get; set; }
+        public bool ThrowOnNextApply { get; set; }
+        public int? CurrentBrightness => Applied;
+        public int? PreviousBrightness => Previous;
+
+        private bool Step()
+        {
+            var wanted = _source?.Invoke();
+            LastApplied = wanted;
+            if (wanted is not int percent || percent == Applied)
+            {
+                return true;
+            }
+            if (FailWrites)
+            {
+                return false;
+            }
+            Previous = Applied;
+            Applied = percent;
+            return true;
+        }
+
+        /// <summary>A frame thread: reads the bound source while holding the transport's own brightness lock.</summary>
+        public void FrameThreadRead()
+        {
+            lock (_gate) { Step(); }
+        }
 
         public FakeBrightnessTransport(string serial) { Serial = serial; }
         public void Open() => IsOpen = true;
@@ -106,10 +144,18 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         public void Write(ReadOnlySpan<byte> annexBAccessUnit) { }
         public void Dispose() => IsOpen = false;
         public void BindBrightness(Func<int?> source) => _source = source;
-        public void ApplyBrightness()
+        public bool ApplyBrightness()
         {
-            ApplyCalls++;
-            LastApplied = _source?.Invoke();
+            lock (_gate)
+            {
+                ApplyCalls++;
+                if (ThrowOnNextApply)
+                {
+                    ThrowOnNextApply = false;
+                    throw new InvalidOperationException("transport fault");
+                }
+                return Step();
+            }
         }
     }
 
@@ -507,6 +553,426 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         var transport = Assert.Single(_discovery.BrightnessTransports);
         Assert.Equal(1, transport.ApplyCalls);
         Assert.Equal(35, transport.LastApplied);
+    }
+
+    // ---- Sleep when locked -------------------------------------------------
+
+    private void Advance(StreamedPanelCoordinator coordinator, int ms)
+    {
+        _nowMs += ms;
+        coordinator.StepFades();
+    }
+
+    private (StreamedPanelCoordinator Coordinator, string PanelId, FakeBrightnessTransport Transport) DimmablePanel(int? stored)
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(dimmable: true));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var panelId = Assert.Single(coordinator.GetAssignments().Assignments).PanelDeviceId;
+        if (stored is int value)
+        {
+            _registry.Patch(panelId, new PanelDevicePatch { LcdBrightness = value });
+        }
+        return (coordinator, panelId, Assert.Single(_discovery.BrightnessTransports));
+    }
+
+    [Fact]
+    public void Lock_darkens_a_dimmable_panel_and_unlock_restores_the_stored_backlight()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 35);
+
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+
+        Assert.Equal(0, transport.LastApplied);
+        Assert.Empty(coordinator.GetAssignments().Assignments);
+        Assert.Equal(35, _registry.Get(panelId)!.LcdBrightness);
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+
+        Assert.Equal(35, transport.LastApplied);
+        Assert.Single(coordinator.GetAssignments().Assignments);
+        Assert.Equal(35, _registry.Get(panelId)!.LcdBrightness);
+    }
+
+    [Fact]
+    public void Unlock_wakes_a_panel_whose_setting_was_turned_off_mid_lock()
+    {
+        var (_, panelId, transport) = DimmablePanel(stored: 60);
+        _lock.Set(true);
+
+        _registry.Patch(panelId, new PanelDevicePatch { SleepWhenLocked = false });
+        _lock.Set(false);
+
+        Assert.Equal(60, transport.LastApplied);
+    }
+
+    [Fact]
+    public void A_setting_turned_on_mid_lock_waits_for_the_next_lock()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 60);
+        _registry.Patch(panelId, new PanelDevicePatch { SleepWhenLocked = false });
+        _lock.Set(true);
+
+        _registry.Patch(panelId, new PanelDevicePatch { SleepWhenLocked = true });
+
+        Assert.Single(coordinator.GetAssignments().Assignments);
+        Assert.NotEqual(0, transport.LastApplied);
+    }
+
+    [Fact]
+    public void A_panel_with_the_setting_off_stays_lit_through_a_lock()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 60);
+        _registry.Patch(panelId, new PanelDevicePatch { SleepWhenLocked = false });
+
+        _lock.Set(true);
+
+        Assert.Single(coordinator.GetAssignments().Assignments);
+        Assert.NotEqual(0, transport.LastApplied);
+    }
+
+    [Fact]
+    public void A_panel_that_cannot_dim_is_left_alone_by_the_lock()
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(dimmable: false));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+
+        _lock.Set(true);
+
+        Assert.Single(coordinator.GetAssignments().Assignments);
+        Assert.All(_discovery.BrightnessTransports, t => Assert.NotEqual(0, t.LastApplied));
+    }
+
+    [Fact]
+    public void A_screen_the_user_turned_off_stays_off_after_unlock()
+    {
+        var (_, _, transport) = DimmablePanel(stored: 0);
+
+        _lock.Set(true);
+        _lock.Set(false);
+
+        Assert.Equal(0, transport.LastApplied);
+    }
+
+    [Fact]
+    public void A_record_with_no_stored_backlight_returns_to_full_after_unlock()
+    {
+        var (coordinator, _, transport) = DimmablePanel(stored: null);
+
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        Assert.Equal(0, transport.LastApplied);
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+
+        Assert.Equal(StreamedPanelCoordinator.UnlockDefaultBrightness, transport.LastApplied);
+    }
+
+    [Fact]
+    public void A_panel_that_attaches_while_locked_joins_the_sleep()
+    {
+        var coordinator = Coordinator();
+        _discovery.UseBrightnessTransport = true;
+        _lock.Set(true);
+
+        _discovery.Devices.Add(Device(dimmable: true));
+        coordinator.TickOnce();
+
+        var transport = Assert.Single(_discovery.BrightnessTransports);
+        Assert.Equal(0, transport.LastApplied);
+        Assert.Empty(coordinator.GetAssignments().Assignments);
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+
+        Assert.Single(coordinator.GetAssignments().Assignments);
+        Assert.NotEqual(0, transport.LastApplied);
+    }
+
+    [Fact]
+    public void A_reconnect_while_locked_gets_the_dark_value_not_the_stored_one()
+    {
+        var (coordinator, _, first) = DimmablePanel(stored: 80);
+        _lock.Set(true);
+
+        // The transport faults and the next poll opens a fresh one.
+        first.Dispose();
+        coordinator.TickOnce();
+
+        var reopened = _discovery.BrightnessTransports.Last();
+        Assert.NotSame(first, reopened);
+        Assert.Equal(0, reopened.LastApplied);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task A_frame_thread_asking_first_never_deadlocks_with_the_lock_handler()
+    {
+        var (_, _, transport) = DimmablePanel(stored: 50);
+
+        // Each round is a fresh lock epoch, so the first ask for the decision comes from whichever
+        // thread gets there first: the lock handler (coordinator lock, then the transport's) or a
+        // frame thread (the transport's lock, then the getter).
+        for (var round = 0; round < 400; round++)
+        {
+            _lock.Set(false);
+            using var barrier = new Barrier(2);
+            var handler = System.Threading.Tasks.Task.Run(() => { barrier.SignalAndWait(); _lock.Set(true); });
+            var frames = System.Threading.Tasks.Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                for (var i = 0; i < 5; i++) transport.FrameThreadRead();
+            });
+            var both = System.Threading.Tasks.Task.WhenAll(handler, frames);
+            var finished = await System.Threading.Tasks.Task.WhenAny(both, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == both;
+            Assert.True(finished, $"deadlocked in round {round}");
+        }
+    }
+
+    [Fact]
+    public void A_panel_with_no_stored_backlight_returns_to_the_level_it_had_before_the_lock()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        Assert.Equal(0, transport.LastApplied);
+        Assert.Equal(42, _registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Null(_registry.Get(panelId)!.LcdBrightness);
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+        Assert.Equal(42, transport.LastApplied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void A_lock_whose_unlock_ran_before_its_marker_write_leaves_no_marker_and_no_dark_glass()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        // The unlock runs completely between the lock's dark apply and its marker write.
+        coordinator.TestHookBeforeMarkerWrite = () =>
+        {
+            coordinator.TestHookBeforeMarkerWrite = null;
+            _lock.Set(false);
+        };
+
+        _lock.Set(true);
+
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Equal(42, transport.Applied);
+    }
+
+    [Fact]
+    public void A_failed_restoring_write_keeps_the_marker_for_the_next_connect_to_retry()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        transport.FailWrites = true;
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+
+        Assert.Equal(42, _registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Equal(0, transport.Applied);
+
+        transport.Dispose();
+        coordinator.TickOnce();
+        var reopened = _discovery.BrightnessTransports.Last();
+        Assert.Equal(42, reopened.LastApplied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void Lock_fades_down_while_still_rendering_then_goes_dark_at_zero()
+    {
+        var (coordinator, _, transport) = DimmablePanel(stored: 60);
+
+        _lock.Set(true);
+        Assert.Equal(60, transport.Applied);
+        Assert.Single(coordinator.GetAssignments().Assignments);
+
+        Advance(coordinator, 750);
+        Assert.InRange(transport.Applied!.Value, 1, 59);
+        Assert.Single(coordinator.GetAssignments().Assignments);
+
+        Advance(coordinator, 2000);
+        Assert.Equal(0, transport.Applied);
+        Assert.Empty(coordinator.GetAssignments().Assignments);
+    }
+
+    [Fact]
+    public void Unlock_fades_up_from_zero_to_exactly_the_level_the_lock_started_at()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 60);
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+
+        _lock.Set(false);
+        Assert.Equal(0, transport.Applied);
+        Advance(coordinator, 450);
+        Assert.InRange(transport.Applied!.Value, 1, 59);
+        Advance(coordinator, 2000);
+
+        Assert.Equal(60, transport.Applied);
+        Assert.Equal(60, _registry.Get(panelId)!.LcdBrightness);
+    }
+
+    [Fact]
+    public void An_unlock_mid_fade_down_reverses_to_the_start_level_not_the_step_it_caught()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        _lock.Set(true);
+        Advance(coordinator, 750);
+        Assert.InRange(transport.Applied!.Value, 1, 41);
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+
+        Assert.Equal(42, transport.Applied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+        Assert.Null(_registry.Get(panelId)!.LcdBrightness);
+    }
+
+    [Fact]
+    public void A_lock_mid_fade_up_reverses_down_and_the_next_unlock_still_restores_the_start_level()
+    {
+        var (coordinator, _, transport) = DimmablePanel(stored: 60);
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        _lock.Set(false);
+        Advance(coordinator, 450);
+        Assert.InRange(transport.Applied!.Value, 1, 59);
+
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        Assert.Equal(0, transport.Applied);
+
+        _lock.Set(false);
+        Advance(coordinator, 5000);
+        Assert.Equal(60, transport.Applied);
+    }
+
+    [Fact]
+    public void A_fade_never_persists_an_intermediate_level()
+    {
+        var (coordinator, panelId, _) = DimmablePanel(stored: 60);
+        _lock.Set(true);
+        Advance(coordinator, 750);
+        Assert.Equal(60, _registry.Get(panelId)!.LcdBrightness);
+        _lock.Set(false);
+        Advance(coordinator, 200);
+
+        Assert.Equal(60, _registry.Get(panelId)!.LcdBrightness);
+    }
+
+    [Fact]
+    public void A_reconnect_during_the_unlock_ramp_does_not_leave_the_panel_on_the_step_it_caught()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: null);
+        transport.Applied = 42;
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        _lock.Set(false);
+        Advance(coordinator, 450);
+
+        transport.Dispose();
+        coordinator.TickOnce();
+        var reopened = _discovery.BrightnessTransports.Last();
+        Advance(coordinator, 5000);
+
+        Assert.Equal(42, reopened.Applied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void A_panel_the_lock_never_slept_is_not_faded_from_zero_on_unlock()
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(serial: "a", dimmable: true));
+        _discovery.Devices.Add(Device(serial: "b", dimmable: true));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var records = _store.Load();
+        var slept = records["a"].PanelDeviceId;
+        var spared = records["b"].PanelDeviceId;
+        _registry.Patch(slept, new PanelDevicePatch { LcdBrightness = 60 });
+        _registry.Patch(spared, new PanelDevicePatch { LcdBrightness = 50, SleepWhenLocked = false });
+        var sparedTransport = _discovery.BrightnessTransports.First(t => t.Serial == "b");
+
+        _lock.Set(true);
+        Advance(coordinator, 5000);
+        _lock.Set(false);
+        Advance(coordinator, 40);
+
+        Assert.Null(sparedTransport.Applied);
+    }
+
+    [Fact]
+    public void A_panel_whose_fade_step_throws_settles_alone_and_the_other_panel_keeps_ramping()
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(serial: "a", dimmable: true));
+        _discovery.Devices.Add(Device(serial: "b", dimmable: true));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var records = _store.Load();
+        _registry.Patch(records["a"].PanelDeviceId, new PanelDevicePatch { LcdBrightness = 60 });
+        _registry.Patch(records["b"].PanelDeviceId, new PanelDevicePatch { LcdBrightness = 60 });
+        var a = _discovery.BrightnessTransports.First(t => t.Serial == "a");
+        var b = _discovery.BrightnessTransports.First(t => t.Serial == "b");
+        _lock.Set(true);
+
+        a.ThrowOnNextApply = true;
+        Advance(coordinator, 750);
+
+        // A is settled dark on its own; B is still partway down its own ramp.
+        Assert.Equal(0, a.Applied);
+        Assert.InRange(b.Applied!.Value, 1, 59);
+        Advance(coordinator, 5000);
+        Assert.Equal(0, b.Applied);
+    }
+
+    [Fact]
+    public void A_restore_marker_left_by_a_restart_mid_lock_is_applied_and_cleared_on_connect()
+    {
+        _discovery.UseBrightnessTransport = true;
+        _discovery.Devices.Add(Device(dimmable: true));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var panelId = Assert.Single(coordinator.GetAssignments().Assignments).PanelDeviceId;
+        // The state a previous run left: dark glass, a marker, and no lock in progress.
+        _registry.SetLockRestoreBrightness(panelId, 64);
+        var first = Assert.Single(_discovery.BrightnessTransports);
+        first.Dispose();
+
+        coordinator.TickOnce();
+
+        var reopened = _discovery.BrightnessTransports.Last();
+        Assert.Equal(64, reopened.LastApplied);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
+    }
+
+    [Fact]
+    public void A_lock_handler_that_runs_after_the_unlock_does_not_dim_the_panel()
+    {
+        var (coordinator, panelId, transport) = DimmablePanel(stored: 70);
+
+        // The handler for a lock whose unlock already happened.
+        coordinator.OnLockChanged(true);
+
+        Assert.NotEqual(0, transport.LastApplied);
+        Assert.Single(coordinator.GetAssignments().Assignments);
+        Assert.Null(_registry.Get(panelId)!.LockRestoreBrightness);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Platform;
@@ -33,6 +34,7 @@ public sealed class CorsairLinkLcd
     // 1024-byte HID output report: [0]=0x02 report id, header [1..7], payload [8..].
     // Allocated once and reused under _lock.
     private readonly byte[] _writeBuffer = new byte[LcdOutputReportByteLength];
+    private readonly Nexus.Service.Lighting.LcdLockSleepSet? _lockSleep;
     private IHidDevice? _device;
     private volatile bool _attached;
     private volatile string? _serial;
@@ -52,6 +54,23 @@ public sealed class CorsairLinkLcd
     private bool _retired;
     private int _repaintRequested;
     private int _attachGeneration;
+
+    public CorsairLinkLcd(Nexus.Service.Lighting.LcdLockState? lockState = null)
+    {
+        if (lockState is not null)
+        {
+            _lockSleep = new Nexus.Service.Lighting.LcdLockSleepSet(lockState);
+        }
+    }
+
+    /// <summary>
+    /// True while the session lock holds the glass dark. Decided once per lock from
+    /// <paramref name="sleepWhenLocked"/>, so a screen that attaches or re-opens mid-lock joins
+    /// and a setting flipped mid-lock changes nothing until the next lock. Applies to every LCD
+    /// this class drives; there is no model gate.
+    /// </summary>
+    public bool IsLockSleeping(Func<bool> sleepWhenLocked) =>
+        _lockSleep is not null && _lockSleep.IsSleeping("lcd", sleepWhenLocked);
 
     /// <summary>True when a usable LCD HID device is open.</summary>
     public bool HasDevice => _attached;

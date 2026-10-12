@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Threading;
@@ -48,25 +49,25 @@ public sealed class WindowsAudioSessionProvider : IAudioSessionProvider, IDispos
     public void SetVolume(string id, double volume)
     {
         if (id.Length == 0) return;
-        _ = AudioMixerCommands.SetAsync(_helper, id, Math.Clamp(volume, 0, 1), null);
+        AudioMixerCommands.SetAsync(_helper, id, Math.Clamp(volume, 0, 1), null).ObserveFaults();
     }
 
     public void SetMuted(string id, bool muted)
     {
         if (id.Length == 0) return;
-        _ = AudioMixerCommands.SetAsync(_helper, id, null, muted);
+        AudioMixerCommands.SetAsync(_helper, id, null, muted).ObserveFaults();
     }
 
     public void StartStreaming()
     {
         Volatile.Write(ref _streaming, 1);
-        _ = AudioMixerCommands.StreamAsync(_helper, true);
+        AudioMixerCommands.StreamAsync(_helper, true).ObserveFaults();
     }
 
     public void StopStreaming()
     {
         Volatile.Write(ref _streaming, 0);
-        _ = AudioMixerCommands.StreamAsync(_helper, false);
+        AudioMixerCommands.StreamAsync(_helper, false).ObserveFaults();
     }
 
     // Re-assert the rate on every connect: a helper that crashed mid-stream
@@ -77,12 +78,19 @@ public sealed class WindowsAudioSessionProvider : IAudioSessionProvider, IDispos
 
     private async Task ReassertStreamingAsync()
     {
-        var sent = Volatile.Read(ref _streaming) == 1;
-        await AudioMixerCommands.StreamAsync(_helper, sent).ConfigureAwait(false);
-        // A subscribe or release that raced this send may have reached the pipe
-        // first; the last command the helper sees must carry the current rate.
-        var now = Volatile.Read(ref _streaming) == 1;
-        if (now != sent) await AudioMixerCommands.StreamAsync(_helper, now).ConfigureAwait(false);
+        try
+        {
+            var sent = Volatile.Read(ref _streaming) == 1;
+            await AudioMixerCommands.StreamAsync(_helper, sent).ConfigureAwait(false);
+            // A subscribe or release that raced this send may have reached the pipe
+            // first; the last command the helper sees must carry the current rate.
+            var now = Volatile.Read(ref _streaming) == 1;
+            if (now != sent) await AudioMixerCommands.StreamAsync(_helper, now).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // The helper dropped again mid-write; its next connect re-asserts.
+        }
     }
 
     // Without this the last strips keep answering after the helper dies, so the

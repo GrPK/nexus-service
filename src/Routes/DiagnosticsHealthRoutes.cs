@@ -21,6 +21,9 @@ using Nexus.Service.Models;
 using Nexus.Service.Monitoring.History;
 using Nexus.Service.Platform;
 using Nexus.Service.Sensors;
+#if WINDOWS
+using Nexus.Service.Helper;
+#endif
 
 namespace Nexus.Service.Routes;
 
@@ -226,7 +229,7 @@ public static class DiagnosticsHealthRoutes
             {
 #if WINDOWS
                 var registry = sp.GetRequiredService<Nexus.Service.Helper.HelperRegistry>();
-                _ = Nexus.Service.Helper.Domains.DiagnosticsCommands.OpenEventViewerAsync(registry);
+                Nexus.Service.Helper.Domains.DiagnosticsCommands.OpenEventViewerAsync(registry).ObserveFaults();
                 return Results.Ok(new OpenEventViewerResponse { Opened = true });
 #else
                 return Results.Ok(new OpenEventViewerResponse { Opened = false, Error = "Event Viewer is only available on Windows" });
@@ -248,7 +251,7 @@ public static class DiagnosticsHealthRoutes
             {
 #if WINDOWS
                 var registry = sp.GetRequiredService<Nexus.Service.Helper.HelperRegistry>();
-                _ = Nexus.Service.Helper.Domains.DiagnosticsCommands.OpenDeviceManagerAsync(registry);
+                Nexus.Service.Helper.Domains.DiagnosticsCommands.OpenDeviceManagerAsync(registry).ObserveFaults();
                 return Results.Ok(new OpenDeviceManagerResponse { Opened = true });
 #else
                 return Results.Ok(new OpenDeviceManagerResponse { Opened = false, Error = "Device Manager is only available on Windows" });

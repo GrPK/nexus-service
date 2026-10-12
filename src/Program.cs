@@ -143,22 +143,43 @@ Nexus.Service.Lifecycle.BootTimer.Mark("after URL resolve");
 // Single-instance guard - if another nexus-service is already running,
 // open or focus the dashboard window instead of spawning a second service.
 // When relaunching elevated, retry for up to 10s while the parent shuts down.
-// Skipped under SCM: the service controller already enforces single-instance.
+// The Windows SCM instance holds it too, so a user-mode launch while the service
+// runs hands off instead of starting a second service that fails opening the
+// stores the first one holds. Not macOS: a NativeAOT named mutex there is
+// process-local, so it cannot guard against another process.
 System.Threading.Mutex? singleInstance = null;
-if (!serviceMode && !testHost)
+if (serviceMode && !testHost && OperatingSystem.IsWindows())
+{
+    singleInstance = new System.Threading.Mutex(true, "Global\\NexusServiceMutex", out var ownsMutex);
+    if (!ownsMutex)
+    {
+        singleInstance.Dispose();
+        singleInstance = null;
+    }
+}
+else if (!serviceMode && !testHost)
 {
     bool isFirst;
     var deadline = DateTime.UtcNow.AddSeconds(isRelaunchElevated ? 10 : 0);
     while (true)
     {
-        singleInstance = new System.Threading.Mutex(true, "Global\\NexusServiceMutex", out isFirst);
+        try
+        {
+            singleInstance = new System.Threading.Mutex(true, "Global\\NexusServiceMutex", out isFirst);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The LocalSystem service created it; its default DACL denies a standard user.
+            isFirst = false;
+        }
         if (isFirst) break;
-        singleInstance.Dispose();
+        singleInstance?.Dispose();
         singleInstance = null;
         if (!isRelaunchElevated || DateTime.UtcNow >= deadline)
         {
             Console.WriteLine("[nexus-service] already running, opening dashboard window");
-            OpenExistingServiceWindow(servicePort);
+            if (!suppressStartupWindow)
+                OpenExistingServiceWindow(servicePort);
             return 0;
         }
         System.Threading.Thread.Sleep(150);

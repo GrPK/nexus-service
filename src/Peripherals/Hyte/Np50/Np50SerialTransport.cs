@@ -33,7 +33,7 @@ public sealed class Np50SerialTransport : INp50Transport
     private readonly object _writeLock = new();
     // Reads + DiscardInput take this lock. Held for the full per-poll
     // timeout (up to a few hundred ms), so it MUST NOT be the same lock
-    // writes take. Only the heartbeat worker reads.
+    // writes take. Request/response pairs are serialized by Np50Hub.
     private readonly object _readLock = new();
     private bool _disposed;
 

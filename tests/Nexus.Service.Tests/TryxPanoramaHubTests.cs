@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -1725,5 +1726,539 @@ public class TryxPanoramaHubTests
         var path = Path.Combine(Path.GetTempPath(), $"tryx-hub-test-{Guid.NewGuid():N}.bin");
         File.WriteAllBytes(path, new byte[lengthBytes]);
         return path;
+    }
+
+    // ---- Sleep when locked -------------------------------------------------
+
+    private sealed class FadeTime
+    {
+        public long Now = 1_000_000;
+    }
+
+    private static (TryxPanoramaHub Hub, RecordingTransport Transport, Nexus.Service.Lighting.LcdLockState Lock, InMemoryConfigStore Store, FadeTime Time) LockRig(bool connect = true)
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => { s.Tryx.Brightness = 70; s.Tryx.OverlayItems = []; });
+        var recording = new RecordingTransport();
+        var hub = BuildHub(discovery: new StubDiscovery(), transportFactory: _ => recording, configStore: store);
+        var time = new FadeTime();
+        hub.FadeClock = () => time.Now;
+        hub.FadeRunner.AutoRun = false;
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        hub.BindLockSleep(state);
+        if (connect)
+        {
+            hub.EnsureConnected();
+            recording.Writes.Clear();
+        }
+        return (hub, recording, state, store, time);
+    }
+
+    private static void Step(TryxPanoramaHub hub, FadeTime time, int ms)
+    {
+        time.Now += ms;
+        hub.StepFade();
+    }
+
+    // Samples the way the runner loop does, once per sample interval.
+    private static void Run(TryxPanoramaHub hub, FadeTime time, int totalMs)
+    {
+        for (var elapsed = 0; elapsed <= totalMs; elapsed += 40)
+        {
+            hub.StepFade();
+            time.Now += 40;
+        }
+    }
+
+    // One entry per config frame: the brightness of an on frame, or -1 for the screen-off frame.
+    private static List<int> ConfigFrames(RecordingTransport recording)
+    {
+        var frames = new List<int>();
+        foreach (var write in recording.Writes)
+        {
+            if (write.AsSpan().SequenceEqual(TryxRkProtocol.BuildConfig(false, 70)))
+            {
+                frames.Add(-1);
+                continue;
+            }
+            for (var level = 0; level <= 100; level++)
+            {
+                if (write.AsSpan().SequenceEqual(TryxRkProtocol.BuildConfig(true, level)))
+                {
+                    frames.Add(level);
+                    break;
+                }
+            }
+        }
+        return frames;
+    }
+
+    [Fact]
+    public void Lock_steps_the_brightness_down_and_sends_screen_off_at_the_end_of_the_ramp()
+    {
+        var (hub, recording, state, store, time) = LockRig();
+
+        state.Set(true);
+        Run(hub, time, 1700);
+
+        var frames = ConfigFrames(recording);
+        Assert.Equal(-1, frames[^1]);
+        var steps = frames.Take(frames.Count - 1).ToList();
+        Assert.InRange(steps.Count, 4, TryxPanoramaHub.FadeSteps + 1);
+        Assert.Equal(steps.OrderByDescending(l => l), steps);
+        Assert.Equal(0, steps.Count(l => l == -1));
+        Assert.True(hub.State.ScreenEnabled);
+        Assert.Equal(70, store.Load().Tryx.Brightness);
+    }
+
+    [Fact]
+    public void Unlock_turns_the_screen_on_at_zero_then_steps_up_to_exactly_the_stored_brightness()
+    {
+        var (hub, recording, state, store, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 1700);
+        recording.Writes.Clear();
+
+        state.Set(false);
+        Run(hub, time, 1100);
+
+        var frames = ConfigFrames(recording);
+        Assert.Equal(0, frames[0]);
+        Assert.Equal(70, frames[^1]);
+        Assert.Equal(frames.OrderBy(l => l), frames);
+        Assert.DoesNotContain(-1, frames);
+        Assert.Equal(70, store.Load().Tryx.Brightness);
+        Assert.Equal(70, hub.State.Brightness);
+    }
+
+    [Fact]
+    public void An_unlock_mid_fade_down_reverses_to_the_stored_brightness_not_the_step_it_caught()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 750);
+        var caught = ConfigFrames(recording)[^1];
+        Assert.InRange(caught, 1, 69);
+        recording.Writes.Clear();
+
+        state.Set(false);
+        Run(hub, time, 1100);
+
+        var frames = ConfigFrames(recording);
+        Assert.Equal(70, frames[^1]);
+        Assert.DoesNotContain(-1, frames);
+    }
+
+    [Fact]
+    public void A_lock_mid_fade_up_reverses_down_and_the_next_unlock_still_returns_to_the_stored_brightness()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 1700);
+        state.Set(false);
+        Run(hub, time, 450);
+        recording.Writes.Clear();
+
+        state.Set(true);
+        Run(hub, time, 1700);
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+        recording.Writes.Clear();
+
+        state.Set(false);
+        Run(hub, time, 1100);
+        Assert.Equal(70, ConfigFrames(recording)[^1]);
+    }
+
+    [Fact]
+    public void A_stalled_sample_sends_one_frame_for_the_level_it_lands_on_and_never_a_backlog()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        hub.StepFade();
+        recording.Writes.Clear();
+
+        time.Now += 700;
+        hub.StepFade();
+
+        Assert.Single(recording.Writes);
+    }
+
+    [Fact]
+    public void Lock_turns_the_screen_off_and_unlock_restores_it_at_the_stored_brightness()
+    {
+        var (hub, recording, state, store, time) = LockRig();
+
+        state.Set(true);
+        Step(hub, time, 5000);
+        Assert.Equal(TryxRkProtocol.BuildConfig(false, 70), recording.Writes[^1]);
+        Assert.True(hub.State.ScreenEnabled);
+        Assert.Equal(70, store.Load().Tryx.Brightness);
+
+        recording.Writes.Clear();
+        state.Set(false);
+        hub.StepFade();
+        Step(hub, time, 5000);
+        Assert.Equal(TryxRkProtocol.BuildConfig(true, 70), recording.Writes[^1]);
+    }
+
+    [Fact]
+    public void A_screen_the_user_turned_off_is_not_woken_by_unlock()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        Assert.True(hub.SetEnabled(false));
+        recording.Writes.Clear();
+
+        state.Set(true);
+        Step(hub, time, 5000);
+        state.Set(false);
+        Step(hub, time, 5000);
+
+        Assert.Empty(recording.Writes);
+        Assert.False(hub.State.ScreenEnabled);
+    }
+
+    [Fact]
+    public void The_setting_off_leaves_the_screen_alone()
+    {
+        var (_, recording, state, store, _) = LockRig();
+        store.Update(s => s.Tryx.SleepWhenLocked = false);
+
+        state.Set(true);
+
+        Assert.Empty(recording.Writes);
+    }
+
+    [Fact]
+    public void Unlock_wakes_even_when_the_setting_was_turned_off_mid_lock()
+    {
+        var (hub, recording, state, store, time) = LockRig();
+        state.Set(true);
+        Step(hub, time, 5000);
+        store.Update(s => s.Tryx.SleepWhenLocked = false);
+        recording.Writes.Clear();
+
+        state.Set(false);
+        hub.StepFade();
+        Step(hub, time, 5000);
+
+        Assert.Equal(TryxRkProtocol.BuildConfig(true, 70), recording.Writes[^1]);
+    }
+
+    [Fact]
+    public void A_reconnect_while_locked_does_not_resend_the_remembered_enabled_state_and_drops_the_ramp()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        hub.Disconnect();
+        recording.Writes.Clear();
+
+        hub.EnsureConnected();
+        Step(hub, time, 5000);
+
+        Assert.Equal(TryxRkProtocol.BuildConfig(false, 70), recording.Writes[0]);
+        Assert.DoesNotContain(recording.Writes, w => w.AsSpan().SequenceEqual(TryxRkProtocol.BuildConfig(true, 70)));
+    }
+
+    [Fact]
+    public void A_panel_that_connects_while_locked_goes_dark_at_once_and_wakes_on_unlock()
+    {
+        var (hub, recording, state, _, time) = LockRig(connect: false);
+        state.Set(true);
+
+        hub.EnsureConnected();
+        Assert.Equal(TryxRkProtocol.BuildConfig(false, 70), recording.Writes[0]);
+
+        recording.Writes.Clear();
+        state.Set(false);
+        hub.StepFade();
+        Assert.Equal(0, ConfigFrames(recording)[0]);
+        Step(hub, time, 5000);
+        Assert.Equal(TryxRkProtocol.BuildConfig(true, 70), recording.Writes[^1]);
+    }
+
+    [Fact]
+    public void A_preset_chosen_while_locked_keeps_the_screen_off_on_the_wire_and_on_in_state()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Step(hub, time, 5000);
+        recording.Writes.Clear();
+
+        hub.SetPreset("default_01.mp4");
+
+        Assert.All(recording.Writes, w => Assert.False(w.AsSpan().SequenceEqual(TryxRkProtocol.BuildPreset("default_01.mp4", true, 70))));
+        Assert.True(hub.State.ScreenEnabled);
+    }
+
+    [Fact]
+    public void An_unlock_that_runs_between_the_lock_decision_and_its_fade_leaves_the_screen_lit()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        hub.TestHookAfterLockDecision = () =>
+        {
+            hub.TestHookAfterLockDecision = null;
+            state.Set(false);
+        };
+
+        state.Set(true);
+        Step(hub, time, 5000);
+
+        Assert.False(hub.LockDimmed);
+        Assert.DoesNotContain(-1, ConfigFrames(recording));
+        Assert.Equal(70, ConfigFrames(recording)[^1]);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task Reconnects_racing_lock_and_unlock_end_with_the_screen_on_the_wire()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        using var barrier = new System.Threading.Barrier(2);
+        var toggles = System.Threading.Tasks.Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            for (var i = 0; i < 400; i++)
+            {
+                state.Set(true);
+                state.Set(false);
+            }
+        });
+        var reconnects = System.Threading.Tasks.Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            for (var i = 0; i < 400; i++)
+            {
+                hub.Disconnect();
+                hub.EnsureConnected();
+            }
+        });
+
+        await System.Threading.Tasks.Task.WhenAll(toggles, reconnects).WaitAsync(TimeSpan.FromSeconds(60));
+        Step(hub, time, 5000);
+        hub.StepFade();
+        Step(hub, time, 5000);
+
+        Assert.False(state.IsLocked);
+        Assert.False(hub.LockDimmed);
+        var frames = ConfigFrames(recording);
+        Assert.NotEmpty(frames);
+        Assert.Equal(70, frames[^1]);
+    }
+
+    [Fact]
+    public void A_screen_switched_off_during_the_unlock_ramp_is_not_relit_by_it()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Step(hub, time, 5000);
+        state.Set(false);
+        Run(hub, time, 450);
+
+        Assert.True(hub.SetEnabled(false));
+        recording.Writes.Clear();
+        Run(hub, time, 1500);
+
+        Assert.Empty(recording.Writes);
+        Assert.False(hub.State.ScreenEnabled);
+    }
+
+    [Fact]
+    public void A_step_that_lands_after_a_reconnect_does_not_leave_the_screen_lit_while_locked()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        hub.TestHookBeforeStepSend = () =>
+        {
+            hub.TestHookBeforeStepSend = null;
+            // The reconnect settles the screen off, then the stale step goes out.
+            hub.Disconnect();
+            hub.EnsureConnected();
+        };
+
+        hub.StepFade();
+
+        Assert.True(hub.LockDimmed);
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+    }
+
+    [Fact]
+    public void The_slideshow_holds_still_through_the_unlock_ramp()
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => { s.Tryx.Brightness = 70; s.Tryx.OverlayItems = []; });
+        var recording = new RecordingTransport { MediaListVersion = 1, AvailableCustomMediaFilenames = ["a.mp4", "b.mp4"] };
+        var hub = BuildHub(discovery: new StubDiscovery(), transportFactory: _ => recording, configStore: store);
+        var time = new FadeTime();
+        hub.FadeClock = () => time.Now;
+        hub.FadeRunner.AutoRun = false;
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        hub.BindLockSleep(state);
+        hub.EnsureConnected();
+        hub.SetPreset(TryxRkProtocol.PresetMediaFile(1));
+        hub.SetSlideshow(new TryxSlideshowConfig { Enabled = true, IntervalSec = 10 });
+        state.Set(true);
+        Step(hub, time, 5000);
+        state.Set(false);
+        recording.Writes.Clear();
+
+        // The heartbeat lands inside the ramp; a due slideshow must not select a clip at full brightness.
+        hub.SendHeartbeatTick();
+
+        Assert.DoesNotContain(recording.Writes, w => w.AsSpan().SequenceEqual(TryxRkProtocol.BuildPreset("a.mp4", true, 70)));
+        Assert.True(hub.FadeActive);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task An_unlock_that_lands_inside_the_initial_config_decision_is_not_undone_by_it()
+    {
+        var (hub, _, state, _, _) = LockRig(connect: false);
+        state.Set(true);
+        System.Threading.Tasks.Task? unlock = null;
+        using var entered = new ManualResetEventSlim();
+        using var cleared = new ManualResetEventSlim();
+        hub.TestHookUnlockHandlerEntered = entered.Set;
+        hub.TestHookUnlockHandlerCleared = cleared.Set;
+        hub.TestHookInInitialConfigDecision = () =>
+        {
+            hub.TestHookInInitialConfigDecision = null;
+            // The unlock arrives between the decision and the flag it sets. Once its handler has
+            // started it either finishes (no gate: it clears the flag before this returns) or waits
+            // behind the gate (it clears the flag after).
+            unlock = System.Threading.Tasks.Task.Run(() => state.Set(false));
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            cleared.Wait(TimeSpan.FromMilliseconds(500));
+        };
+
+        hub.EnsureConnected();
+        await unlock!.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.False(hub.LockDimmed);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task A_heartbeat_running_beside_the_done_branch_never_deadlocks_on_the_fade_gate()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Step(hub, time, 5000);
+        // The unlock ramp is due to land; the heartbeat only asks the fade gate while the screen is lit.
+        state.Set(false);
+        time.Now += 5000;
+        // A reconnect cancels the ramp while its last frame is being decided.
+        hub.TestHookBeforeStepSend = () =>
+        {
+            hub.TestHookBeforeStepSend = null;
+            hub.Disconnect();
+            hub.EnsureConnected();
+        };
+        System.Threading.Tasks.Task? heartbeat = null;
+        hub.TestHookInFadeDoneGate = () =>
+        {
+            hub.TestHookInFadeDoneGate = null;
+            var baseline = recording.Writes.Count;
+            // The heartbeat takes the send gate, writes, then asks the fade gate whether a ramp is
+            // in flight: it must be able to, so the done branch cannot be sending under that gate.
+            heartbeat = System.Threading.Tasks.Task.Run(() => hub.SendHeartbeatTick());
+            var until = Environment.TickCount64 + 10_000;
+            while (Environment.TickCount64 < until)
+            {
+                int count;
+                try { count = recording.Writes.Count; }
+                catch (InvalidOperationException) { continue; }
+                if (count > baseline) { break; }
+                Thread.SpinWait(100);
+            }
+        };
+
+        var step = System.Threading.Tasks.Task.Run(() => hub.StepFade());
+        var both = System.Threading.Tasks.Task.WhenAll(step, heartbeat ?? System.Threading.Tasks.Task.CompletedTask);
+        // The heartbeat task exists only once the hook has run, so wait for the step first.
+        var finished = await System.Threading.Tasks.Task.WhenAny(step, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == step;
+        if (finished && heartbeat is not null)
+        {
+            finished = await System.Threading.Tasks.Task.WhenAny(heartbeat, System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(20))) == heartbeat;
+        }
+
+        Assert.True(finished, "the done branch and the heartbeat deadlocked on the fade and send gates");
+    }
+
+    [Fact]
+    public void A_reversal_while_a_step_is_in_flight_does_not_resend_the_state_it_replaced()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 750);
+        recording.Writes.Clear();
+        hub.TestHookBeforeStepSend = () =>
+        {
+            hub.TestHookBeforeStepSend = null;
+            // The unlock reverses the ramp while a down step is about to go out.
+            state.Set(false);
+        };
+        time.Now += 40;
+
+        hub.StepFade();
+
+        // The full user level would be the flash a stale resend of the old state causes.
+        Assert.DoesNotContain(70, ConfigFrames(recording));
+    }
+
+    [Fact]
+    public void A_failed_step_settles_the_screen_instead_of_leaving_it_on_a_half_step()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 750);
+        Assert.InRange(ConfigFrames(recording)[^1], 1, 69);
+
+        hub.FaultFade();
+
+        Assert.False(hub.FadeActive);
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task A_screen_switched_off_while_a_resend_is_built_is_not_relit_by_it()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Step(hub, time, 5000);
+        state.Set(false);
+        Run(hub, time, 450);
+        System.Threading.Tasks.Task<bool>? off = null;
+        hub.TestHookInResend = () =>
+        {
+            hub.TestHookInResend = null;
+            // The user turns the screen off after the resend frame was built from the lit state. With
+            // the send gate it waits behind the resend and its OFF is the last word; without, it
+            // completes here and the stale ON then lands on top of it.
+            off = System.Threading.Tasks.Task.Run(() => hub.SetEnabled(false));
+            off.Wait(500);
+        };
+        recording.Writes.Clear();
+
+        hub.FaultFade();
+        Assert.True(await off!.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.False(hub.State.ScreenEnabled);
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+    }
+
+    [Fact]
+    public void A_faulted_fade_down_still_fades_the_unlock_in_instead_of_popping_on()
+    {
+        var (hub, recording, state, _, time) = LockRig();
+        state.Set(true);
+        Run(hub, time, 750);
+        hub.FaultFade();
+        Assert.Equal(-1, ConfigFrames(recording)[^1]);
+        recording.Writes.Clear();
+
+        state.Set(false);
+        Run(hub, time, 1100);
+
+        var frames = ConfigFrames(recording);
+        Assert.Equal(0, frames[0]);
+        Assert.True(frames.Count >= 4, "a ramp, not a single frame: " + string.Join(",", frames));
+        Assert.Equal(70, frames[^1]);
     }
 }

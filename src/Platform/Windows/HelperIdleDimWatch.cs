@@ -44,7 +44,7 @@ internal sealed class HelperIdleDimWatch : IIdleDimWatch
             threshold = _threshold;
             display = _display;
         }
-        _ = IdleDimCommands.SetWatchAsync(_registry, threshold, display);
+        IdleDimCommands.SetWatchAsync(_registry, threshold, display).ObserveFaults();
     }
 
     /// <summary>True when something is armed, so a reconnect has anything to re-assert.</summary>

@@ -494,6 +494,18 @@ public sealed class PanelDeviceRegistry
         };
     }
 
+    /// <summary>Sets or clears the service-internal lock restore level without bumping LastSeenAt.</summary>
+    public void SetLockRestoreBrightness(string id, int? value)
+    {
+        if (string.IsNullOrWhiteSpace(id) || _store.Load().PanelDevices.GetValueOrDefault(id)?.LockRestoreBrightness == value)
+            return;
+        _store.Update(s =>
+        {
+            if (s.PanelDevices.TryGetValue(id, out var record))
+                record.LockRestoreBrightness = value;
+        });
+    }
+
     public PanelDeviceRecord? Touch(string id)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -614,6 +626,8 @@ public sealed class PanelDeviceRegistry
             // cannot dim never read it.
             if (patch.LcdBrightness.HasValue)
                 record.LcdBrightness = Math.Clamp(patch.LcdBrightness.Value, 0, 100);
+            if (patch.SleepWhenLocked.HasValue)
+                record.SleepWhenLocked = patch.SleepWhenLocked.Value;
             if (patch.SecondaryMonitor.HasValue)
                 record.SecondaryMonitor = patch.SecondaryMonitor.Value;
             if (patch.Portrait.HasValue)
@@ -736,6 +750,8 @@ public sealed class PanelDeviceRegistry
             record.Flip180 = null;
             record.Mirror = null;
             record.LcdBrightness = null;
+            record.SleepWhenLocked = null;
+            record.LockRestoreBrightness = null;
             record.SecondaryMonitor = null;
             record.Portrait = null;
             record.HighResolution = null;
@@ -1019,6 +1035,8 @@ public sealed class PanelDeviceRegistry
             Flip180 = r.Flip180,
             Mirror = r.Mirror,
             LcdBrightness = r.LcdBrightness,
+            SleepWhenLocked = r.SleepWhenLocked,
+            LockRestoreBrightness = r.LockRestoreBrightness,
             SecondaryMonitor = r.SecondaryMonitor,
             Portrait = r.Portrait,
             HighResolution = r.HighResolution,

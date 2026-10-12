@@ -7,6 +7,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Nexus.Service.Auth;
 using Nexus.Service.Models;
 using Nexus.Service.Platform;
+#if WINDOWS
+using Nexus.Service.Helper;
+#endif
 
 namespace Nexus.Service.Routes;
 
@@ -39,7 +42,7 @@ internal static class DiagnosticsRoutes
                 // Hand off to the user-session helper over the pipe - it opens
                 // the folder on the user's desktop.
                 var registry = sp.GetRequiredService<Nexus.Service.Helper.HelperRegistry>();
-                _ = Nexus.Service.Helper.Domains.DiagnosticsCommands.OpenLogsAsync(registry);
+                Nexus.Service.Helper.Domains.DiagnosticsCommands.OpenLogsAsync(registry).ObserveFaults();
 #else
                 // macOS (LaunchAgent) / Linux run in the user session already,
                 // so opening directly reaches the user's file manager.

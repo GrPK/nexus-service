@@ -338,6 +338,7 @@ public sealed class RgbBridge : IDisposable
         Action<ReadOnlyMemory<byte>>? newFrameHandler;
         Action? newDeviceListHandler;
         CancellationTokenSource? newCts;
+        CancellationToken refreshToken;
         Task? prevShutdown;
 
         lock (_lock)
@@ -366,6 +367,9 @@ public sealed class RgbBridge : IDisposable
 
             newCts = new CancellationTokenSource();
             _refreshCts = newCts;
+            // Read under the lock: a Deactivate during the shutdown wait below
+            // disposes the source, and .Token on a disposed source throws.
+            refreshToken = newCts.Token;
         }
 
         // Wait for any in-flight shutdown to finish (port release, process exit)
@@ -379,10 +383,6 @@ public sealed class RgbBridge : IDisposable
 
         _engine.OnFrame += newFrameHandler;
         _controller.DeviceListChanged += newDeviceListHandler;
-
-        // Captured before any await: Deactivate disposes the source, and
-        // reading .Token off a disposed CancellationTokenSource throws.
-        var refreshToken = newCts.Token;
 
         var pendingStart = Task.Run(async () =>
         {

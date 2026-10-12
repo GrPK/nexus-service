@@ -257,8 +257,18 @@ public static class PanelRoutes
             var path = DesktopWallpaperProvider.TryResolve(width ?? 0, height ?? 0);
             if (path is null)
                 return Results.NotFound(ApiResponse.Fail("wallpaper unavailable"));
+            // Explorer rewrites TranscodedWallpaper in place; a sharing violation mid-rewrite is transient.
+            FileStream stream;
+            try
+            {
+                stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
             ctx.Response.Headers.CacheControl = "no-cache";
-            return Results.File(path, WallpaperContentTypeFor(path));
+            return Results.File(stream, WallpaperContentTypeFor(path), lastModified: File.GetLastWriteTimeUtc(path));
         }).AllowPanel();
 
         app.MapGet("/panel/devices", (

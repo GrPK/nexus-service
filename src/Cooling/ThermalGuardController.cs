@@ -995,7 +995,7 @@ public sealed class ThermalGuardController
             var repairing = result.Healed.Count > 0;
             if (repairing)
             {
-                s.Cooling.HealSnapshot = s.Cooling.Curves.Select(CoolingConfigLint.CloneCurve).ToList();
+                s.Cooling.HealSnapshot = s.Cooling.Curves.Where(c => c is not null).Select(CoolingConfigLint.CloneCurve).ToList();
             }
             s.Cooling.Curves = result.Curves;
             // The shared curve drives these channels now; a manual speed would only fight it.
