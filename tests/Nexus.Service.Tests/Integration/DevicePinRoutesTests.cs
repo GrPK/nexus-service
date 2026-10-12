@@ -136,6 +136,24 @@ public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
         Assert.Equal(HttpStatusCode.BadRequest, (await _client.SendAsync(bad)).StatusCode);
     }
 
+    [Theory]
+    [InlineData("static", "")]
+    [InlineData("media", "keep-me")]
+    public async Task Deleting_the_selected_media_clears_it_unless_global_media_is_active(string sync, string expected)
+    {
+        var lib = _factory.Services.GetRequiredService<Nexus.Service.Media.MediaLibrary>();
+        var id = "del-" + sync;
+        lib.SaveMeta(new Nexus.Service.Models.Media.MediaItem { Id = id, Name = id, Type = "static", Frames = 1, Fps = 1, Width = 4, Height = 4 });
+        Store.Update(s => { s.Lighting.Sync = sync; s.Lighting.LastMediaId = id; });
+        var expectedId = expected == "keep-me" ? id : "";
+
+        var res = await _client.DeleteAsync($"/media/{id}");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(expectedId, Store.Load().Lighting.LastMediaId);
+        Assert.Equal(sync, Store.Load().Lighting.Sync);
+    }
+
     [Fact]
     public async Task A_simple_mode_sweep_is_accepted_as_an_animate_pin()
     {

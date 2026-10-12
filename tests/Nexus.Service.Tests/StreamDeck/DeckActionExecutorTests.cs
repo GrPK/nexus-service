@@ -125,6 +125,7 @@ internal sealed class FakeLightingProvider : ILightingProvider
     public void StartScreen(ScreenHeadlessStart body) => LastScreen = body;
     public void ReselectScreen() { }
     public bool StartMedia(string mediaId) => PlayableMedia.Contains(mediaId);
+    public bool StartMedia(string mediaId, bool keepMode) => StartMedia(mediaId);
     public void StartMediaIdle() => MediaIdleStarted = true;
     public void StartGameSync() { }
     public Nexus.Service.Lighting.Engine.Effects.GameSyncEffect? ActiveGameSyncEffect() => null;

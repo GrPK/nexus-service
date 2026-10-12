@@ -793,12 +793,13 @@ public sealed class LightingEngine : IDisposable
     }
 
     /// <summary>
-    /// Renders each distinct pinned source (an Animate shader, or the one screen
-    /// capture every mirror pin shares) that is not the active effect onto its
-    /// own canvas and records which canvas every animate/mirror-pinned device
-    /// samples. A device pinned to the active effect keeps the main canvas. Only
-    /// pins whose device is present render, so the mirror capture runs while any
-    /// mirror-pinned device exists and is disposed when none remain. Engine thread.
+    /// Renders each distinct pinned source (an Animate shader, the one screen
+    /// capture every mirror pin shares, or the one Media item every media pin
+    /// shares) that is not the active effect onto its own canvas and records
+    /// which canvas every pinned device samples. A device pinned to the active
+    /// effect keeps the main canvas. Only pins whose device is present render, so
+    /// the mirror capture and the media source run while any pinned device
+    /// exists and are disposed when none remain. Engine thread.
     /// </summary>
     private void RenderPins(IEffect active, DeviceFrame[] devices)
     {

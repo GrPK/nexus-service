@@ -50,7 +50,7 @@ public interface ILightingProvider
     /// True changes the one shared media item and leaves the global mode alone
     /// (global Media, when active, switches to the new item too).
     /// </summary>
-    bool StartMedia(string mediaId, bool keepMode) => StartMedia(mediaId);
+    bool StartMedia(string mediaId, bool keepMode);
     void StartMediaIdle();
 
     /// <summary>Activate Game Sync mode and persist the selection.</summary>

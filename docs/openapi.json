@@ -10866,6 +10866,22 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MediaPlayBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK"
@@ -21838,6 +21854,14 @@
           }
         }
       },
+      "MediaPlayBody": {
+        "type": "object",
+        "properties": {
+          "keepMode": {
+            "type": "boolean"
+          }
+        }
+      },
       "MediaCurrentResponse": {
         "type": "object",
         "properties": {
@@ -25143,6 +25167,9 @@
               "string"
             ],
             "format": "float"
+          },
+          "keepMode": {
+            "type": "boolean"
           }
         }
       },

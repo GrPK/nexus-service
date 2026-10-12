@@ -104,6 +104,7 @@ public class AppBootstrapProfileSwitchTests
         public void StartScreen(Nexus.Service.Models.Lighting.ScreenHeadlessStart body) { }
         public void ReselectScreen() { }
         public bool StartMedia(string mediaId) => false;
+        public bool StartMedia(string mediaId, bool keepMode) => false;
         public void StartMediaIdle() { }
         public void StartGameSync() { }
         public Nexus.Service.Lighting.Engine.Effects.GameSyncEffect? ActiveGameSyncEffect() => null;

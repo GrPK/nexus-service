@@ -547,9 +547,9 @@ public static class DevicePinKinds
 /// every mode, until the pin is cleared. <c>static</c> carries a whole Static
 /// look (the fields below); <c>animate</c> names an Animate shader whose look
 /// is that shader's global setting; <c>mirror</c> samples the screen capture at
-/// the device's own spot with the global Mirror settings; <c>media</c> plays the one
-/// Media source (the item global Media mode plays) with the global Media filters. The same shape is the
-/// persisted form and the wire form.
+/// the device's own spot with the global Mirror settings; <c>media</c> plays
+/// the one Media source (the item global Media mode plays) with the global
+/// Media filters. The same shape is the persisted form and the wire form.
 /// </summary>
 public sealed class DevicePin
 {

@@ -423,12 +423,14 @@ public class DevicePinEngineTests : IDisposable
     {
         using var rig = new Rig(_tempDir);
         var dev = Device();
-        rig.Engine.UpdateDevices(new[] { dev });
+        var other = new DeviceFrame(1, "dev-b", 5, x: 100, y: 100, w: 40, h: 250, rotation: 90);
+        rig.Engine.UpdateDevices(new[] { dev, other });
         rig.Engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
         rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
 
-        var leds = await WaitFor(dev, l => l[1] == 0);
-        Assert.All(leds, v => Assert.Equal(0, v));
+        // The pin settles a frame or two after the first render; the unpinned
+        // device proves frames are being drawn while the pinned one is black.
+        Assert.True(await Eventually(() => other.LedBytes.ToArray()[1] == 255 && dev.LedBytes.ToArray().All(v => v == 0)));
     }
 
     [Fact]
@@ -465,7 +467,7 @@ public class DevicePinEngineTests : IDisposable
         });
         engine.UpdateDevices(new[] { a, b });
         engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
-        await Task.Delay(100);
+        await WaitFor(b, l => l[1] == 255);
         Assert.Empty(built);
 
         pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
@@ -474,7 +476,7 @@ public class DevicePinEngineTests : IDisposable
         Assert.Single(built);
 
         pins.Clear("dev-a");
-        await Task.Delay(100);
+        await WaitFor(a, l => l[1] == 255);
         Assert.False(built[0].Disposed);
 
         pins.Clear("dev-b");

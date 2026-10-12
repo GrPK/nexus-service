@@ -117,6 +117,7 @@ internal static class McpTestHarness
         public void StartScreen(ScreenHeadlessStart body) { }
         public void ReselectScreen() { }
         public bool StartMedia(string mediaId) => false;
+        public bool StartMedia(string mediaId, bool keepMode) => false;
         public void StartMediaIdle() { }
         public void StartGameSync() { }
         public Nexus.Service.Lighting.Engine.Effects.GameSyncEffect? ActiveGameSyncEffect() => null;

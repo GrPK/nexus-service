@@ -748,7 +748,10 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     // each take a handle, so the capture runs once and closes with its last user.
     private readonly SharedScreenFrameSource? _sharedSource;
     private string _mirrorMonitor = "";
-    private volatile string _mediaId = "";
+    // The media item pinned devices play, loaded off the engine thread and
+    // published by reference swap. Null when no media pin exists.
+    private sealed record PinnedMedia(string Id, string Tag, int Width, int Height, int Fps, byte[]? Frames);
+    private volatile PinnedMedia? _pinnedMedia;
 
     private IScreenFrameSource? ScreenSource() => _sharedSource is null ? _frameSource : _sharedSource.CreateHandle();
 
@@ -756,7 +759,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         key == LightingEngine.MirrorPinKey
             ? "m|" + _mirrorMonitor
             : key == LightingEngine.MediaPinKey
-                ? "md|" + _mediaId
+                ? _pinnedMedia?.Tag ?? MediaTag("")
                 : _pinnedLooks.TryGetValue(key, out var l) ? l.Tag : null;
 
     /// <summary>
@@ -779,7 +782,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             // A profile apply or cloud pull replaces the persisted screen.
             var persisted = _store.Load().Lighting;
             _mirrorMonitor = persisted.ScreenMonitor ?? "";
-            _mediaId = persisted.LastMediaId ?? "";
+            RefreshPinnedMedia(persisted);
             if (_store.Load().Lighting.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
             {
                 return;
@@ -837,10 +840,60 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
+    private static string MediaTag(string id) => "md|" + id;
+
+    /// <summary>
+    /// Loads the media item media pins play (meta and frame bytes) on the calling
+    /// thread, only when a media pin exists and the item changed, so the engine
+    /// thread never touches the disk.
+    /// </summary>
+    private void RefreshPinnedMedia(Nexus.Service.Persistence.LightingSettings lighting)
+    {
+        var wanted = false;
+        foreach (var pin in lighting.DevicePins.Values)
+        {
+            if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+            {
+                wanted = true;
+                break;
+            }
+        }
+        if (!wanted)
+        {
+            _pinnedMedia = null;
+            return;
+        }
+        var id = lighting.LastMediaId ?? "";
+        if (_pinnedMedia is { } current && current.Id == id)
+        {
+            return;
+        }
+        var item = string.IsNullOrEmpty(id) ? null : _media.GetItem(id);
+        byte[]? frames = null;
+        if (item is not null)
+        {
+            try
+            {
+                var path = _media.GetFramesBinPath(id);
+                if (System.IO.File.Exists(path))
+                {
+                    frames = System.IO.File.ReadAllBytes(path);
+                }
+            }
+            catch (System.IO.IOException)
+            {
+                frames = null;
+            }
+        }
+        _pinnedMedia = frames is null || item is null
+            ? new PinnedMedia(id, MediaTag(id), 0, 0, 0, null)
+            : new PinnedMedia(id, MediaTag(id), item.Width, item.Height, item.Fps, frames);
+    }
+
     /// <summary>
     /// Builds, or updates in place, the source a pinned device runs: the shared
-    /// screen-capture effect for a mirror pin, else the pinned Animate shader. In
-    /// place updates mirror <see cref="ReapplyActiveLook"/>, so a slider drag does
+    /// screen-capture effect for a mirror pin, the shared Media item for a media
+    /// pin, else the pinned Animate shader. In place updates mirror <see cref="ReapplyActiveLook"/>, so a slider drag does
     /// not recompile the shader.
     /// </summary>
     private IEffect? BuildPinnedEffect(string effect, IEffect? existing)
@@ -848,12 +901,15 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         if (effect == LightingEngine.MirrorPinKey)
         {
             // A monitor change since the instance was built needs a new capture.
-            if (existing is not null && PinTag(effect) == _builtMirrorTag)
+            // One read, so the tag always names the monitor the instance captures.
+            var monitor = _mirrorMonitor;
+            var mirrorTag = "m|" + monitor;
+            if (existing is not null && mirrorTag == _builtMirrorTag)
             {
                 return existing;
             }
-            _builtMirrorTag = PinTag(effect);
-            return new ScreenMirrorEffect(_mirrorMonitor, _screenPP, ScreenSource(), _gpu);
+            _builtMirrorTag = mirrorTag;
+            return new ScreenMirrorEffect(monitor, _screenPP, ScreenSource(), _gpu);
         }
         if (effect == LightingEngine.MediaPinKey)
         {
@@ -893,21 +949,17 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     /// </summary>
     private IEffect BuildPinnedMedia(IEffect? existing)
     {
-        var id = _mediaId;
-        var tag = PinTag(LightingEngine.MediaPinKey);
+        // One read, so the tag always names the item the instance plays.
+        var snapshot = _pinnedMedia;
+        var tag = snapshot?.Tag ?? MediaTag("");
         if (existing is not null && tag == _builtMediaTag)
         {
             return existing;
         }
         _builtMediaTag = tag;
-        var item = string.IsNullOrEmpty(id) ? null : _media.GetItem(id);
-        if (item is not null)
+        if (snapshot?.Frames is { } frames)
         {
-            var framesPath = _media.GetFramesBinPath(id);
-            if (System.IO.File.Exists(framesPath))
-            {
-                return new MediaFramesEffect(framesPath, item.Width, item.Height, item.Fps, _mediaPP);
-            }
+            return new MediaFramesEffect(frames, snapshot.Width, snapshot.Height, snapshot.Fps, _mediaPP);
         }
         return new Engine.Effects.BlackEffect();
     }
