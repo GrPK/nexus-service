@@ -2200,11 +2200,12 @@ public sealed class SentrySettings
     public long? LastAlertAt { get; set; }
 }
 
-/// <summary>One ROG Astral card's Level Sense calibration: its smoothed X and Y tilt in degrees, and when it was taken (Unix ms).</summary>
+/// <summary>One ROG Astral card's Level Sense calibration: its smoothed X, Y and Z angles in degrees, and when it was taken (Unix ms). A calibration without Z is taken again.</summary>
 public sealed class AstralLevelSenseCalibration
 {
     public float X { get; set; }
     public float Y { get; set; }
+    public float? Z { get; set; }
     public long CalibratedAtMs { get; set; }
 }
 

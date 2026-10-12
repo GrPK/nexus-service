@@ -137,9 +137,10 @@ internal sealed class AstralGpuSupplement
                 AstralSensorBuilder.Append(hwId, hwName, readout, result);
             }
 
-            if (state.LevelSense?.Deviation is { } deviation)
+            if (state.LevelSense is { Deviation: { } deviation, Posture: { } posture })
             {
-                AstralSensorBuilder.AppendLevelSense(hwId, hwName, deviation.X, deviation.Y, result);
+                AstralSensorBuilder.AppendLevelSense(
+                    hwId, hwName, deviation.X, deviation.Y, posture.Sag, posture.Lean, result);
             }
         }
 
@@ -264,9 +265,11 @@ internal sealed class AstralGpuSupplement
         if (state.LevelSense is null)
         {
             state.LevelSense = new AstralLevelSense();
-            if (_savedCalibrations is { } saved && saved.TryGetValue(key, out var calibration) && calibration is not null)
+            // A calibration saved before Z was kept cannot place the lean, so it is taken again.
+            if (_savedCalibrations is { } saved && saved.TryGetValue(key, out var calibration)
+                && calibration is { Z: { } z })
             {
-                state.LevelSense.Load(new AstralLevelSense.Calibration(calibration.X, calibration.Y));
+                state.LevelSense.Load(new AstralLevelSense.Calibration(calibration.X, calibration.Y, z));
             }
             else
             {
@@ -278,7 +281,7 @@ internal sealed class AstralGpuSupplement
         {
             return null;
         }
-        ServiceLog.Info($"[astral] gpu{state.AdapterIndex} Level Sense calibrated: x={completed.X:F2} y={completed.Y:F2}");
+        ServiceLog.Info($"[astral] gpu{state.AdapterIndex} Level Sense calibrated: x={completed.X:F2} y={completed.Y:F2} z={completed.Z:F2}");
         return new CalibrationToSave(key, completed, now.ToUnixTimeMilliseconds());
     }
 
@@ -303,6 +306,7 @@ internal sealed class AstralGpuSupplement
         {
             X = save.Calibration.X,
             Y = save.Calibration.Y,
+            Z = save.Calibration.Z,
             CalibratedAtMs = save.AtMs,
         };
         _store.Update(s =>

@@ -31,13 +31,19 @@ internal static class AstralSensorBuilder
 
     /// <summary>
     /// Level Sense: how far the card tilted on X and Y since its calibration,
-    /// in degrees (<see cref="AstralLevelSense.Deviation"/>).
+    /// in degrees, as GPU Tweak III shows it (<see cref="AstralLevelSense.Deviation"/>),
+    /// and the same tilt with its direction: sag, positive when the free end
+    /// sits lower, and lean, positive when the top edge turned toward the fans
+    /// (<see cref="AstralLevelSense.Posture"/>).
     /// </summary>
-    public static void AppendLevelSense(string hwId, string hwName, float x, float y, List<HardwareSensor> result)
+    public static void AppendLevelSense(
+        string hwId, string hwName, float x, float y, float sag, float lean, List<HardwareSensor> result)
     {
         var parent = new SensorParent { Id = hwId, Name = hwName };
         result.Add(AngleSensor($"{hwId}/astral/level/x", "GPU Level Sense X", x, parent));
         result.Add(AngleSensor($"{hwId}/astral/level/y", "GPU Level Sense Y", y, parent));
+        result.Add(AngleSensor($"{hwId}/astral/level/sag", "GPU Level Sense Sag", sag, parent));
+        result.Add(AngleSensor($"{hwId}/astral/level/lean", "GPU Level Sense Lean", lean, parent));
     }
 
     private static HardwareSensor VoltageSensor(string id, string name, float value, SensorParent parent) => new()

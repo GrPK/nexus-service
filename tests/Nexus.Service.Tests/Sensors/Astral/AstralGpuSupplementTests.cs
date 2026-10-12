@@ -75,6 +75,8 @@ public class AstralGpuSupplementTests
 
     private static HardwareSensor? LevelX(List<HardwareSensor> result) => result.Find(s => s.Name == "GPU Level Sense X");
     private static HardwareSensor? LevelY(List<HardwareSensor> result) => result.Find(s => s.Name == "GPU Level Sense Y");
+    private static HardwareSensor? Sag(List<HardwareSensor> result) => result.Find(s => s.Name == "GPU Level Sense Sag");
+    private static HardwareSensor? Lean(List<HardwareSensor> result) => result.Find(s => s.Name == "GPU Level Sense Lean");
 
     [Fact]
     public void AppendSensors_calibrates_level_sense_on_the_first_readings_and_saves_it()
@@ -99,6 +101,7 @@ public class AstralGpuSupplementTests
         var saved = store.Load().AstralLevelSense[LevelSenseKey];
         Assert.Equal(0f, saved.X, 0.0001f);
         Assert.Equal(0f, saved.Y, 0.0001f);
+        Assert.Equal(0f, saved.Z!.Value, 0.0001f);
         Assert.Equal(calibratedAt, saved.CalibratedAtMs);
     }
 
@@ -112,14 +115,33 @@ public class AstralGpuSupplementTests
         };
         var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var store = new InMemoryConfigStore();
-        store.Update(s => s.AstralLevelSense[LevelSenseKey] = new AstralLevelSenseCalibration { X = 0f, Y = 0f, CalibratedAtMs = 42 });
+        store.Update(s => s.AstralLevelSense[LevelSenseKey] = new AstralLevelSenseCalibration { X = 0f, Y = 0f, Z = 0f, CalibratedAtMs = 42 });
         var supplement = new AstralGpuSupplement(client, time, TimeSpan.FromSeconds(1), store);
 
         var result = Poll(supplement, time);
 
         Assert.Equal(0f, LevelX(result)!.Value, 0.001f);
         Assert.Equal(2f, LevelY(result)!.Value, 0.001f);
+        Assert.Equal(2f, Sag(result)!.Value, 0.001f);
+        Assert.Equal(0f, Lean(result)!.Value, 0.001f);
         Assert.Equal(42, store.Load().AstralLevelSense[LevelSenseKey].CalibratedAtMs);
+    }
+
+    [Fact]
+    public void AppendSensors_takes_again_a_calibration_saved_without_z()
+    {
+        var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true, GSensorSucceeds = true };
+        var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.AstralLevelSense[LevelSenseKey] = new AstralLevelSenseCalibration { X = 0f, Y = 0f, CalibratedAtMs = 42 });
+        var supplement = new AstralGpuSupplement(client, time, TimeSpan.FromSeconds(1), store);
+
+        for (var i = 1; i < AstralLevelSense.CalibrationSamples; i++)
+        {
+            Assert.Null(LevelX(Poll(supplement, time)));
+        }
+        Assert.NotNull(Sag(Poll(supplement, time)));
+        Assert.NotNull(store.Load().AstralLevelSense[LevelSenseKey].Z);
     }
 
     [Fact]
@@ -196,7 +218,7 @@ public class AstralGpuSupplementTests
         // The store serializes through PersistenceJsonContext, where a source-gen
         // gap would write the section back empty without erroring.
         var settings = new NexusSettings();
-        settings.AstralLevelSense[LevelSenseKey] = new AstralLevelSenseCalibration { X = 88.54f, Y = 1.2f, CalibratedAtMs = 1_760_000_000_000 };
+        settings.AstralLevelSense[LevelSenseKey] = new AstralLevelSenseCalibration { X = 88.54f, Y = 1.2f, Z = 90.76f, CalibratedAtMs = 1_760_000_000_000 };
 
         var json = JsonSerializer.Serialize(settings, PersistenceJsonContext.Default.NexusSettings);
         var back = JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.NexusSettings)!;
@@ -204,6 +226,7 @@ public class AstralGpuSupplementTests
         var saved = Assert.Contains(LevelSenseKey, back.AstralLevelSense);
         Assert.Equal(88.54f, saved.X);
         Assert.Equal(1.2f, saved.Y);
+        Assert.Equal(90.76f, saved.Z);
         Assert.Equal(1_760_000_000_000, saved.CalibratedAtMs);
     }
 
