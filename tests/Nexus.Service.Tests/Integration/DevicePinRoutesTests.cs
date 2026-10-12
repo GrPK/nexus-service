@@ -67,7 +67,6 @@ public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
     }
 
     [Theory]
-    [InlineData("""{"kind":"media"}""")]
     [InlineData("""{"kind":"gamesync"}""")]
     [InlineData("""{"kind":""}""")]
     [InlineData("""{"kind":"animate","effect":"gradientlinear"}""")]
@@ -78,11 +77,63 @@ public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
     [InlineData("""{"kind":"static"}""")]
     [InlineData("""{"kind":"mirror","effect":"plasma"}""")]
     [InlineData("""{"kind":"mirror","hue":0.5}""")]
+    [InlineData("""{"kind":"media","effect":"plasma"}""")]
+    [InlineData("""{"kind":"media","hue":0.5}""")]
+    [InlineData("""{"kind":"media","color":"#112233"}""")]
+    [InlineData("""{"kind":"media","params":{"x":1}}""")]
+    [InlineData("""{"kind":"media","slot":1}""")]
     public async Task An_invalid_pin_is_refused_and_stores_nothing(string pin)
     {
         var res = await Pin("\"pin-c1\"", pin);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
         Assert.False(Store.Load().Lighting.DevicePins.ContainsKey("pin-c1"));
+    }
+
+    [Fact]
+    public async Task A_media_pin_is_accepted_stored_and_listed_with_no_other_fields()
+    {
+        var res = await Pin("\"pin-g1\"", """{"kind":"media"}""");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("media", Store.Load().Lighting.DevicePins["pin-g1"].Kind);
+
+        var get = await _client.GetAsync("/devices/lighting-devices/pins");
+        using var doc = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
+        var pin = doc.RootElement.GetProperty("pins").GetProperty("pin-g1");
+        Assert.Equal("media", pin.GetProperty("kind").GetString());
+        Assert.False(pin.TryGetProperty("effect", out _));
+        Assert.False(pin.TryGetProperty("color", out _));
+    }
+
+    [Fact]
+    public async Task A_preset_round_trips_a_media_pin()
+    {
+        await Pin("\"pin-h1\"", """{"kind":"media"}""");
+        var createRes = await _client.PostAsync("/devices/lighting-devices/layout-presets", Json("""{"name":"Media pinned"}"""));
+        using var createDoc = JsonDocument.Parse(await createRes.Content.ReadAsStringAsync());
+        var id = createDoc.RootElement.GetProperty("preset").GetProperty("id").GetString()!;
+        Assert.Equal("media", Store.Load().Lighting.LayoutPresets.Find(p => p.Id == id)!.DevicePins!["pin-h1"].Kind);
+
+        await _client.PostAsync("/devices/lighting-devices/layout-presets", Json("""{"name":"Open"}"""));
+        await Pin("\"pin-h1\"", "null");
+        Assert.False(Store.Load().Lighting.DevicePins.ContainsKey("pin-h1"));
+
+        await _client.PostAsync($"/devices/lighting-devices/layout-presets/{id}/activate", Json("{}"));
+        Assert.Equal("media", Store.Load().Lighting.DevicePins["pin-h1"].Kind);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{}")]
+    [InlineData("""{"keepMode":true}""")]
+    public async Task Media_play_keeps_its_responses_with_or_without_a_body(string body)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/media/no-such-item/play");
+        if (body.Length > 0) req.Content = Json(body);
+        Assert.Equal(HttpStatusCode.NotFound, (await _client.SendAsync(req)).StatusCode);
+
+        var bad = new HttpRequestMessage(HttpMethod.Post, "/media/bad.id/play");
+        if (body.Length > 0) bad.Content = Json(body);
+        Assert.Equal(HttpStatusCode.BadRequest, (await _client.SendAsync(bad)).StatusCode);
     }
 
     [Fact]

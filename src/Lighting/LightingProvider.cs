@@ -748,13 +748,16 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     // each take a handle, so the capture runs once and closes with its last user.
     private readonly SharedScreenFrameSource? _sharedSource;
     private string _mirrorMonitor = "";
+    private volatile string _mediaId = "";
 
     private IScreenFrameSource? ScreenSource() => _sharedSource is null ? _frameSource : _sharedSource.CreateHandle();
 
     private string? PinTag(string key) =>
         key == LightingEngine.MirrorPinKey
             ? "m|" + _mirrorMonitor
-            : _pinnedLooks.TryGetValue(key, out var l) ? l.Tag : null;
+            : key == LightingEngine.MediaPinKey
+                ? "md|" + _mediaId
+                : _pinnedLooks.TryGetValue(key, out var l) ? l.Tag : null;
 
     /// <summary>
     /// Re-resolves every pinned Animate effect's look the way the active effect
@@ -774,7 +777,9 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         try
         {
             // A profile apply or cloud pull replaces the persisted screen.
-            _mirrorMonitor = _store.Load().Lighting.ScreenMonitor ?? "";
+            var persisted = _store.Load().Lighting;
+            _mirrorMonitor = persisted.ScreenMonitor ?? "";
+            _mediaId = persisted.LastMediaId ?? "";
             if (_store.Load().Lighting.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
             {
                 return;
@@ -850,6 +855,10 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             _builtMirrorTag = PinTag(effect);
             return new ScreenMirrorEffect(_mirrorMonitor, _screenPP, ScreenSource(), _gpu);
         }
+        if (effect == LightingEngine.MediaPinKey)
+        {
+            return BuildPinnedMedia(existing);
+        }
         if (!_pinnedLooks.TryGetValue(effect, out var pinned))
         {
             return null;
@@ -875,6 +884,33 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     }
 
     private string? _builtMirrorTag;
+    private string? _builtMediaTag;
+
+    /// <summary>
+    /// The one Media source for a media pin: the item global Media mode plays,
+    /// through the same post-process. With no playable item it renders what idle
+    /// Media does. A new item since the instance was built needs a new one.
+    /// </summary>
+    private IEffect BuildPinnedMedia(IEffect? existing)
+    {
+        var id = _mediaId;
+        var tag = PinTag(LightingEngine.MediaPinKey);
+        if (existing is not null && tag == _builtMediaTag)
+        {
+            return existing;
+        }
+        _builtMediaTag = tag;
+        var item = string.IsNullOrEmpty(id) ? null : _media.GetItem(id);
+        if (item is not null)
+        {
+            var framesPath = _media.GetFramesBinPath(id);
+            if (System.IO.File.Exists(framesPath))
+            {
+                return new MediaFramesEffect(framesPath, item.Width, item.Height, item.Fps, _mediaPP);
+            }
+        }
+        return new Engine.Effects.BlackEffect();
+    }
 
     /// <summary>Content tag of the slot currently driving the LEDs, or null when no animate effect is active.</summary>
     private string? ActiveLookTag()
@@ -1273,6 +1309,17 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             return;
         }
+        if (body.KeepMode
+            && !string.Equals(_store.Load().Lighting.Sync, "screen", StringComparison.OrdinalIgnoreCase))
+        {
+            // Only the shared capture's screen moves; mirror pins rebuild on the new tag.
+            if (body.Monitor is not null)
+            {
+                _store.Update(s => s.Lighting.ScreenMonitor = body.Monitor);
+                _mirrorMonitor = body.Monitor;
+            }
+            return;
+        }
         EnsureRgbActive();
         _engine.FrameIntervalMs = 16;
         // Do NOT overwrite _screenPP from body. The post-process holder is the
@@ -1473,6 +1520,33 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _store.Update(s =>
         {
             s.Lighting.Sync = "media";
+            s.Lighting.LastMediaId = mediaId;
+            LightingPresetLooks.CaptureIntoActive(s);
+        });
+        return true;
+    }
+
+    public bool StartMedia(string mediaId, bool keepMode)
+    {
+        if (!keepMode)
+        {
+            return StartMedia(mediaId);
+        }
+        if (!_gates.Lighting)
+        {
+            return false;
+        }
+        // Global Media is showing the old item, so it follows the change.
+        if (string.Equals(_store.Load().Lighting.Sync, "media", StringComparison.OrdinalIgnoreCase))
+        {
+            return StartMedia(mediaId);
+        }
+        if (_media.GetItem(mediaId) is null || !System.IO.File.Exists(_media.GetFramesBinPath(mediaId)))
+        {
+            return false;
+        }
+        _store.Update(s =>
+        {
             s.Lighting.LastMediaId = mediaId;
             LightingPresetLooks.CaptureIntoActive(s);
         });

@@ -214,6 +214,8 @@ public class ScreenHeadlessStart
     public float Hue { get; set; }
     /// <summary>0 = pure hue rotate, 1 = grayscale + accent-tint. Matches the animate colorize semantics.</summary>
     public float Colorize { get; set; }
+    /// <summary>True applies the monitor to the shared capture without switching the global mode (unless it is already Mirror).</summary>
+    public bool KeepMode { get; set; }
 }
 
 /// <summary>

@@ -324,7 +324,7 @@ public static class MediaLibraryRoutes
             return Results.File(thumbPath, "image/jpeg");
         }).AllowPanel();
 
-        app.MapPost("/media/{id}/play", (string id, ILightingProvider lighting, MultiplexHub hub, FeatureGates gates) =>
+        app.MapPost("/media/{id}/play", (string id, [Microsoft.AspNetCore.Mvc.FromBody] Nexus.Service.Models.Media.MediaPlayBody? body, ILightingProvider lighting, MultiplexHub hub, FeatureGates gates) =>
         {
             if (!gates.Lighting)
             {
@@ -335,7 +335,7 @@ public static class MediaLibraryRoutes
                 return Results.BadRequest(new MediaPlayResponse { Error = true, Msg = "invalid media id" });
             }
 
-            var ok = lighting.StartMedia(id);
+            var ok = lighting.StartMedia(id, body?.KeepMode == true);
             if (ok)
             {
                 PanelTopics.BroadcastLighting(hub);

@@ -537,8 +537,9 @@ public static class DevicePinKinds
     public const string Static = "static";
     public const string Animate = "animate";
     public const string Mirror = "mirror";
+    public const string Media = "media";
 
-    public static bool IsKnown(string? kind) => kind is Static or Animate or Mirror;
+    public static bool IsKnown(string? kind) => kind is Static or Animate or Mirror or Media;
 }
 
 /// <summary>
@@ -546,14 +547,15 @@ public static class DevicePinKinds
 /// every mode, until the pin is cleared. <c>static</c> carries a whole Static
 /// look (the fields below); <c>animate</c> names an Animate shader whose look
 /// is that shader's global setting; <c>mirror</c> samples the screen capture at
-/// the device's own spot with the global Mirror settings. The same shape is the
+/// the device's own spot with the global Mirror settings; <c>media</c> plays the one
+/// Media source (the item global Media mode plays) with the global Media filters. The same shape is the
 /// persisted form and the wire form.
 /// </summary>
 public sealed class DevicePin
 {
-    /// <summary>"static", "animate" or "mirror".</summary>
+    /// <summary>"static", "animate", "mirror" or "media".</summary>
     public string Kind { get; set; } = "";
-    /// <summary>Static: the effect key. Animate: the shader key. Unused for mirror.</summary>
+    /// <summary>Static: the effect key. Animate: the shader key. Unused for mirror and media.</summary>
     public string? Effect { get; set; }
     /// <summary>Static: a flat palette pick, "#rrggbb". Set means the look is that colour and every field below is inert.</summary>
     public string? Color { get; set; }

@@ -182,6 +182,12 @@ public sealed class LightingEngine : IDisposable
     /// <summary>Render key of the screen capture shared by every mirror pin.</summary>
     public const string MirrorPinKey = "@mirror";
 
+    /// <summary>Render key of the one Media source shared by every media pin.</summary>
+    public const string MediaPinKey = "@media";
+
+    /// <summary>Name of the global Media effect; a media pin shares its canvas while it runs.</summary>
+    public const string MediaEffectName = "media";
+
     /// <summary>Name of the global Screen Mirror effect; a mirror pin shares its canvas while it runs.</summary>
     public const string ScreenEffectName = "screen";
 
@@ -832,13 +838,17 @@ public sealed class LightingEngine : IDisposable
             {
                 key = MirrorPinKey;
             }
+            else if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+            {
+                key = MediaPinKey;
+            }
             else
             {
                 continue;
             }
-            var sweep = key != MirrorPinKey && Gpu.ShaderLibrary.IsSweepEffect(key);
+            var sweep = key != MirrorPinKey && key != MediaPinKey && Gpu.ShaderLibrary.IsSweepEffect(key);
             // Pinned to what is already running globally: share its canvas.
-            var shared = key == MirrorPinKey ? ScreenEffectName : key;
+            var shared = key == MirrorPinKey ? ScreenEffectName : key == MediaPinKey ? MediaEffectName : key;
             if (string.Equals(activeName, shared, StringComparison.Ordinal))
             {
                 _pinnedDevices[dev.Id] = null;

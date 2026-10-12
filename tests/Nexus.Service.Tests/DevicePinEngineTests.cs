@@ -215,6 +215,7 @@ public class DevicePinEngineTests : IDisposable
         public readonly FakeScreen Screen = new();
         public readonly FakeBeats Beats = new();
         public readonly LightingProvider Provider;
+        public readonly MediaLibrary Media;
 
         public Rig(string dir, Action<JsonConfigStore>? seed = null)
         {
@@ -222,7 +223,8 @@ public class DevicePinEngineTests : IDisposable
             seed?.Invoke(Store);
             Pins = new DevicePinTracker(Store);
             Engine = new LightingEngine { Pins = Pins, FrameIntervalMs = 10 };
-            Provider = new LightingProvider(Store, Engine, new LightingOutputHub(), Gpu, new MediaLibrary(),
+            Media = new MediaLibrary(Path.Combine(dir, "media"));
+            Provider = new LightingProvider(Store, Engine, new LightingOutputHub(), Gpu, Media,
                 new Nexus.Service.Platform.DefaultMonitorEnumerator(), frameSource: Screen, beats: Beats);
         }
 
@@ -249,6 +251,40 @@ public class DevicePinEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task Screen_keep_mode_moves_the_monitor_of_mirror_pins_and_leaves_the_global_mode()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Store.Update(s => { s.Lighting.ScreenMonitor = "1"; s.Lighting.Sync = "static"; });
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        var global = new Fill("gradientlinear", 0, 255, 0);
+        rig.Engine.SetEffect(global);
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Mirror });
+        Assert.True(await Eventually(() => rig.Screen.Running && rig.Screen.LastMonitor == "1"));
+
+        rig.Provider.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart { Monitor = "2", KeepMode = true });
+
+        Assert.True(await Eventually(() => rig.Screen.LastMonitor == "2"));
+        Assert.Equal("2", rig.Store.Load().Lighting.ScreenMonitor);
+        Assert.Equal("static", rig.Store.Load().Lighting.Sync);
+        Assert.Same(global, rig.Engine.CurrentEffect);
+        Assert.Equal(255, (await WaitFor(dev, l => l[0] > 200))[0]);
+    }
+
+    [Fact]
+    public void Screen_start_without_keep_mode_switches_the_global_mode()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Store.Update(s => s.Lighting.Sync = "static");
+
+        rig.Provider.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart { Monitor = "2" });
+
+        Assert.Equal("screen", rig.Store.Load().Lighting.Sync);
+        Assert.Equal("2", rig.Store.Load().Lighting.ScreenMonitor);
+        Assert.Equal("screen", rig.Engine.CurrentEffect?.Name);
+    }
+
+    [Fact]
     public async Task The_capture_starts_on_the_first_mirror_pin_runs_once_and_stops_with_the_last()
     {
         using var rig = new Rig(_tempDir);
@@ -272,6 +308,224 @@ public class DevicePinEngineTests : IDisposable
         rig.Pins.Clear("dev-b");
         Assert.True(await Eventually(() => !rig.Screen.Running));
         Assert.Equal(1, rig.Screen.Stops);
+    }
+
+    // ---- media pins: the one shared Media source ----
+
+    private static void SeedMedia(MediaLibrary media, string id, byte r, byte g, byte b)
+    {
+        media.SaveMeta(new Nexus.Service.Models.Media.MediaItem
+        {
+            Id = id, Name = id, Type = "static", Frames = 1, Fps = 1, Width = 4, Height = 4,
+        });
+        var frame = new byte[4 * 4 * 3];
+        for (var i = 0; i < frame.Length; i += 3) { frame[i] = r; frame[i + 1] = g; frame[i + 2] = b; }
+        File.WriteAllBytes(media.GetFramesBinPath(id), frame);
+    }
+
+    [Fact]
+    public async Task A_media_pin_plays_the_media_item_while_the_global_mode_is_static()
+    {
+        using var rig = new Rig(_tempDir);
+        SeedMedia(rig.Media, "clip", 0, 0, 255);
+        rig.Store.Update(s => s.Lighting.LastMediaId = "clip");
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+
+        var leds = await WaitFor(dev, l => l[2] > 200);
+        Assert.Equal(0, leds[0]);
+        Assert.Equal(255, leds[2]);
+    }
+
+    [Fact]
+    public async Task Picking_another_media_item_changes_what_a_media_pin_shows()
+    {
+        using var rig = new Rig(_tempDir);
+        SeedMedia(rig.Media, "one", 0, 0, 255);
+        SeedMedia(rig.Media, "two", 255, 0, 0);
+        rig.Store.Update(s => s.Lighting.LastMediaId = "one");
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        await WaitFor(dev, l => l[2] > 200);
+
+        rig.Store.Update(s => s.Lighting.LastMediaId = "two");
+
+        var leds = await WaitFor(dev, l => l[0] > 200);
+        Assert.Equal(255, leds[0]);
+        Assert.Equal(0, leds[2]);
+    }
+
+    [Fact]
+    public async Task Keep_mode_changes_the_shared_item_without_switching_the_global_mode()
+    {
+        using var rig = new Rig(_tempDir);
+        SeedMedia(rig.Media, "one", 0, 0, 255);
+        SeedMedia(rig.Media, "two", 255, 0, 0);
+        rig.Store.Update(s => { s.Lighting.LastMediaId = "one"; s.Lighting.Sync = "static"; });
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        var global = new Fill("gradientlinear", 0, 255, 0);
+        rig.Engine.SetEffect(global);
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        await WaitFor(dev, l => l[2] > 200);
+
+        Assert.True(rig.Provider.StartMedia("two", keepMode: true));
+
+        var leds = await WaitFor(dev, l => l[0] > 200);
+        Assert.Equal(255, leds[0]);
+        Assert.Equal("static", rig.Store.Load().Lighting.Sync);
+        Assert.Equal("two", rig.Store.Load().Lighting.LastMediaId);
+        Assert.Same(global, rig.Engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void Keep_mode_refuses_an_unknown_item_and_leaves_the_selection()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Store.Update(s => s.Lighting.LastMediaId = "");
+        Assert.False(rig.Provider.StartMedia("nope", keepMode: true));
+        Assert.Equal("", rig.Store.Load().Lighting.LastMediaId);
+    }
+
+    [Fact]
+    public void Without_keep_mode_the_play_switches_the_global_mode_to_media()
+    {
+        using var rig = new Rig(_tempDir);
+        SeedMedia(rig.Media, "one", 0, 0, 255);
+        rig.Store.Update(s => s.Lighting.Sync = "static");
+
+        Assert.True(rig.Provider.StartMedia("one", keepMode: false));
+
+        Assert.Equal("media", rig.Store.Load().Lighting.Sync);
+        Assert.Equal("media", rig.Engine.CurrentEffect?.Name);
+    }
+
+    [Fact]
+    public void Keep_mode_while_global_media_is_active_switches_the_playing_item()
+    {
+        using var rig = new Rig(_tempDir);
+        SeedMedia(rig.Media, "one", 0, 0, 255);
+        SeedMedia(rig.Media, "two", 255, 0, 0);
+        Assert.True(rig.Provider.StartMedia("one"));
+
+        Assert.True(rig.Provider.StartMedia("two", keepMode: true));
+
+        Assert.Equal("media", rig.Store.Load().Lighting.Sync);
+        Assert.Equal("two", rig.Store.Load().Lighting.LastMediaId);
+    }
+
+    [Fact]
+    public async Task A_media_pin_with_no_item_renders_idle_media_black()
+    {
+        using var rig = new Rig(_tempDir);
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+
+        var leds = await WaitFor(dev, l => l[1] == 0);
+        Assert.All(leds, v => Assert.Equal(0, v));
+    }
+
+    [Fact]
+    public async Task A_media_pin_and_a_following_device_match_while_the_global_mode_is_media()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        var a = Device("dev-a");
+        var b = new DeviceFrame(1, "dev-b", 5, x: 100, y: 100, w: 40, h: 250, rotation: 90);
+        var built = 0;
+        using var engine = Engine(pins, a, (_, _) => { built++; return new Fill("media", 9, 9, 9); });
+        engine.UpdateDevices(new[] { a, b });
+        engine.SetEffect(new Fill("media", 0, 0, 255));
+
+        var pinned = await WaitFor(a, l => l[2] == 255);
+        var following = await WaitFor(b, l => l[2] == 255);
+        Assert.Equal(following, pinned);
+        Assert.Equal(0, built);
+    }
+
+    [Fact]
+    public async Task The_media_source_builds_once_for_many_pins_and_is_released_with_the_last()
+    {
+        var pins = new DevicePinTracker();
+        var a = Device("dev-a");
+        var b = new DeviceFrame(1, "dev-b", 5, x: 100, y: 100, w: 40, h: 250, rotation: 90);
+        var built = new List<Fill>();
+        using var engine = Engine(pins, a, (key, _) =>
+        {
+            Assert.Equal(LightingEngine.MediaPinKey, key);
+            var f = new Fill("media", 0, 0, 255);
+            built.Add(f);
+            return f;
+        });
+        engine.UpdateDevices(new[] { a, b });
+        engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+        await Task.Delay(100);
+        Assert.Empty(built);
+
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        pins.Set("dev-b", new DevicePin { Kind = DevicePinKinds.Media });
+        await WaitFor(b, l => l[2] > 200);
+        Assert.Single(built);
+
+        pins.Clear("dev-a");
+        await Task.Delay(100);
+        Assert.False(built[0].Disposed);
+
+        pins.Clear("dev-b");
+        Assert.True(await Eventually(() => built[0].Disposed));
+    }
+
+    [Fact]
+    public async Task Pins_that_come_and_go_quickly_leave_no_live_media_source()
+    {
+        var pins = new DevicePinTracker();
+        var dev = Device();
+        var built = new List<Fill>();
+        using var engine = Engine(pins, dev, (_, _) =>
+        {
+            var f = new Fill("media", 0, 0, 255);
+            lock (built) built.Add(f);
+            return f;
+        });
+        engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+
+        for (var i = 0; i < 20; i++)
+        {
+            pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+            await Task.Delay(15);
+            pins.Clear("dev-a");
+            await Task.Delay(15);
+        }
+
+        Assert.True(await Eventually(() =>
+        {
+            lock (built) return built.All(f => f.Disposed);
+        }));
+        Assert.NotEmpty(built);
+    }
+
+    [Fact]
+    public void A_media_pin_survives_a_restart()
+    {
+        var path = Path.Combine(_tempDir, "persist.json");
+        using (var first = new JsonConfigStore(path))
+        {
+            var tracker = new DevicePinTracker(first);
+            tracker.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+            first.FlushNow();
+        }
+
+        using var second = new JsonConfigStore(path);
+        var restored = new DevicePinTracker(second);
+        Assert.True(restored.TryGet("dev-a", out var pin));
+        Assert.Equal(DevicePinKinds.Media, pin.Kind);
+        Assert.Null(pin.Effect);
     }
 
     [Fact]

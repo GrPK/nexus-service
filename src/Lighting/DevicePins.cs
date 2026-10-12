@@ -97,16 +97,19 @@ public sealed class DevicePinTracker
             case DevicePinKinds.Static:
                 if (StaticColorHex.TryParse(pin.Color, out _, out _, out _)) return null;
                 return StaticEffectCatalog.Contains(pin.Effect ?? "") ? null : "unknown static effect";
+            case DevicePinKinds.Media:
+                return HasNoFields(pin) ? null : "a media pin takes no fields";
             default:
                 // One universal mirror: it is configured by the global Mirror
                 // settings, so a mirror pin carries nothing of its own.
-                return pin.Effect is null && pin.Color is null && pin.Intensity is null && pin.Hue is null
-                    && pin.Colorize is null && pin.Saturation is null && pin.Contrast is null
-                    && pin.Params is null && pin.Slot is null
-                    ? null
-                    : "a mirror pin takes no fields";
+                return HasNoFields(pin) ? null : "a mirror pin takes no fields";
         }
     }
+
+    private static bool HasNoFields(DevicePin pin) =>
+        pin.Effect is null && pin.Color is null && pin.Intensity is null && pin.Hue is null
+        && pin.Colorize is null && pin.Saturation is null && pin.Contrast is null
+        && pin.Params is null && pin.Slot is null;
 
     /// <summary>Pins every id to a copy of <paramref name="pin"/>, replacing any pin it held; a null pin clears them.</summary>
     public void SetMany(IEnumerable<string> ids, DevicePin? pin)

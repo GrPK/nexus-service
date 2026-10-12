@@ -496,6 +496,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Models.Transfer.TransferClipboardBody))]
 [JsonSerializable(typeof(Nexus.Service.Models.Transfer.TransferReceivedFrame))]
 [JsonSerializable(typeof(Nexus.Service.Models.Media.MediaPlayResponse))]
+[JsonSerializable(typeof(Nexus.Service.Models.Media.MediaPlayBody))]
 [JsonSerializable(typeof(Nexus.Service.Models.Media.MediaCurrentResponse))]
 [JsonSerializable(typeof(Nexus.Service.Models.Media.MediaStageResponse))]
 // Panel background media
