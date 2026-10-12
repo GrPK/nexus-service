@@ -22,6 +22,8 @@ public sealed class FanLcdStreamingWorker : BackgroundService
     private const int IdlePollMs = 1000;
     /// <summary>~1 fps: a sensor/clock frame only needs to look live, not smooth.</summary>
     private const int SensorClockPollMs = 1000;
+    /// <summary>How often a wait re-checks the screen's settings, so a new pick shows within this.</summary>
+    private const int ChangePollMs = 100;
 
     private readonly IFanLcdScreens _screens;
     private readonly Slv3LcdMediaLibrary _library;
@@ -182,6 +184,7 @@ public sealed class FanLcdStreamingWorker : BackgroundService
                         pushedStatic = false;
                     }
                     var mode = FanLcdContent.ModeOf(settings);
+                    var pick = PickOf(settings);
                     if (mode != appliedContentType)
                     {
                         appliedContentType = mode;
@@ -203,7 +206,7 @@ public sealed class FanLcdStreamingWorker : BackgroundService
                         case "video":
                             if (loadedImage is null)
                             {
-                                await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
+                                await IdleAsync(serial, pick, IdlePollMs, ct).ConfigureAwait(false);
                                 continue;
                             }
                             if (loadedImage.Frames.Length == 1)
@@ -212,10 +215,10 @@ public sealed class FanLcdStreamingWorker : BackgroundService
                                 {
                                     pushedStatic = _screens.PushImage(serial, loadedImage.Frames[0].JpegBytes);
                                 }
-                                await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
+                                await IdleAsync(serial, pick, IdlePollMs, ct).ConfigureAwait(false);
                                 continue;
                             }
-                            await StreamAnimatedAsync(serial, loadedImage, ct).ConfigureAwait(false);
+                            await StreamAnimatedAsync(serial, loadedImage, pick, ct).ConfigureAwait(false);
                             break;
 
                         case "sensor":
@@ -225,7 +228,7 @@ public sealed class FanLcdStreamingWorker : BackgroundService
                                 settings.SensorStyle, reading.Value, reading.Min, reading.Max, reading.Label, reading.Unit,
                                 settings.ColorA, settings.ColorB);
                             _screens.PushImage(serial, jpeg);
-                            await Task.Delay(SensorClockPollMs, ct).ConfigureAwait(false);
+                            await IdleAsync(serial, pick, SensorClockPollMs, ct).ConfigureAwait(false);
                             break;
                         }
 
@@ -233,7 +236,7 @@ public sealed class FanLcdStreamingWorker : BackgroundService
                         {
                             var jpeg = Slv3LcdClockRenderer.Render(settings.ClockFace, DateTime.Now, settings.ColorA, settings.ColorB);
                             _screens.PushImage(serial, jpeg);
-                            await Task.Delay(SensorClockPollMs, ct).ConfigureAwait(false);
+                            await IdleAsync(serial, pick, SensorClockPollMs, ct).ConfigureAwait(false);
                             break;
                         }
 
@@ -247,7 +250,7 @@ public sealed class FanLcdStreamingWorker : BackgroundService
                         }
 
                         default:
-                            await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
+                            await IdleAsync(serial, pick, IdlePollMs, ct).ConfigureAwait(false);
                             break;
                     }
                 }
@@ -270,11 +273,42 @@ public sealed class FanLcdStreamingWorker : BackgroundService
         }
     }
 
-    private async Task StreamAnimatedAsync(string serial, Slv3LcdImageData image, CancellationToken ct)
+    /// <summary>Everything a pass applies from the screen's settings, so any edit ends a wait or a clip early.</summary>
+    internal readonly record struct ScreenPick(
+        string Mode, string? MediaId, byte Brightness, bool SleepWhenLocked, byte Rotation,
+        string? SensorSource, string? SensorStyle, string? ClockFace, string? AnimationId,
+        string? ColorA, string? ColorB, string? TempUnit);
+
+    internal static ScreenPick PickOf(LianLiWirelessScreenSettings screen) => new(
+        FanLcdContent.ModeOf(screen), screen.MediaId, screen.Brightness, screen.SleepWhenLocked, screen.Rotation,
+        screen.SensorSource, screen.SensorStyle, screen.ClockFace, screen.AnimationId,
+        screen.ColorA, screen.ColorB, screen.TempUnit);
+
+    /// <summary>A screen with no stored settings reads as the defaults the pass used.</summary>
+    private bool StillShowing(string serial, ScreenPick pick) =>
+        PickOf(_screens.SettingsOf(_store.Load().Devices).TryGetValue(serial, out var s) ? s : new LianLiWirelessScreenSettings()) == pick;
+
+    /// <summary>Waits <paramref name="ms"/> on a deadline, so a frame cadence holds; returns early once the screen's settings change.</summary>
+    private async Task IdleAsync(string serial, ScreenPick pick, int ms, CancellationToken ct)
+    {
+        long deadline = Environment.TickCount64 + ms;
+        while (StillShowing(serial, pick))
+        {
+            long remaining = deadline - Environment.TickCount64;
+            if (remaining <= 0)
+            {
+                break;
+            }
+            await Task.Delay((int)Math.Min(ChangePollMs, remaining), ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Plays one loop of the clip, stopping at the next frame once the screen's settings change.</summary>
+    private async Task StreamAnimatedAsync(string serial, Slv3LcdImageData image, ScreenPick pick, CancellationToken ct)
     {
         foreach (var frame in image.Frames)
         {
-            if (ct.IsCancellationRequested)
+            if (ct.IsCancellationRequested || !StillShowing(serial, pick))
             {
                 break;
             }

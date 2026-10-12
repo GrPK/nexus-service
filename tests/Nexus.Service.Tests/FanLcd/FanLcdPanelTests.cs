@@ -112,6 +112,20 @@ public class FanLcdPanelTests
     }
 
     [Fact]
+    public void Any_settings_edit_changes_the_pick_so_a_clip_or_wait_ends_early()
+    {
+        var screen = new LianLiWirelessScreenSettings { ContentType = "video", MediaId = "clip-a", Brightness = 80 };
+        var pick = FanLcdStreamingWorker.PickOf(screen);
+        Assert.Equal(pick, FanLcdStreamingWorker.PickOf(new LianLiWirelessScreenSettings { ContentType = "video", MediaId = "clip-a", Brightness = 80 }));
+
+        Assert.NotEqual(pick, FanLcdStreamingWorker.PickOf(new LianLiWirelessScreenSettings { ContentType = "video", MediaId = "clip-b", Brightness = 80 }));
+        Assert.NotEqual(pick, FanLcdStreamingWorker.PickOf(new LianLiWirelessScreenSettings { ContentType = "clock", Brightness = 80 }));
+        Assert.NotEqual(pick, FanLcdStreamingWorker.PickOf(new LianLiWirelessScreenSettings { ContentType = "video", MediaId = "clip-a", Brightness = 30 }));
+        Assert.NotEqual(pick, FanLcdStreamingWorker.PickOf(new LianLiWirelessScreenSettings { ContentType = "video", MediaId = "clip-a", Brightness = 80, Rotation = 2 }));
+        Assert.NotEqual(pick, FanLcdStreamingWorker.PickOf(new LianLiWirelessScreenSettings { NexusPanel = true, ContentType = "video", MediaId = "clip-a", Brightness = 80 }));
+    }
+
+    [Fact]
     public void A_detached_screen_is_not_a_panel_even_in_panel_mode()
     {
         var (screens, store) = Setup(("a", "panel"));

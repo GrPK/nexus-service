@@ -63,8 +63,12 @@ public sealed class Slv3LcdScreens : IFanLcdScreens
 
     public string PanelFamily => "lianli-wireless-lcd";
 
-    /// <summary>Panel frames share the RF air with fan control, so the ceiling stays at the animation renderer's cadence.</summary>
-    public int PanelFps => 1000 / Slv3LcdAnimationRenderer.FrameIntervalMs;
+    /// <summary>
+    /// The cooler-LCD panel rate. The overlay sends a frame when the layout repaints, so an
+    /// animated layout reaches it; the screens' video shares the 2.4 GHz air with fan control
+    /// (see <see cref="PrepareFrames"/>).
+    /// </summary>
+    public int PanelFps => 25;
 
     /// <summary>"#n" from the Screens tab's list order, the same number its tiles show.</summary>
     public string PanelName(string serial)
