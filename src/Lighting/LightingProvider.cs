@@ -782,7 +782,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             // A profile apply or cloud pull replaces the persisted screen.
             var persisted = _store.Load().Lighting;
             _mirrorMonitor = persisted.ScreenMonitor ?? "";
-            RefreshPinnedMedia(persisted);
+            RefreshPinnedMedia();
             if (_store.Load().Lighting.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
             {
                 return;
@@ -840,61 +840,78 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
-    private static string MediaTag(string id) => "md|" + id;
+    // The loaded flag changes the tag when a retried load succeeds for the same id.
+    private static string MediaTag(string id, bool loaded = false) => "md|" + id + (loaded ? "|1" : "");
+
+    private readonly object _mediaLoadLock = new();
 
     /// <summary>
     /// Loads the media item media pins play (meta and frame bytes) on the calling
     /// thread, only when a media pin exists and the item changed, so the engine
-    /// thread never touches the disk.
+    /// thread never touches the disk. The settings are read under the store lock
+    /// and the whole refresh is serialized, so the last caller always publishes
+    /// the newest selection. Global Media already holds the frames; pins share its
+    /// canvas then, so nothing is loaded. A failed load is retried on the next
+    /// refresh.
     /// </summary>
-    private void RefreshPinnedMedia(Nexus.Service.Persistence.LightingSettings lighting)
+    private void RefreshPinnedMedia()
     {
-        var wanted = false;
-        foreach (var pin in lighting.DevicePins.Values)
+        lock (_mediaLoadLock)
         {
-            if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+            var wanted = false;
+            var id = "";
+            var globalMedia = false;
+            _store.Update(s =>
             {
-                wanted = true;
-                break;
-            }
-        }
-        if (!wanted)
-        {
-            _pinnedMedia = null;
-            return;
-        }
-        var id = lighting.LastMediaId ?? "";
-        if (_pinnedMedia is { } current && current.Id == id)
-        {
-            return;
-        }
-        var item = string.IsNullOrEmpty(id) ? null : _media.GetItem(id);
-        byte[]? frames = null;
-        if (item is not null)
-        {
-            try
-            {
-                var path = _media.GetFramesBinPath(id);
-                if (System.IO.File.Exists(path))
+                foreach (var pin in s.Lighting.DevicePins.Values)
                 {
-                    frames = System.IO.File.ReadAllBytes(path);
+                    if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+                    {
+                        wanted = true;
+                        break;
+                    }
+                }
+                id = s.Lighting.LastMediaId ?? "";
+                globalMedia = string.Equals(s.Lighting.Sync, "media", StringComparison.OrdinalIgnoreCase);
+            });
+            if (!wanted || globalMedia)
+            {
+                _pinnedMedia = null;
+                return;
+            }
+            if (_pinnedMedia is { } current && current.Id == id && (current.Frames is not null || id.Length == 0))
+            {
+                return;
+            }
+            var item = id.Length == 0 ? null : _media.GetItem(id);
+            byte[]? frames = null;
+            if (item is not null)
+            {
+                try
+                {
+                    var path = _media.GetFramesBinPath(id);
+                    if (System.IO.File.Exists(path))
+                    {
+                        frames = System.IO.File.ReadAllBytes(path);
+                    }
+                }
+                catch (Exception)
+                {
+                    frames = null;
                 }
             }
-            catch (System.IO.IOException)
-            {
-                frames = null;
-            }
+            _pinnedMedia = frames is null || item is null
+                ? new PinnedMedia(id, MediaTag(id), 0, 0, 0, null)
+                : new PinnedMedia(id, MediaTag(id, loaded: true), item.Width, item.Height, item.Fps, frames);
         }
-        _pinnedMedia = frames is null || item is null
-            ? new PinnedMedia(id, MediaTag(id), 0, 0, 0, null)
-            : new PinnedMedia(id, MediaTag(id), item.Width, item.Height, item.Fps, frames);
     }
 
     /// <summary>
     /// Builds, or updates in place, the source a pinned device runs: the shared
     /// screen-capture effect for a mirror pin, the shared Media item for a media
-    /// pin, else the pinned Animate shader. In place updates mirror <see cref="ReapplyActiveLook"/>, so a slider drag does
-    /// not recompile the shader.
+    /// pin, else the pinned Animate shader. In place updates mirror
+    /// <see cref="ReapplyActiveLook"/>, so a slider drag does not recompile the
+    /// shader.
     /// </summary>
     private IEffect? BuildPinnedEffect(string effect, IEffect? existing)
     {

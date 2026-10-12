@@ -419,6 +419,83 @@ public class DevicePinEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task A_media_pin_whose_load_failed_retries_on_the_next_refresh()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Store.Update(s => s.Lighting.LastMediaId = "late");
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        Assert.True(await Eventually(() => dev.LedBytes.ToArray().All(v => v == 0)));
+
+        SeedMedia(rig.Media, "late", 0, 0, 255);
+        rig.Store.Update(s => s.Lighting.MusicReactive = !s.Lighting.MusicReactive);
+
+        var leds = await WaitFor(dev, l => l[2] > 200);
+        Assert.Equal(255, leds[2]);
+    }
+
+    [Fact]
+    public async Task A_media_pin_loads_nothing_while_global_media_is_active_and_loads_after_leaving_it()
+    {
+        using var rig = new Rig(_tempDir);
+        SeedMedia(rig.Media, "clip", 0, 0, 255);
+        rig.Store.Update(s => { s.Lighting.LastMediaId = "clip"; s.Lighting.Sync = "media"; });
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("media", 0, 255, 0));
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        await WaitFor(dev, l => l[1] == 255);
+
+        rig.Engine.SetEffect(new Fill("gradientlinear", 255, 0, 0));
+        rig.Store.Update(s => s.Lighting.Sync = "static");
+
+        var leds = await WaitFor(dev, l => l[2] > 200);
+        Assert.Equal(255, leds[2]);
+    }
+
+    [Fact]
+    public async Task Concurrent_pin_writes_during_refreshes_do_not_break_the_pinned_looks()
+    {
+        using var rig = new Rig(_tempDir);
+        SeedMedia(rig.Media, "clip", 0, 0, 255);
+        rig.Store.Update(s => s.Lighting.LastMediaId = "clip");
+        var errors = new List<Exception>();
+        var writer = Task.Run(() =>
+        {
+            try
+            {
+                for (var i = 0; i < 200; i++)
+                {
+                    rig.Pins.Set("id-" + i, new DevicePin { Kind = DevicePinKinds.Media });
+                    rig.Pins.Clear("id-" + i);
+                }
+            }
+            catch (Exception ex) { lock (errors) errors.Add(ex); }
+        });
+        var refresher = Task.Run(() =>
+        {
+            try
+            {
+                for (var i = 0; i < 200; i++)
+                {
+                    rig.Store.Update(s => s.Lighting.MusicReactive = !s.Lighting.MusicReactive);
+                }
+            }
+            catch (Exception ex) { lock (errors) errors.Add(ex); }
+        });
+        await Task.WhenAll(writer, refresher);
+        Assert.Empty(errors);
+
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("gradientlinear", 0, 255, 0));
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        Assert.Equal(255, (await WaitFor(dev, l => l[2] > 200))[2]);
+    }
+
+    [Fact]
     public async Task A_media_pin_with_no_item_renders_idle_media_black()
     {
         using var rig = new Rig(_tempDir);

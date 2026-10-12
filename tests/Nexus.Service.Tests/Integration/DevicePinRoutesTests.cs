@@ -155,6 +155,19 @@ public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
     }
 
     [Fact]
+    public async Task Deleting_an_item_that_is_no_longer_selected_leaves_the_selection()
+    {
+        var lib = _factory.Services.GetRequiredService<Nexus.Service.Media.MediaLibrary>();
+        lib.SaveMeta(new Nexus.Service.Models.Media.MediaItem { Id = "old-one", Name = "o", Type = "static", Frames = 1, Fps = 1, Width = 4, Height = 4 });
+        Store.Update(s => { s.Lighting.Sync = "static"; s.Lighting.LastMediaId = "newer-one"; });
+
+        var res = await _client.DeleteAsync("/media/old-one");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("newer-one", Store.Load().Lighting.LastMediaId);
+    }
+
+    [Fact]
     public async Task A_simple_mode_sweep_is_accepted_as_an_animate_pin()
     {
         var res = await Pin("\"pin-f1\"", """{"kind":"animate","effect":"sweeprainbow"}""");

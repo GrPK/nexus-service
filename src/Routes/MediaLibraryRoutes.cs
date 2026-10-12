@@ -252,16 +252,17 @@ public static class MediaLibraryRoutes
             {
                 // Media pins read the selected item; a deleted one must not linger.
                 // Global Media keeps its own handling (the web plays the next or idles).
-                var lighting = store.Load().Lighting;
-                if (lighting.LastMediaId == id
-                    && !string.Equals(lighting.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
+                // Both conditions are checked under the store lock, so a play that
+                // lands meanwhile is not wiped.
+                store.Update(s =>
                 {
-                    store.Update(s =>
+                    if (s.Lighting.LastMediaId == id
+                        && !string.Equals(s.Lighting.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
                     {
                         s.Lighting.LastMediaId = "";
                         LightingPresetLooks.CaptureIntoActive(s);
-                    });
-                }
+                    }
+                });
                 PanelTopics.BroadcastMediaLibrary(hub);
             }
 
