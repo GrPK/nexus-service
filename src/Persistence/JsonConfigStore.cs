@@ -329,19 +329,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         lock (_lock)
         {
             var doc = _cached ?? Load();
-            // A live device overlay is a view, not state: the mutator reads and writes the
-            // persisted lists so nothing the overlay shows can reach settings.json.
-            var devices = doc.Devices;
-            var overlay = devices?.SuspendOverlay();
-            try
-            {
-                mutator(doc);
-            }
-            finally
-            {
-                // The mutator may have replaced doc.Devices; resume on whichever object holds the lists now.
-                (doc.Devices ?? devices)?.ResumeOverlay(overlay);
-            }
+            mutator(doc);
             _dirty = true;
             ScheduleFlushLocked();
         }

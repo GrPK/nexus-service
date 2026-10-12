@@ -62,6 +62,8 @@ public sealed class LightingEngine : IDisposable
     // marks the frame current if no invalidate landed mid-render.
     private int _frozenEpoch;
     private int _frozenRenderedEpoch = -1;
+    // Counts finished loop ticks; lets a caller wait until a swapped-in effect has been painted.
+    private int _tickCount;
     private byte[] _frameBuffer = Array.Empty<byte>();
 
     /// <summary>Logical canvas size that device frames and the 3D scene camera are laid out in.</summary>
@@ -596,10 +598,63 @@ public sealed class LightingEngine : IDisposable
         return true;
     }
 
-    public void Stop()
+    public void Stop() => StopCore(null);
+
+    /// <summary>Stop only if <paramref name="expected"/> is still the running effect. False (nothing touched) otherwise.</summary>
+    public bool StopIfCurrent(IEffect expected) => StopCore(expected);
+
+    /// <summary>
+    /// Put <paramref name="replacement"/> back in place of <paramref name="expected"/> only if
+    /// that is still the running effect. Unlike <see cref="SetEffect(IEffect)"/> it leaves a
+    /// blackout hold in place, so a restore during sleep or lock does not light the devices.
+    /// With <paramref name="paused"/> it first lets the loop paint the replacement, so the
+    /// frozen frame is the restored effect's, not the one it replaced.
+    /// </summary>
+    public bool RestoreEffectIfCurrent(IEffect expected, IEffect replacement, bool frozen, bool paused)
     {
         lock (_lock)
         {
+            if (!ReferenceEquals(_currentEffect, expected))
+            {
+                return false;
+            }
+            _currentEffect = replacement;
+            _paused = false;
+            _frozen = frozen;
+            Interlocked.Increment(ref _frozenEpoch);
+            try
+            { expected.Dispose(); }
+            catch { }
+        }
+        OnEffectChanged?.Invoke();
+        if (paused && !_blackout)
+        {
+            // Two ticks: the one in flight may have picked up the old effect.
+            var target = Volatile.Read(ref _tickCount) + 2;
+            var deadline = Environment.TickCount64 + 500;
+            while (Volatile.Read(ref _tickCount) < target && Environment.TickCount64 < deadline && LoopPublishing)
+            {
+                Thread.Sleep(2);
+            }
+            lock (_lock)
+            {
+                if (ReferenceEquals(_currentEffect, replacement))
+                {
+                    _paused = true;
+                }
+            }
+        }
+        return true;
+    }
+
+    private bool StopCore(IEffect? expected)
+    {
+        lock (_lock)
+        {
+            if (expected is not null && !ReferenceEquals(_currentEffect, expected))
+            {
+                return false;
+            }
             var old = _currentEffect;
             _currentEffect = null;
             _paused = false;
@@ -622,6 +677,7 @@ public sealed class LightingEngine : IDisposable
         }
         // Handler may start/stop an audio-capture subprocess; must not run under the engine lock.
         OnEffectChanged?.Invoke();
+        return true;
     }
 
     private async Task RunLoopAsync(CancellationToken ct)
@@ -734,6 +790,7 @@ public sealed class LightingEngine : IDisposable
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"[lighting-engine] {effect.Name} threw: {ex.Message}"); }
 
+                Interlocked.Increment(ref _tickCount);
                 var nextPeriodMs = Math.Max(1, FrameIntervalMs);
                 if (nextPeriodMs != periodMs)
                 {

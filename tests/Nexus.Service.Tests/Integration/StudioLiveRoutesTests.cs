@@ -31,8 +31,8 @@ public sealed class StudioLiveRoutesTests : IClassFixture<CustomEffectAppFactory
         return client;
     }
 
-    private static StringContent Body(string frag) =>
-        new(JsonSerializer.Serialize(new { frag, speed = 50, intensity = 1, hue = 0, colorize = 0, saturation = 1, contrast = 1, @params = new Dictionary<string, float> { ["u_b1_gain"] = 0.4f } }),
+    private static StringContent Body(string frag, string? sessionId = null) =>
+        new(JsonSerializer.Serialize(new { sessionId, frag, speed = 50, intensity = 1, hue = 0, colorize = 0, saturation = 1, contrast = 1, @params = new Dictionary<string, float> { ["u_b1_gain"] = 0.4f } }),
             Encoding.UTF8, "application/json");
 
     private static async Task<JsonElement> Read(HttpResponseMessage res)
@@ -51,6 +51,8 @@ public sealed class StudioLiveRoutesTests : IClassFixture<CustomEffectAppFactory
         Assert.False(json.GetProperty("error").GetBoolean());
         Assert.True(json.GetProperty("active").GetBoolean());
         Assert.Equal(15_000, json.GetProperty("leaseMs").GetInt32());
+        Assert.False(string.IsNullOrEmpty(json.GetProperty("sessionId").GetString()));
+        Assert.False(json.TryGetProperty("devicesForced", out _));
         Assert.True(_factory.Services.GetRequiredService<ILightingProvider>().StudioLiveActive);
     }
 
@@ -130,5 +132,51 @@ public sealed class StudioLiveRoutesTests : IClassFixture<CustomEffectAppFactory
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PostAsync("/lighting/studio-live", Body(CustomFrags.Frag()))).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.DeleteAsync("/lighting/studio-live")).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_renewal_with_the_returned_id_succeeds_and_one_with_a_stale_id_is_409_session_ended()
+    {
+        var http = Desktop();
+        var open = await Read(await http.PostAsync("/lighting/studio-live", Body(CustomFrags.Frag())));
+        var id = open.GetProperty("sessionId").GetString();
+
+        var renew = await http.PostAsync("/lighting/studio-live", Body(CustomFrags.Frag(), id));
+        Assert.Equal(HttpStatusCode.OK, renew.StatusCode);
+
+        var stale = await http.PostAsync("/lighting/studio-live", Body(CustomFrags.Frag(), "stale"));
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        var json = await Read(stale);
+        Assert.True(json.GetProperty("error").GetBoolean());
+        Assert.Equal("session_ended", json.GetProperty("msg").GetString());
+    }
+
+    [Fact]
+    public async Task Delete_with_a_stale_id_is_ok_and_leaves_the_session_and_the_right_id_ends_it()
+    {
+        var http = Desktop();
+        var open = await Read(await http.PostAsync("/lighting/studio-live", Body(CustomFrags.Frag())));
+        var id = open.GetProperty("sessionId").GetString();
+        var lighting = _factory.Services.GetRequiredService<ILightingProvider>();
+
+        Assert.Equal(HttpStatusCode.OK, (await http.DeleteAsync("/lighting/studio-live?sessionId=stale")).StatusCode);
+        Assert.True(lighting.StudioLiveActive);
+        Assert.Equal(HttpStatusCode.OK, (await http.DeleteAsync("/lighting/studio-live?sessionId=" + id)).StatusCode);
+        Assert.False(lighting.StudioLiveActive);
+    }
+
+    [Fact]
+    public void Neither_verb_is_reachable_with_a_panel_session()
+    {
+        var endpoints = _factory.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>()
+            .Endpoints.OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>().ToList();
+
+        var studio = endpoints.Where(e => e.RoutePattern.RawText == "/lighting/studio-live").ToList();
+
+        Assert.Equal(2, studio.Count);
+        Assert.All(studio, e => Assert.Null(e.Metadata.GetMetadata<AllowPanelAccess>()));
+        // The check can see the marker: a route that is panel-reachable carries it.
+        var current = endpoints.First(e => e.RoutePattern.RawText == "/lighting/current");
+        Assert.NotNull(current.Metadata.GetMetadata<AllowPanelAccess>());
     }
 }

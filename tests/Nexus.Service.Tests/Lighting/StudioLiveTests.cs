@@ -37,16 +37,32 @@ public sealed class StudioLiveTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    private sealed class FakeEffect(string name) : IEffect
+    private sealed class FakeEffect(string name, byte red = 0) : IEffect
     {
+        private int _renders;
         public string Name { get; } = name;
         public bool Disposed { get; private set; }
-        public void RenderFrame(CanvasBuffer canvas, double tickMs) { }
+        public int Renders => Volatile.Read(ref _renders);
+        public void RenderFrame(CanvasBuffer canvas, double tickMs)
+        {
+            canvas.Fill(red, 0, 0);
+            Interlocked.Increment(ref _renders);
+        }
         public void Dispose() => Disposed = true;
     }
 
-    private static StudioLiveBody Body(string? frag = null, int speed = 50, float hue = 0f) => new()
+    private static void WaitFor(Func<bool> condition)
     {
+        var deadline = Environment.TickCount64 + 3000;
+        while (!condition() && Environment.TickCount64 < deadline)
+        {
+            Thread.Sleep(5);
+        }
+    }
+
+    private static StudioLiveBody Body(string? frag = null, int speed = 50, float hue = 0f, string? sessionId = null) => new()
+    {
+        SessionId = sessionId,
         Frag = frag ?? CustomFrags.Frag(),
         Speed = speed,
         Hue = hue,
@@ -321,66 +337,6 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void Led_off_and_uncontrolled_devices_are_driven_in_memory_only()
-    {
-        _config.Update(s =>
-        {
-            s.Devices.DisabledLightingDevices = ["dev-off"];
-            s.Devices.UncontrolledLightingDevices = ["dev-free", "dev-free-2"];
-        });
-        var before = SettingsJson();
-
-        var result = _provider.StartStudioLive(Body());
-
-        Assert.Equal(3, result.DevicesForced);
-        var live = _config.Load().Devices;
-        Assert.Empty(live.DisabledLightingDevices);
-        Assert.Empty(live.UncontrolledLightingDevices);
-        Assert.Equal(before, SettingsJson());
-        Assert.Contains("dev-free-2", SettingsJson());
-
-        _provider.StopStudioLive();
-        Assert.Equal(["dev-off"], _config.Load().Devices.DisabledLightingDevices);
-        Assert.Equal(["dev-free", "dev-free-2"], _config.Load().Devices.UncontrolledLightingDevices);
-        Assert.Equal(before, SettingsJson());
-    }
-
-    [Fact]
-    public void A_settings_write_during_a_session_starts_from_the_saved_lists()
-    {
-        _config.Update(s => s.Devices.UncontrolledLightingDevices = ["dev-free"]);
-        _provider.StartStudioLive(Body());
-
-        LightingControlledState.SetControlled("dev-new", false, _config);
-
-        var json = SettingsJson();
-        Assert.Contains("dev-free", json);
-        Assert.Contains("dev-new", json);
-        Assert.Equal(["dev-new"], _config.Load().Devices.UncontrolledLightingDevices);
-        _provider.StopStudioLive();
-        Assert.Equal(["dev-free", "dev-new"], _config.Load().Devices.UncontrolledLightingDevices);
-    }
-
-    [Fact]
-    public void A_detached_openrgb_device_is_reported_skipped_not_forced()
-    {
-        _config.Update(s =>
-        {
-            s.Devices.UncontrolledLightingDevices = ["openrgb-s-AAA", "openrgb-s-AAA-1", "dev-free"];
-            s.Devices.OpenRgbDetectorExclusions = new() { ["openrgb-s-AAA"] = new OpenRgbDetectorExclusion { DetectorName = "d", DeviceName = "n" } };
-        });
-        var before = SettingsJson();
-
-        var result = _provider.StartStudioLive(Body());
-
-        Assert.Equal(1, result.DevicesForced);
-        Assert.Equal(["openrgb-s-AAA", "openrgb-s-AAA-1"], result.Skipped);
-        Assert.Contains("openrgb-s-AAA", _config.Load().Devices.UncontrolledLightingDevices);
-        _provider.StopStudioLive();
-        Assert.Equal(before, SettingsJson());
-    }
-
-    [Fact]
     public void Another_client_starting_an_effect_ends_the_session_and_wins()
     {
         var prior = new FakeEffect("prior");
@@ -410,7 +366,7 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void A_saved_mode_change_that_leaves_the_engine_alone_restores_the_prior_effect()
+    public void A_saved_mode_change_ends_the_session_at_once_and_puts_the_preview_back_off_thread()
     {
         _provider.StartAnimate(Animate("rainbow"));
         var before = _engine.CurrentEffect;
@@ -419,8 +375,24 @@ public sealed class StudioLiveTests : IDisposable
         _provider.StartMusic(new MusicHeadlessStart());
 
         Assert.False(_provider.StudioLiveActive);
+        WaitFor(() => ReferenceEquals(_engine.CurrentEffect, before));
         Assert.Same(before, _engine.CurrentEffect);
         Assert.Equal("music", _config.Load().Lighting.Sync);
+    }
+
+    [Fact]
+    public void A_saved_mode_change_followed_by_its_own_effect_start_wins_over_the_deferred_restore()
+    {
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
+        _provider.StartStudioLive(Body());
+
+        _config.Update(c => c.Lighting.Sync = "preset-look");
+        _provider.StartAnimate(Animate("plasma"));
+        Thread.Sleep(600);
+
+        Assert.Equal("plasma", _engine.CurrentEffectName);
+        Assert.True(prior.Disposed);
     }
 
     [Fact]
@@ -471,5 +443,180 @@ public sealed class StudioLiveTests : IDisposable
 
         Assert.True(_provider.StartStudioLive(Body()).Ok);
         Assert.True(_provider.StudioLiveActive);
+    }
+
+    [Fact]
+    public void Stop_does_not_restore_over_an_effect_another_client_started()
+    {
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
+        _provider.StartStudioLive(Body());
+        _provider.StartAnimate(Animate("plasma"));
+        var other = _engine.CurrentEffect;
+
+        Assert.False(_provider.StopStudioLive());
+
+        Assert.Same(other, _engine.CurrentEffect);
+        Assert.True(prior.Disposed);
+    }
+
+    [Fact]
+    public void A_pause_restore_shows_the_restored_effects_frame_not_the_previews()
+    {
+        _engine.UpdateDevices([new DeviceFrame(0, "d", 1)]);
+        var prior = new FakeEffect("prior", red: 200);
+        _engine.SetEffect(prior);
+        WaitFor(() => prior.Renders > 0);
+        _engine.SetPaused(true);
+        var rendersBefore = prior.Renders;
+        _provider.StartStudioLive(Body());
+
+        _provider.StopStudioLive();
+
+        Assert.True(_engine.Paused);
+        Assert.True(prior.Renders > rendersBefore);
+        Assert.Equal(200, _engine.Devices[0].LedBytes[0]);
+    }
+
+    [Fact]
+    public void The_opening_post_returns_an_id_and_a_renewal_with_it_keeps_the_session()
+    {
+        var open = _provider.StartStudioLive(Body());
+        Assert.False(string.IsNullOrEmpty(open.SessionId));
+
+        var renew = _provider.StartStudioLive(Body(sessionId: open.SessionId));
+
+        Assert.True(renew.Ok);
+        Assert.Equal(open.SessionId, renew.SessionId);
+    }
+
+    [Fact]
+    public void A_renewal_with_an_unknown_id_is_ended_and_starts_nothing()
+    {
+        var result = _provider.StartStudioLive(Body(sessionId: "nope"));
+
+        Assert.Equal(StudioLiveOutcome.Ended, result.Outcome);
+        Assert.Equal("session_ended", result.Message);
+        Assert.False(_provider.StudioLiveActive);
+    }
+
+    [Fact]
+    public void A_renewal_after_a_conflict_ended_the_session_is_ended_and_leaves_the_other_effect_alone()
+    {
+        var open = _provider.StartStudioLive(Body());
+        _provider.StartAnimate(Animate("plasma"));
+        var other = _engine.CurrentEffect;
+
+        var renew = _provider.StartStudioLive(Body(sessionId: open.SessionId));
+
+        Assert.Equal(StudioLiveOutcome.Ended, renew.Outcome);
+        Assert.False(_provider.StudioLiveActive);
+        Assert.Same(other, _engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void A_second_post_without_an_id_takes_over_keeps_the_snapshot_and_retires_the_old_id()
+    {
+        _provider.StartAnimate(Animate("rainbow"));
+        var before = _engine.CurrentEffect;
+        var first = _provider.StartStudioLive(Body(CustomFrags.Frag(0.2f)));
+
+        var second = _provider.StartStudioLive(Body(CustomFrags.Frag(0.9f)));
+
+        Assert.NotEqual(first.SessionId, second.SessionId);
+        Assert.Equal(StudioLiveOutcome.Ended, _provider.StartStudioLive(Body(sessionId: first.SessionId)).Outcome);
+        Assert.True(_provider.StudioLiveActive);
+        _provider.StopStudioLive(second.SessionId);
+        Assert.Same(before, _engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void Stop_with_a_stale_id_is_a_no_op_and_without_an_id_ends_whatever_runs()
+    {
+        var open = _provider.StartStudioLive(Body());
+
+        Assert.False(_provider.StopStudioLive("stale"));
+        Assert.True(_provider.StudioLiveActive);
+        Assert.True(_provider.StopStudioLive());
+        Assert.False(_provider.StudioLiveActive);
+        Assert.False(_provider.StopStudioLive(open.SessionId));
+    }
+
+    [Fact]
+    public void A_lease_lapse_during_a_blackout_restores_the_effect_without_lighting_the_devices()
+    {
+        _provider.StartAnimate(Animate("rainbow"));
+        var before = _engine.CurrentEffect;
+        _provider.StartStudioLive(Body());
+        _engine.SetBlackout(true);
+
+        _now += 20_000;
+        _provider.CheckStudioLease();
+
+        Assert.Same(before, _engine.CurrentEffect);
+        Assert.True(_engine.Blackout);
+        _engine.SetBlackout(false);
+        Assert.Same(before, _engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void Dropping_the_custom_effect_the_session_replaced_restores_it_first()
+    {
+        var id = CustomFrags.NewId();
+        ShaderLibrary.RegisterCustom(id, CustomFrags.Frag());
+        try
+        {
+            _provider.StartAnimate(Animate("custom:" + id));
+            _provider.StartStudioLive(Body());
+
+            _provider.DropCustomEffect("custom:" + id);
+
+            Assert.False(_provider.StudioLiveActive);
+            Assert.NotEqual(LightingProvider.StudioLiveKey, _engine.CurrentEffectName);
+            Assert.Equal("rainbow", _engine.CurrentEffectName);
+        }
+        finally
+        {
+            ShaderLibrary.UnregisterCustom(id);
+        }
+    }
+
+    [Fact]
+    public void Reloading_the_custom_effect_the_session_replaced_restores_it_first()
+    {
+        var id = CustomFrags.NewId();
+        ShaderLibrary.RegisterCustom(id, CustomFrags.Frag());
+        try
+        {
+            _provider.StartAnimate(Animate("custom:" + id));
+            _provider.StartStudioLive(Body());
+
+            _provider.ReloadCustomEffect("custom:" + id);
+
+            Assert.False(_provider.StudioLiveActive);
+            Assert.Equal("custom:" + id, _engine.CurrentEffectName);
+        }
+        finally
+        {
+            ShaderLibrary.UnregisterCustom(id);
+        }
+    }
+
+    [Fact]
+    public void A_session_leaves_uncontrolled_and_led_off_devices_as_saved()
+    {
+        _config.Update(c =>
+        {
+            c.Devices.DisabledLightingDevices = ["off"];
+            c.Devices.UncontrolledLightingDevices = ["free"];
+        });
+        var before = SettingsJson();
+
+        _provider.StartStudioLive(Body());
+
+        Assert.Equal(["off"], _config.Load().Devices.DisabledLightingDevices);
+        Assert.Equal(["free"], _config.Load().Devices.UncontrolledLightingDevices);
+        _provider.StopStudioLive();
+        Assert.Equal(before, SettingsJson());
     }
 }

@@ -162,7 +162,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     public void SetSync(string sync) => _store.Update(s => s.Lighting.Sync = sync);
 
-    public bool IsPaused => _studio?.ReportedPaused ?? _engine.Paused;
+    public bool IsPaused => _studio?.PrevPaused ?? _engine.Paused;
 
     public void SetPaused(bool paused) => _engine.SetPaused(paused);
 
@@ -747,6 +747,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     public void ReloadCustomEffect(string key)
     {
+        EndStudioForCustomEdit(key);
         ClearThumbnails(key);
         // A lost swap means another thread changed the effect after we read it (often a
         // concurrent PUT of the same id). Re-read until our swap lands or the running effect
@@ -782,6 +783,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     public void DropCustomEffect(string key)
     {
+        EndStudioForCustomEdit(key);
         ClearThumbnails(key);
         var running = _engine.CurrentEffect is ShaderEffect cur && cur.Name == key;
         _store.Update(s =>

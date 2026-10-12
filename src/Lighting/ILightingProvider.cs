@@ -103,18 +103,30 @@ public interface ILightingProvider
     void DropCustomEffect(string key) { }
 
     /// <summary>
-    /// Shader Studio live preview: run <paramref name="body"/>'s fragment on every device until
-    /// <see cref="StopStudioLive"/> or a 15 s lease lapse, touching no saved setting. The caller
-    /// has already validated and compile-checked the fragment.
+    /// Shader Studio live preview: run <paramref name="body"/>'s fragment on every device the
+    /// current mode drives, until <see cref="StopStudioLive"/> or the lease (LightingProvider.StudioLeaseMs)
+    /// lapses, touching no saved setting. The caller has already validated and compile-checked the fragment.
     /// </summary>
-    StudioLiveResult StartStudioLive(StudioLiveBody body) => new(false, "studio live is not supported", 0, System.Array.Empty<string>());
+    StudioLiveResult StartStudioLive(StudioLiveBody body) => new(StudioLiveOutcome.Failed, "studio live is not supported", "");
 
-    /// <summary>Ends a live session and restores the lighting it replaced. Idempotent; true when a session was running.</summary>
-    bool StopStudioLive() => false;
+    /// <summary>Ends a live session and restores the lighting it replaced. A <paramref name="sessionId"/> that is not the running session is a no-op. True when a session was ended.</summary>
+    bool StopStudioLive(string? sessionId = null) => false;
 
     /// <summary>True while a live session runs.</summary>
     bool StudioLiveActive => false;
 }
 
+public enum StudioLiveOutcome
+{
+    Ok,
+    /// <summary>Refused: lighting off, held dark, or a fragment the shader could not be built from.</summary>
+    Failed,
+    /// <summary>The session the caller names is over (conflict, lease lapse, another tab).</summary>
+    Ended,
+}
+
 /// <summary>Outcome of <see cref="ILightingProvider.StartStudioLive"/>.</summary>
-public readonly record struct StudioLiveResult(bool Ok, string Message, int DevicesForced, System.Collections.Generic.IReadOnlyList<string> Skipped);
+public readonly record struct StudioLiveResult(StudioLiveOutcome Outcome, string Message, string SessionId)
+{
+    public bool Ok => Outcome == StudioLiveOutcome.Ok;
+}

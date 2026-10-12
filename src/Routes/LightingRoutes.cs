@@ -482,9 +482,8 @@ public static class LightingRoutes
         });
     }
 
-    // Shader Studio live preview. Same auth as the custom-effects routes (no AllowPanel):
-    // only the dashboard drives it. The session holds nothing in settings; see
-    // LightingProvider.StudioLive.cs for what it snapshots and restores.
+    // Shader Studio live preview. Dashboard-only: no AllowPanel, so a panel token is refused on both verbs.
+    // The session holds nothing in settings; see LightingProvider.StudioLive.cs for what it snapshots and restores.
     private static void MapStudioLive(WebApplication app)
     {
         app.MapPost("/lighting/studio-live", (Nexus.Service.Models.Lighting.StudioLiveBody? body,
@@ -515,13 +514,12 @@ public static class LightingRoutes
             {
                 Active = true,
                 LeaseMs = Nexus.Service.Lighting.LightingProvider.StudioLeaseMs,
-                DevicesForced = result.DevicesForced,
-                Skipped = new List<string>(result.Skipped),
+                SessionId = result.SessionId,
             }, AppJsonContext.Default.StudioLiveResponse);
         });
-        app.MapDelete("/lighting/studio-live", (ILightingProvider l, MultiplexHub hub) =>
+        app.MapDelete("/lighting/studio-live", (string? sessionId, ILightingProvider l, MultiplexHub hub) =>
         {
-            if (l.StopStudioLive())
+            if (l.StopStudioLive(sessionId))
             {
                 PanelTopics.BroadcastLighting(hub);
             }

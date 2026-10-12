@@ -8,6 +8,9 @@ namespace Nexus.Service.Models.Lighting;
 /// </summary>
 public sealed class StudioLiveBody
 {
+    /// <summary>Absent on the POST that opens a session; every renewal sends the id the opening POST returned.</summary>
+    public string? SessionId { get; set; }
+
     public string? Frag { get; set; }
     public int Speed { get; set; } = 50;
     public float Intensity { get; set; } = 1f;
@@ -27,9 +30,6 @@ public sealed class StudioLiveResponse : ApiResponse
     /// <summary>Milliseconds the lease lasts after this call; re-POST before it runs out.</summary>
     public int LeaseMs { get; set; }
 
-    /// <summary>Devices driven although their saved settings have them LEDs-off or not controlled.</summary>
-    public int DevicesForced { get; set; }
-
-    /// <summary>Device ids the session cannot drive because their controller is detached from OpenRGB or held off.</summary>
-    public List<string> Skipped { get; set; } = new();
+    /// <summary>Opaque id of the running session. Send it on every renewal and on DELETE.</summary>
+    public string SessionId { get; set; } = "";
 }

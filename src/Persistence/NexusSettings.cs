@@ -1300,131 +1300,13 @@ public sealed class KrakenFirmwareLighting
     public List<string> Colors { get; set; } = new();
 }
 
-/// <summary>Device ids a live session drives although the saved settings turn them off. Memory only.</summary>
-public sealed class EphemeralDeviceOverlay
-{
-    public EphemeralDeviceOverlay(HashSet<string> forceOn, HashSet<string> forceControlled)
-    {
-        ForceOn = forceOn;
-        ForceControlled = forceControlled;
-    }
-
-    /// <summary>Ids read as not LEDs-off.</summary>
-    public HashSet<string> ForceOn { get; }
-
-    /// <summary>Ids read as controlled.</summary>
-    public HashSet<string> ForceControlled { get; }
-
-    private volatile bool _revoked;
-
-    /// <summary>Set once the session ended. A revoked overlay can no longer be installed, so a settings update that suspended it cannot bring it back.</summary>
-    public bool Revoked => _revoked;
-
-    public void Revoke() => _revoked = true;
-}
-
 public sealed class DevicesSettings
 {
-    private List<string> _disabledLightingDevices = new();
-    private List<string> _uncontrolledLightingDevices = new();
-    private volatile EphemeralDeviceOverlay? _overlay;
-    private ViewCache? _disabledView;
-    private ViewCache? _uncontrolledView;
-
-    private sealed record ViewCache(List<string> Raw, List<string> View);
-
-    /// <summary>What settings.json holds. Only the persistence layer and overlay-suspended mutators see this list; every other reader goes through <see cref="DisabledLightingDevices"/>.</summary>
-    [System.Text.Json.Serialization.JsonPropertyName("disabledLightingDevices")]
-    public List<string> PersistedDisabledLightingDevices
-    {
-        get => _disabledLightingDevices;
-        set => _disabledLightingDevices = value;
-    }
-
-    /// <summary>What the frame writers see: the persisted list, minus any ids a live <see cref="EphemeralDeviceOverlay"/> forces on.</summary>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public List<string> DisabledLightingDevices
-    {
-        get => ViewOf(_overlay?.ForceOn, ref _disabledView, _disabledLightingDevices);
-        set => _disabledLightingDevices = value;
-    }
-
-    /// <summary>What settings.json holds. See <see cref="PersistedDisabledLightingDevices"/>.</summary>
-    [System.Text.Json.Serialization.JsonPropertyName("uncontrolledLightingDevices")]
-    public List<string> PersistedUncontrolledLightingDevices
-    {
-        get => _uncontrolledLightingDevices;
-        set => _uncontrolledLightingDevices = value;
-    }
-
-    /// <summary>What the frame writers see: the persisted list, minus any ids a live <see cref="EphemeralDeviceOverlay"/> forces controlled. Ids Nexus stops pushing frames to entirely, so firmware/vendor lighting can take over. Distinct from <see cref="DisabledLightingDevices"/>, which still streams black.</summary>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public List<string> UncontrolledLightingDevices
-    {
-        get => ViewOf(_overlay?.ForceControlled, ref _uncontrolledView, _uncontrolledLightingDevices);
-        set => _uncontrolledLightingDevices = value;
-    }
-
-    private static List<string> ViewOf(HashSet<string>? remove, ref ViewCache? cache, List<string> raw)
-    {
-        if (remove is null || remove.Count == 0)
-        {
-            return raw;
-        }
-        var seen = cache;
-        if (seen is not null && ReferenceEquals(seen.Raw, raw))
-        {
-            return seen.View;
-        }
-        var view = new List<string>(raw.Count);
-        foreach (var id in raw)
-        {
-            if (!remove.Contains(id))
-            {
-                view.Add(id);
-            }
-        }
-        cache = new ViewCache(raw, view);
-        return view;
-    }
-
-    /// <summary>The live in-memory overlay, or null. Never persisted.</summary>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public EphemeralDeviceOverlay? Overlay => _overlay;
-
-    /// <summary>Installs (or with null clears) the overlay. It lives only in memory: serialization reads the persisted lists.</summary>
-    public void SetOverlay(EphemeralDeviceOverlay? overlay)
-    {
-        _overlay = overlay;
-        _disabledView = null;
-        _uncontrolledView = null;
-    }
-
-    /// <summary>
-    /// Hides the overlay while a settings mutator runs, so a read-modify-write of either list
-    /// starts from, and writes back, the persisted value. Returns what to hand to
-    /// <see cref="ResumeOverlay"/>; null when no overlay was live.
-    /// </summary>
-    public EphemeralDeviceOverlay? SuspendOverlay()
-    {
-        var o = _overlay;
-        if (o is not null)
-        {
-            SetOverlay(null);
-        }
-        return o;
-    }
-
-    public void ResumeOverlay(EphemeralDeviceOverlay? overlay)
-    {
-        if (overlay is not null && !overlay.Revoked)
-        {
-            SetOverlay(overlay);
-        }
-    }
-
+    public List<string> DisabledLightingDevices { get; set; } = new();
     /// <summary>Stable display ids the user turned brightness control off for. Nexus issues no DDC/CI transaction to a listed display - not even the capability probe - which is the escape hatch for a monitor whose firmware hangs on DDC. NOT profile-scoped: a panel's tolerance for DDC is a property of the hardware, not of a lighting/cooling persona.</summary>
     public List<string> DdcDisabledDisplays { get; set; } = new();
+    /// <summary>Ids Nexus stops pushing frames to entirely, so firmware/vendor lighting can take over. Distinct from <see cref="DisabledLightingDevices"/>, which still streams black.</summary>
+    public List<string> UncontrolledLightingDevices { get; set; } = new();
     /// <summary>Handler ids the user explicitly opted out of (Nexus Control off). Overrides the brand default; a Hyte/iBUYPOWER handler absent here stays on.</summary>
     public List<string> NexusControlDisabled { get; set; } = new();
     /// <summary>Handler ids the user explicitly opted into (Nexus Control on). Overrides the brand default; a handler that defaults off stays off while absent here.</summary>
