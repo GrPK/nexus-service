@@ -786,7 +786,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             {
                 // No pins at all: nothing to load, and no write, so a settings
                 // write elsewhere never causes a second one from here.
-                _pinnedMedia = null;
+                LoadPinnedMedia(false, "", System.Threading.Interlocked.Increment(ref _mediaSeq));
                 return;
             }
             var next = new System.Collections.Generic.Dictionary<string, PinnedLook>(System.StringComparer.Ordinal);

@@ -458,21 +458,9 @@ public class DevicePinEngineTests : IDisposable
     [Fact]
     public void A_settings_write_with_no_pins_notifies_once_and_construction_writes_nothing()
     {
-        var baselinePath = Path.Combine(_tempDir, "baseline", "settings.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(baselinePath)!);
-        using (var bare = new JsonConfigStore(baselinePath))
-        {
-            bare.Load();
-            bare.FlushNow();
-        }
-        using var rig = new Rig(_tempDir);
-        rig.Store.FlushNow();
-        // Whatever a bare first load persists, building the provider adds no write.
-        Assert.Equal(File.Exists(baselinePath), File.Exists(rig.Store.SettingsPath));
-        if (File.Exists(baselinePath))
-        {
-            Assert.Equal(File.ReadAllText(baselinePath), File.ReadAllText(rig.Store.SettingsPath));
-        }
+        var constructionChanges = 0;
+        using var rig = new Rig(_tempDir, store => store.OnChanged += () => Interlocked.Increment(ref constructionChanges));
+        Assert.Equal(0, constructionChanges);
 
         var changes = 0;
         rig.Store.OnChanged += () => Interlocked.Increment(ref changes);
