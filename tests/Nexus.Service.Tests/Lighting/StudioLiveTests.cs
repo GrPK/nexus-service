@@ -449,16 +449,55 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void A_new_session_never_adopts_a_handed_off_preview_as_the_lighting_to_restore()
+    public void A_new_session_adopts_a_pending_handoffs_snapshot_instead_of_the_dead_preview()
     {
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
         _provider.StartStudioLive(Body());
         _provider.DetachStudioLive();
 
         _provider.StartStudioLive(Body(CustomFrags.Frag(0.9f)));
+        _provider.FinishStudioLiveHandoff();
+        Assert.True(_provider.StudioLiveActive);
         _provider.StopStudioLive();
 
-        Assert.Null(_engine.CurrentEffect);
-        _provider.FinishStudioLiveHandoff();
+        Assert.Same(prior, _engine.CurrentEffect);
+        Assert.False(prior.Disposed);
+    }
+
+    [Fact]
+    public void A_new_session_adopts_a_queued_restores_snapshot_and_the_queued_restore_does_nothing()
+    {
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
+        _provider.StartStudioLive(Body());
+        using var hold = new ManualResetEventSlim();
+        using var done = new ManualResetEventSlim();
+        _provider.BeforeStudioDeferredRestore = () => hold.Wait(5000);
+        _provider.StudioDeferredRestoreDone = done.Set;
+
+        _config.Update(c => c.Lighting.Sync = "unknown-writer");
+        Assert.False(_provider.StudioLiveActive);
+        _provider.StartStudioLive(Body(CustomFrags.Frag(0.9f)));
+        hold.Set();
+        Assert.True(done.Wait(5000));
+
+        Assert.True(_provider.StudioLiveActive);
+        Assert.Equal(LightingProvider.StudioLiveKey, _engine.CurrentEffectName);
+        _provider.StopStudioLive();
+        Assert.Same(prior, _engine.CurrentEffect);
+        Assert.False(prior.Disposed);
+    }
+
+    [Fact]
+    public void A_dead_preview_with_no_pending_snapshot_snapshots_as_off()
+    {
+        _provider.StartStudioLive(Body());
+        _provider.EndStudioLiveBeforeSyncChange(restore: false);
+
+        _provider.StartStudioLive(Body(CustomFrags.Frag(0.9f)));
+        _provider.StopStudioLive();
+
         Assert.Null(_engine.CurrentEffect);
     }
 
@@ -475,19 +514,39 @@ public sealed class StudioLiveTests : IDisposable
             loading++;
             _provider.DetachStudioLive();
         };
+        pm.ProfileLoadSettled += _provider.FinishStudioLiveHandoff;
+        // What AppBootstrap.ReapplyAfterProfileSwitch does first: stop the engine before restarting the profile's mode.
+        pm.OnProfileSwitched += () => _engine.Stop();
         var prior = new FakeEffect("prior");
         _engine.SetEffect(prior);
         _provider.StartStudioLive(Body());
 
         pm.SwitchProfile(first);
-        // What AppBootstrap.ReapplyAfterProfileSwitch does: stop the engine, restart the profile's mode, settle the handoff.
-        _engine.Stop();
-        _provider.FinishStudioLiveHandoff();
 
         Assert.Equal(1, loading);
         Assert.False(_provider.StudioLiveActive);
         Assert.Null(_engine.CurrentEffect);
         Assert.True(prior.Disposed);
+    }
+
+    [Fact]
+    public void A_profile_switch_that_throws_after_the_load_still_settles_the_handoff()
+    {
+        var pm = new ProfileManager(_config);
+        pm.Initialize();
+        pm.CreateProfile("Other");
+        var first = pm.GetManifest().Profiles[0].Id;
+        pm.ProfileLoading += _provider.DetachStudioLive;
+        pm.ProfileLoadSettled += _provider.FinishStudioLiveHandoff;
+        pm.OnProfileSwitched += () => throw new InvalidOperationException("earlier subscriber failed");
+        _provider.StartAnimate(Animate("rainbow"));
+        var before = _engine.CurrentEffect;
+        _provider.StartStudioLive(Body());
+
+        Assert.Throws<InvalidOperationException>(() => pm.SwitchProfile(first));
+
+        Assert.False(_provider.StudioLiveActive);
+        Assert.Same(before, _engine.CurrentEffect);
     }
 
     [Fact]

@@ -211,84 +211,98 @@ public sealed partial class ProfileManager : IDisposable
 
     public void DeleteProfile(string profileId)
     {
-        bool switched;
-        string activeAfter;
-        lock (_lock)
+        try
         {
-            if (_manifest.Profiles.Count <= 1)
+            bool switched;
+            string activeAfter;
+            lock (_lock)
             {
-                throw new InvalidOperationException("Cannot delete the last profile.");
+                if (_manifest.Profiles.Count <= 1)
+                {
+                    throw new InvalidOperationException("Cannot delete the last profile.");
+                }
+
+                var entry = _manifest.Profiles.FirstOrDefault(p => p.Id == profileId)
+                            ?? throw new KeyNotFoundException("Profile not found.");
+
+                // Block deletion of the Primary profile. The user has to mark
+                // another profile Primary first. The web side disables the
+                // delete button on the Primary; this is the server-side guard.
+                var settings = _store.Load();
+                if (!string.IsNullOrEmpty(settings.PrimaryProfileId) && settings.PrimaryProfileId == profileId)
+                {
+                    throw new InvalidOperationException("Cannot delete the Primary profile. Mark another profile as Primary first.");
+                }
+
+                _manifest.Profiles.Remove(entry);
+
+                var filePath = ProfileFilePath(profileId);
+                if (File.Exists(filePath))
+                {
+                    try
+                    { File.Delete(filePath); }
+                    catch { }
+                }
+
+                switched = _manifest.ActiveProfileId == profileId;
+                if (switched)
+                {
+                    _manifest.ActiveProfileId = _manifest.Profiles[0].Id;
+                    LoadProfileIntoSettings(_manifest.ActiveProfileId);
+                }
+                SaveManifest();
+                activeAfter = _manifest.ActiveProfileId;
             }
 
-            var entry = _manifest.Profiles.FirstOrDefault(p => p.Id == profileId)
-                        ?? throw new KeyNotFoundException("Profile not found.");
+            try { ProfileDeleted?.Invoke(profileId); }
+            catch (Exception ex) { Console.Error.WriteLine($"[profiles] delete handler failed: {ex.Message}"); }
 
-            // Block deletion of the Primary profile. The user has to mark
-            // another profile Primary first. The web side disables the
-            // delete button on the Primary; this is the server-side guard.
-            var settings = _store.Load();
-            if (!string.IsNullOrEmpty(settings.PrimaryProfileId) && settings.PrimaryProfileId == profileId)
-            {
-                throw new InvalidOperationException("Cannot delete the Primary profile. Mark another profile as Primary first.");
-            }
-
-            _manifest.Profiles.Remove(entry);
-
-            var filePath = ProfileFilePath(profileId);
-            if (File.Exists(filePath))
-            {
-                try
-                { File.Delete(filePath); }
-                catch { }
-            }
-
-            switched = _manifest.ActiveProfileId == profileId;
+            // Fire OUTSIDE the lock; the handler does hardware I/O (fan
+            // enumeration, lighting engine reapply via LiveEngineSync) that
+            // would otherwise block every other ProfileManager call for
+            // potentially seconds. Matches SwitchProfile's pattern.
             if (switched)
             {
-                _manifest.ActiveProfileId = _manifest.Profiles[0].Id;
-                LoadProfileIntoSettings(_manifest.ActiveProfileId);
+                ActiveProfileChanged?.Invoke(activeAfter);
+                OnProfileSwitched?.Invoke();
             }
-            SaveManifest();
-            activeAfter = _manifest.ActiveProfileId;
         }
-
-        try { ProfileDeleted?.Invoke(profileId); }
-        catch (Exception ex) { Console.Error.WriteLine($"[profiles] delete handler failed: {ex.Message}"); }
-
-        // Fire OUTSIDE the lock; the handler does hardware I/O (fan
-        // enumeration, lighting engine reapply via LiveEngineSync) that
-        // would otherwise block every other ProfileManager call for
-        // potentially seconds. Matches SwitchProfile's pattern.
-        if (switched)
+        finally
         {
-            ActiveProfileChanged?.Invoke(activeAfter);
-            OnProfileSwitched?.Invoke();
+            ProfileLoadSettled?.Invoke();
         }
     }
 
     public void SwitchProfile(string profileId)
     {
-        lock (_lock)
+        try
         {
-            if (profileId == _manifest.ActiveProfileId)
+            lock (_lock)
             {
-                return;
+                if (profileId == _manifest.ActiveProfileId)
+                {
+                    return;
+                }
+
+                var entry = _manifest.Profiles.FirstOrDefault(p => p.Id == profileId)
+                            ?? throw new KeyNotFoundException("Profile not found.");
+
+                FlushActiveProfile();
+                LoadProfileIntoSettings(profileId);
+
+                _manifest.ActiveProfileId = profileId;
+                entry.UpdatedAt = DateTimeOffset.UtcNow.ToString("o");
+                SaveManifest();
+                _dirty = false;
             }
 
-            var entry = _manifest.Profiles.FirstOrDefault(p => p.Id == profileId)
-                        ?? throw new KeyNotFoundException("Profile not found.");
-
-            FlushActiveProfile();
-            LoadProfileIntoSettings(profileId);
-
-            _manifest.ActiveProfileId = profileId;
-            entry.UpdatedAt = DateTimeOffset.UtcNow.ToString("o");
-            SaveManifest();
-            _dirty = false;
+            ActiveProfileChanged?.Invoke(profileId);
+            OnProfileSwitched?.Invoke();
         }
-
-        ActiveProfileChanged?.Invoke(profileId);
-        OnProfileSwitched?.Invoke();
+        finally
+        {
+            ProfileLoadSettled?.Invoke();
+        }
     }
 
     public void SaveActiveProfile()
@@ -385,55 +399,62 @@ public sealed partial class ProfileManager : IDisposable
     /// </summary>
     internal ProfileEntry ImportProfileWithId(string id, string name, NexusSettings data)
     {
-        var trimmedName = string.IsNullOrWhiteSpace(name) ? "Imported" : name.Trim();
-        bool reactivate;
-        ProfileEntry entry;
-        lock (_lock)
+        try
         {
-            data.Auth = null;
-            data.PrimaryProfileId = null;
-            data.SharedCategories = new List<string>();
-            data.AiIntegration = new AiIntegrationSettings();
-
-            var existing = _manifest.Profiles.FirstOrDefault(p => p.Id == id);
-            var now = DateTimeOffset.UtcNow.ToString("o");
-            var uniqueName = NextAvailableName(trimmedName, candidate =>
-                _manifest.Profiles.Any(p => p.Id != id && string.Equals(p.Name, candidate, StringComparison.OrdinalIgnoreCase)));
-
-            if (existing is null)
+            var trimmedName = string.IsNullOrWhiteSpace(name) ? "Imported" : name.Trim();
+            bool reactivate;
+            ProfileEntry entry;
+            lock (_lock)
             {
-                if (_manifest.Profiles.Count >= MaxProfiles)
+                data.Auth = null;
+                data.PrimaryProfileId = null;
+                data.SharedCategories = new List<string>();
+                data.AiIntegration = new AiIntegrationSettings();
+
+                var existing = _manifest.Profiles.FirstOrDefault(p => p.Id == id);
+                var now = DateTimeOffset.UtcNow.ToString("o");
+                var uniqueName = NextAvailableName(trimmedName, candidate =>
+                    _manifest.Profiles.Any(p => p.Id != id && string.Equals(p.Name, candidate, StringComparison.OrdinalIgnoreCase)));
+
+                if (existing is null)
                 {
-                    throw new InvalidOperationException("Maximum number of profiles reached.");
+                    if (_manifest.Profiles.Count >= MaxProfiles)
+                    {
+                        throw new InvalidOperationException("Maximum number of profiles reached.");
+                    }
+                    entry = new ProfileEntry { Id = id, Name = uniqueName, CreatedAt = now, UpdatedAt = now };
+                    _manifest.Profiles.Add(entry);
                 }
-                entry = new ProfileEntry { Id = id, Name = uniqueName, CreatedAt = now, UpdatedAt = now };
-                _manifest.Profiles.Add(entry);
-            }
-            else
-            {
-                existing.Name = uniqueName;
-                existing.UpdatedAt = now;
-                entry = existing;
+                else
+                {
+                    existing.Name = uniqueName;
+                    existing.UpdatedAt = now;
+                    entry = existing;
+                }
+
+                var json = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
+                WriteAtomic(ProfileFilePath(id), json);
+                SaveManifest();
+
+                reactivate = id == _manifest.ActiveProfileId;
+                if (reactivate)
+                {
+                    LoadProfileIntoSettings(id);
+                    _dirty = false;
+                }
             }
 
-            var json = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
-            WriteAtomic(ProfileFilePath(id), json);
-            SaveManifest();
-
-            reactivate = id == _manifest.ActiveProfileId;
             if (reactivate)
             {
-                LoadProfileIntoSettings(id);
-                _dirty = false;
+                OnProfileSwitched?.Invoke();
             }
-        }
 
-        if (reactivate)
+            return entry;
+        }
+        finally
         {
-            OnProfileSwitched?.Invoke();
+            ProfileLoadSettled?.Invoke();
         }
-
-        return entry;
     }
 
     /// <summary>
@@ -481,156 +502,170 @@ public sealed partial class ProfileManager : IDisposable
     /// </summary>
     internal void ReplaceLibrary(IReadOnlyList<(string Id, string Name, NexusSettings Data)> profiles)
     {
-        string activeAfter;
-        lock (_lock)
+        try
         {
-            foreach (var entry in _manifest.Profiles)
+            string activeAfter;
+            lock (_lock)
             {
-                var path = ProfileFilePath(entry.Id);
-                try
+                foreach (var entry in _manifest.Profiles)
                 {
-                    if (File.Exists(path))
+                    var path = ProfileFilePath(entry.Id);
+                    try
                     {
-                        File.Delete(path);
+                        if (File.Exists(path))
+                        {
+                            File.Delete(path);
+                        }
                     }
+                    catch { }
                 }
-                catch { }
-            }
 
-            _manifest = new ProfileManifest();
+                _manifest = new ProfileManifest();
 
-            if (profiles.Count == 0)
-            {
-                var def = CreateDefaultProfile();
-                _manifest.Profiles.Add(def);
-                _manifest.ActiveProfileId = def.Id;
-                SaveManifest();
-                SaveProfileFile(def.Id);
-            }
-            else
-            {
-                var limited = profiles.Take(MaxProfiles).ToList();
-
-                // Dedupe names within the incoming set itself: a cloud
-                // library can already contain two rows with the same name.
-                // Names are assigned in ascending profileId (ordinal) order
-                // so the lower id always keeps the plain name and higher ids
-                // get " (2)", " (3)", ... - deterministic regardless of the
-                // caller's list order.
-                var uniqueNames = new Dictionary<string, string>();
-                var takenNames = new List<string>();
-                foreach (var p in limited.OrderBy(p => p.Id, StringComparer.Ordinal))
+                if (profiles.Count == 0)
                 {
-                    var trimmed = string.IsNullOrWhiteSpace(p.Name) ? "Imported" : p.Name.Trim();
-                    var unique = NextAvailableName(trimmed, name =>
-                        takenNames.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)));
-                    takenNames.Add(unique);
-                    uniqueNames[p.Id] = unique;
+                    var def = CreateDefaultProfile();
+                    _manifest.Profiles.Add(def);
+                    _manifest.ActiveProfileId = def.Id;
+                    SaveManifest();
+                    SaveProfileFile(def.Id);
+                }
+                else
+                {
+                    var limited = profiles.Take(MaxProfiles).ToList();
+
+                    // Dedupe names within the incoming set itself: a cloud
+                    // library can already contain two rows with the same name.
+                    // Names are assigned in ascending profileId (ordinal) order
+                    // so the lower id always keeps the plain name and higher ids
+                    // get " (2)", " (3)", ... - deterministic regardless of the
+                    // caller's list order.
+                    var uniqueNames = new Dictionary<string, string>();
+                    var takenNames = new List<string>();
+                    foreach (var p in limited.OrderBy(p => p.Id, StringComparer.Ordinal))
+                    {
+                        var trimmed = string.IsNullOrWhiteSpace(p.Name) ? "Imported" : p.Name.Trim();
+                        var unique = NextAvailableName(trimmed, name =>
+                            takenNames.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)));
+                        takenNames.Add(unique);
+                        uniqueNames[p.Id] = unique;
+                    }
+
+                    foreach (var (id, _, data) in limited)
+                    {
+                        data.Auth = null;
+                        data.PrimaryProfileId = null;
+                        data.SharedCategories = new List<string>();
+                        data.AiIntegration = new AiIntegrationSettings();
+                        var now = DateTimeOffset.UtcNow.ToString("o");
+                        _manifest.Profiles.Add(new ProfileEntry { Id = id, Name = uniqueNames[id], CreatedAt = now, UpdatedAt = now });
+                        var json = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
+                        WriteAtomic(ProfileFilePath(id), json);
+                    }
+                    _manifest.ActiveProfileId = _manifest.Profiles[0].Id;
+                    SaveManifest();
+                    LoadProfileIntoSettings(_manifest.ActiveProfileId);
                 }
 
-                foreach (var (id, _, data) in limited)
+                _store.Update(s =>
                 {
-                    data.Auth = null;
-                    data.PrimaryProfileId = null;
-                    data.SharedCategories = new List<string>();
-                    data.AiIntegration = new AiIntegrationSettings();
-                    var now = DateTimeOffset.UtcNow.ToString("o");
-                    _manifest.Profiles.Add(new ProfileEntry { Id = id, Name = uniqueNames[id], CreatedAt = now, UpdatedAt = now });
-                    var json = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
-                    WriteAtomic(ProfileFilePath(id), json);
-                }
-                _manifest.ActiveProfileId = _manifest.Profiles[0].Id;
-                SaveManifest();
-                LoadProfileIntoSettings(_manifest.ActiveProfileId);
+                    s.PrimaryProfileId = _manifest.ActiveProfileId;
+                    s.SharedCategories = new List<string>();
+                });
+                _dirty = false;
+                activeAfter = _manifest.ActiveProfileId;
             }
 
-            _store.Update(s =>
-            {
-                s.PrimaryProfileId = _manifest.ActiveProfileId;
-                s.SharedCategories = new List<string>();
-            });
-            _dirty = false;
-            activeAfter = _manifest.ActiveProfileId;
+            try { LibraryReplaced?.Invoke(); }
+            catch (Exception ex) { Console.Error.WriteLine($"[profiles] library handler failed: {ex.Message}"); }
+            ActiveProfileChanged?.Invoke(activeAfter);
+            OnProfileSwitched?.Invoke();
         }
-
-        try { LibraryReplaced?.Invoke(); }
-        catch (Exception ex) { Console.Error.WriteLine($"[profiles] library handler failed: {ex.Message}"); }
-        ActiveProfileChanged?.Invoke(activeAfter);
-        OnProfileSwitched?.Invoke();
+        finally
+        {
+            ProfileLoadSettled?.Invoke();
+        }
     }
 
     public ProfileEntry ImportProfile(string name, NexusSettings data, bool replaceExisting = false)
     {
-        bool reactivate = false;
-        ProfileEntry entry;
-        lock (_lock)
+        try
         {
-            data.Auth = null;
-            data.PrimaryProfileId = null;
-            data.SharedCategories = new List<string>();
-            data.AiIntegration = new AiIntegrationSettings();
-
-            var trimmed = (name ?? "").Trim();
-            if (string.IsNullOrEmpty(trimmed))
+            bool reactivate = false;
+            ProfileEntry entry;
+            lock (_lock)
             {
-                trimmed = "Imported";
-            }
+                data.Auth = null;
+                data.PrimaryProfileId = null;
+                data.SharedCategories = new List<string>();
+                data.AiIntegration = new AiIntegrationSettings();
 
-            var existing = _manifest.Profiles.FirstOrDefault(p =>
-                string.Equals(p.Name, trimmed, StringComparison.OrdinalIgnoreCase));
-            var now = DateTimeOffset.UtcNow.ToString("o");
-
-            if (existing is not null)
-            {
-                if (!replaceExisting)
+                var trimmed = (name ?? "").Trim();
+                if (string.IsNullOrEmpty(trimmed))
                 {
-                    throw new ProfileNameConflictException(trimmed);
+                    trimmed = "Imported";
                 }
 
-                // Overwrite in place: keep the id, manifest position and
-                // CreatedAt so active/Primary references and the reorder
-                // list stay valid; adopt the imported name's casing.
-                existing.Name = trimmed;
-                existing.UpdatedAt = now;
-                var replaceJson = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
-                WriteAtomic(ProfileFilePath(existing.Id), replaceJson);
-                SaveManifest();
+                var existing = _manifest.Profiles.FirstOrDefault(p =>
+                    string.Equals(p.Name, trimmed, StringComparison.OrdinalIgnoreCase));
+                var now = DateTimeOffset.UtcNow.ToString("o");
 
-                // Overwriting the active profile: re-baseline in-memory
-                // settings from the imported file so the next flush can't
-                // clobber it, then let the caller re-apply the engines.
-                reactivate = existing.Id == _manifest.ActiveProfileId;
-                if (reactivate)
+                if (existing is not null)
                 {
-                    LoadProfileIntoSettings(existing.Id);
-                    _dirty = false;
+                    if (!replaceExisting)
+                    {
+                        throw new ProfileNameConflictException(trimmed);
+                    }
+
+                    // Overwrite in place: keep the id, manifest position and
+                    // CreatedAt so active/Primary references and the reorder
+                    // list stay valid; adopt the imported name's casing.
+                    existing.Name = trimmed;
+                    existing.UpdatedAt = now;
+                    var replaceJson = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
+                    WriteAtomic(ProfileFilePath(existing.Id), replaceJson);
+                    SaveManifest();
+
+                    // Overwriting the active profile: re-baseline in-memory
+                    // settings from the imported file so the next flush can't
+                    // clobber it, then let the caller re-apply the engines.
+                    reactivate = existing.Id == _manifest.ActiveProfileId;
+                    if (reactivate)
+                    {
+                        LoadProfileIntoSettings(existing.Id);
+                        _dirty = false;
+                    }
+                    entry = existing;
                 }
-                entry = existing;
+                else
+                {
+                    if (_manifest.Profiles.Count >= MaxProfiles)
+                    {
+                        throw new InvalidOperationException("Maximum number of profiles reached.");
+                    }
+
+                    var id = Guid.NewGuid().ToString("N")[..8];
+                    entry = new ProfileEntry { Id = id, Name = trimmed, CreatedAt = now, UpdatedAt = now };
+
+                    var json = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
+                    WriteAtomic(ProfileFilePath(id), json);
+
+                    _manifest.Profiles.Add(entry);
+                    SaveManifest();
+                }
             }
-            else
+
+            if (reactivate)
             {
-                if (_manifest.Profiles.Count >= MaxProfiles)
-                {
-                    throw new InvalidOperationException("Maximum number of profiles reached.");
-                }
-
-                var id = Guid.NewGuid().ToString("N")[..8];
-                entry = new ProfileEntry { Id = id, Name = trimmed, CreatedAt = now, UpdatedAt = now };
-
-                var json = JsonSerializer.Serialize(data, PersistenceJsonContext.Default.NexusSettings);
-                WriteAtomic(ProfileFilePath(id), json);
-
-                _manifest.Profiles.Add(entry);
-                SaveManifest();
+                OnProfileSwitched?.Invoke();
             }
+
+            return entry;
         }
-
-        if (reactivate)
+        finally
         {
-            OnProfileSwitched?.Invoke();
+            ProfileLoadSettled?.Invoke();
         }
-
-        return entry;
     }
 
     public ProfileEntry ImportProfileJson(string json, bool replaceExisting = false)
@@ -839,6 +874,9 @@ public sealed partial class ProfileManager : IDisposable
 
     /// <summary>Raised, under the profile lock, just before a profile's settings replace the live ones. Handlers must be cheap.</summary>
     public event Action? ProfileLoading;
+
+    /// <summary>Raised, outside the profile lock, when a public call that may have loaded a profile returns or throws. Pairs with <see cref="ProfileLoading"/>.</summary>
+    public event Action? ProfileLoadSettled;
 
     private void LoadProfileIntoSettings(string profileId)
     {

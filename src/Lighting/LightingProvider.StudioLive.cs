@@ -135,17 +135,18 @@ public sealed partial class LightingProvider
             return Fail("lighting is held dark for sleep or lock");
         }
 
-        // An ended session's preview can still be running while its restore is queued; what it left behind is
-        // not the user's lighting, so it snapshots as Off.
-        var deadPreview = _engine.CurrentEffect is ShaderEffect { Name: StudioLiveKey };
+        // An ended session's preview can still be running while its restore is pending (a handoff or a queued
+        // restore). Its snapshot is the user's lighting and is adopted; a dead preview with none snapshots as Off.
+        var adopt = _studioHandoff is { } pending && EngineRunsLive(pending) ? pending : null;
+        var deadPreview = adopt is null && _engine.CurrentEffect is ShaderEffect { Name: StudioLiveKey };
         // Everything below the snapshot reads is read before the first change.
         var persistedSync = _store.Load().Lighting.Sync;
         var reportedSync = GetSync();
-        var reportedPaused = !deadPreview && _engine.Paused;
-        var prevFrozen = !deadPreview && _engine.Frozen;
-        var prevFullFrame = !deadPreview && _engine.FullFrameSampling;
-        var prevStaticEnabled = !deadPreview && (_engine.StaticEffects?.Enabled ?? false);
-        var rgbWasActive = _rgb?.IsActive ?? false;
+        var reportedPaused = adopt?.PrevPaused ?? (!deadPreview && _engine.Paused);
+        var prevFrozen = adopt?.PrevFrozen ?? (!deadPreview && _engine.Frozen);
+        var prevFullFrame = adopt?.PrevFullFrame ?? (!deadPreview && _engine.FullFrameSampling);
+        var prevStaticEnabled = adopt?.PrevStaticEnabled ?? (!deadPreview && (_engine.StaticEffects?.Enabled ?? false));
+        var rgbWasActive = adopt?.RgbWasActive ?? _rgb?.IsActive ?? false;
 
         ShaderLibrary.RegisterCustom(StudioLiveId, frag);
         ShaderEffect live;
@@ -159,6 +160,11 @@ public sealed partial class LightingProvider
             return Fail(ex.Message);
         }
 
+        // The slot is cleared only now that the new preview exists; a queued restore then finds it empty and does nothing.
+        if (adopt is not null)
+        {
+            _studioHandoff = null;
+        }
         var started = new StudioSession
         {
             Id = NewSessionId(),
@@ -184,13 +190,13 @@ public sealed partial class LightingProvider
             var replaced = _engine.SetEffect(live, disposePrevious: false);
             if (replaced is ShaderEffect { Name: StudioLiveKey })
             {
-                // Never adopt a dead preview as the lighting to restore.
+                // The replaced preview is never the lighting to restore.
                 try
                 { replaced.Dispose(); }
                 catch { }
                 replaced = null;
             }
-            started.PrevEffect = replaced;
+            started.PrevEffect = adopt is not null ? adopt.PrevEffect : replaced;
         }
         finally
         {
@@ -388,6 +394,15 @@ public sealed partial class LightingProvider
             {
                 ServiceLog.Warn("[studio-live] saved mode changed under a live session; ending it");
                 deferred = EndStudioLocked(StudioEnd.Defer);
+                if (deferred is not null)
+                {
+                    // Held in the handoff slot: a start that lands first adopts it, and the queued restore below then finds it gone.
+                    if (_studioHandoff is { } older)
+                    {
+                        FinishStudio(older, StudioEnd.Abandon);
+                    }
+                    _studioHandoff = deferred;
+                }
             }
         }
         if (deferred is null)
@@ -395,16 +410,27 @@ public sealed partial class LightingProvider
             return;
         }
         NotifyStudioEnded();
+        // A from-Off restore can still race a writer that starts its own mode; the engine gate makes that a no-op, but a start that lands between is lost.
         _ = Task.Run(() =>
         {
+            BeforeStudioDeferredRestore?.Invoke();
             lock (_studioLock)
             {
-                FinishStudio(deferred, StudioEnd.Restore);
+                if (ReferenceEquals(_studioHandoff, deferred))
+                {
+                    _studioHandoff = null;
+                    FinishStudio(deferred, StudioEnd.Restore);
+                }
             }
+            StudioDeferredRestoreDone?.Invoke();
         });
     }
 
     private StudioSession? _studioHandoff;
+
+    // Test seams around the queued restore.
+    internal Action? BeforeStudioDeferredRestore;
+    internal Action? StudioDeferredRestoreDone;
 
     /// <summary>
     /// A caller is about to change the saved mode and then start the mode's own effect (preset activation, profile
