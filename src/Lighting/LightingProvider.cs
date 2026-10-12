@@ -148,8 +148,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     // classify on.
     public string GetSync()
     {
-        // The idle effect a studio session runs while the mode is Off is not a mode.
-        if (_engine.ReportedEffectName == "none")
+        if (_engine.CurrentEffectName == "none")
         {
             return _store.Load().Lighting.Sync;
         }
@@ -233,16 +232,12 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     /// DRAM over SMBus: publishing through the loop is what makes the black
     /// stick - the same push issued after <c>Stop</c> does not.
     /// </summary>
-    private bool BlackoutBeforeRelinquish(bool alreadyLatched = false)
+    private void BlackoutBeforeRelinquish()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         // Not gated on the bridge: the loop-published frame is what blanks the
         // NP50 / Lian Li / Keeb / AW5 writers, which exist without OpenRGB.
-        // The studio end latches conditionally itself, so a mode started meanwhile is never held dark.
-        if (!alreadyLatched)
-        {
-            _engine.SetBlackout(true);
-        }
+        _engine.SetBlackout(true);
         var published = _engine.WaitForBlackout(EnginePublishBudget);
         var publishedMs = sw.ElapsedMilliseconds;
 
@@ -271,7 +266,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         ServiceLog.Info(
             $"[lighting-stop] blackout engine={(published ? "published" : "timeout")}/{publishedMs}ms " +
             $"openrgb={pushed}/{pushedMs}ms settle={(int)settle.TotalMilliseconds}ms total={sw.ElapsedMilliseconds}ms");
-        return true;
     }
 
     /// <summary>
@@ -329,8 +323,8 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         {
             return;
         }
-        var name = (body.Effect ?? "rainbow").ToLowerInvariant();
         EnsureRgbActive();
+        var name = (body.Effect ?? "rainbow").ToLowerInvariant();
         // The static catalog lives in Static mode now. Callers that predate it -
         // restored settings written before the split, Stream Deck rgbEffect
         // Deck rgbEffect buttons, MCP scenarios, set_static_color - still name one

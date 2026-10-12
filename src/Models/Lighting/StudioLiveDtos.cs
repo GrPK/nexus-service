@@ -30,6 +30,9 @@ public sealed class StudioLiveResponse : ApiResponse
     /// <summary>Milliseconds the lease lasts after this call; re-POST before it runs out.</summary>
     public int LeaseMs { get; set; }
 
+    /// <summary>True when the engine has no running effect, so the overlay shows only once a mode starts. Recomputed on every call.</summary>
+    public bool LightingOff { get; set; }
+
     /// <summary>Opaque id of the running session. Send it on every renewal and on DELETE.</summary>
     public string SessionId { get; set; } = "";
 }

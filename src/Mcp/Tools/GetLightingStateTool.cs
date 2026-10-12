@@ -42,7 +42,7 @@ public sealed class GetLightingStateTool : IMcpTool
         var result = new McpLightingStateResult
         {
             Sync = _lighting.GetSync(),
-            CurrentEffect = _engine.ReportedEffectName,
+            CurrentEffect = _engine.CurrentEffectName,
             GlobalBrightness = lighting.GlobalBrightness,
             StaticColor = $"#{color.R:x2}{color.G:x2}{color.B:x2}",
         };

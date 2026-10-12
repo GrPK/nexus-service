@@ -277,66 +277,6 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void From_off_an_idle_effect_keeps_the_loop_running_and_stop_puts_off_back()
-    {
-        _provider.StartAnimate(Animate("rainbow"));
-        _provider.StopAll();
-        Assert.Null(_engine.CurrentEffect);
-        var json = SettingsJson();
-
-        _provider.StartStudioLive(Body());
-        Assert.NotNull(_engine.CurrentEffect);
-        Assert.True(_engine.LoopPublishing);
-        Assert.Equal("none", _provider.GetSync());
-        _provider.StopStudioLive();
-
-        Assert.Null(_engine.CurrentEffect);
-        Assert.False(_engine.StudioOverlayActive);
-        Assert.Equal("none", _provider.GetSync());
-        Assert.Equal(json, SettingsJson());
-    }
-
-    [Fact]
-    public void From_off_the_overlay_paints_the_devices_and_they_are_dark_again_after()
-    {
-        var dev = Device("d", 1);
-        _engine.UpdateDevices([dev]);
-        _provider.StartStudioLive(Body());
-        _engine.SetStudioOverlay(new FakeEffect("studio", g: 90));
-        WaitForLed(dev, 0, 0, 90, 0);
-
-        _provider.StopStudioLive();
-
-        Assert.Equal(new byte[] { 0, 0, 0 }, dev.LedBytes[..3].ToArray());
-    }
-
-    [Fact]
-    public void A_mode_another_client_starts_over_the_idle_effect_is_not_stopped_by_the_end()
-    {
-        _provider.StartStudioLive(Body());
-
-        _provider.StartAnimate(Animate("plasma"));
-        var other = _engine.CurrentEffect;
-        _provider.StopStudioLive();
-
-        Assert.Same(other, _engine.CurrentEffect);
-        Assert.Equal("plasma", _engine.CurrentEffectName);
-    }
-
-    [Fact]
-    public void A_renewal_after_the_mode_was_stopped_puts_the_loop_back()
-    {
-        var open = _provider.StartStudioLive(Body());
-        _provider.StopAll();
-        Assert.Null(_engine.CurrentEffect);
-
-        _provider.StartStudioLive(Body(sessionId: open.SessionId));
-
-        Assert.NotNull(_engine.CurrentEffect);
-        Assert.True(_engine.StudioOverlayActive);
-    }
-
-    [Fact]
     public void The_opening_post_returns_an_id_and_a_renewal_with_it_keeps_the_session()
     {
         var open = _provider.StartStudioLive(Body());
@@ -441,79 +381,6 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void Clearing_the_overlay_on_a_paused_effect_puts_the_held_canvas_back_on_the_devices()
-    {
-        var dev = Device("d", 1);
-        _engine.UpdateDevices([dev]);
-        var global = new FakeEffect("global", r: 200);
-        _engine.SetEffect(global);
-        WaitFor(() => global.Renders > 0);
-        _engine.SetPaused(true);
-        _engine.SetStudioOverlay(new FakeEffect("studio", g: 90));
-        WaitForLed(dev, 0, 0, 90, 0);
-
-        _engine.SetStudioOverlay(null);
-
-        WaitForLed(dev, 0, 200, 0, 0);
-        Assert.Equal(200, dev.LedBytes[0]);
-        Assert.True(_engine.Paused);
-    }
-
-    [Fact]
-    public void A_start_from_off_during_a_blackout_hold_is_refused_and_leaves_the_hold()
-    {
-        _engine.SetBlackout(true);
-
-        var result = _provider.StartStudioLive(Body());
-
-        Assert.False(result.Ok);
-        Assert.True(_engine.Blackout);
-        Assert.Null(_engine.CurrentEffect);
-        Assert.False(_engine.StudioOverlayActive);
-    }
-
-    [Fact]
-    public void A_renewal_during_a_blackout_hold_keeps_the_hold_and_the_loop_comes_back_when_it_lifts()
-    {
-        var open = _provider.StartStudioLive(Body());
-        _engine.Stop();
-        _engine.SetBlackout(true);
-
-        Assert.True(_provider.StartStudioLive(Body(sessionId: open.SessionId)).Ok);
-        Assert.True(_engine.Blackout);
-        Assert.Null(_engine.CurrentEffect);
-
-        _engine.SetBlackout(false);
-        Assert.True(_provider.StartStudioLive(Body(sessionId: open.SessionId)).Ok);
-        Assert.NotNull(_engine.CurrentEffect);
-        Assert.False(_engine.Blackout);
-    }
-
-    [Fact]
-    public void The_hold_only_latches_while_the_expected_effect_still_runs()
-    {
-        var first = new FakeEffect("first");
-        _engine.SetEffect(first);
-        _engine.SetEffect(new FakeEffect("second"));
-
-        Assert.False(_engine.SetBlackoutIfCurrent(first, out _));
-
-        Assert.False(_engine.Blackout);
-    }
-
-    [Fact]
-    public void Ending_over_a_mode_another_client_started_latches_no_hold()
-    {
-        _provider.StartStudioLive(Body());
-        _provider.StartAnimate(Animate("plasma"));
-
-        _provider.StopStudioLive();
-
-        Assert.False(_engine.Blackout);
-        Assert.Equal("plasma", _engine.CurrentEffectName);
-    }
-
-    [Fact]
     public void A_studio_fragment_that_reads_audio_holds_audio_capture_until_the_session_ends()
     {
         var beats = new FakeBeats();
@@ -532,56 +399,25 @@ public sealed class StudioLiveTests : IDisposable
         Assert.False(beats.Running);
     }
 
-    [Fact]
-    public void The_idle_effect_reads_as_none_in_status_reporting()
+    // Waits for n more published engine ticks.
+    private void WaitTicks(int n)
     {
-        _provider.StartStudioLive(Body());
-
-        Assert.Equal("none", _engine.ReportedEffectName);
-        Assert.NotEqual("none", _engine.CurrentEffectName);
-        _provider.StartAnimate(Animate("plasma"));
-        Assert.Equal("plasma", _engine.ReportedEffectName);
+        var seen = 0;
+        void Handler() => Interlocked.Increment(ref seen);
+        _engine.FramePublished += Handler;
+        try
+        {
+            WaitFor(() => Volatile.Read(ref seen) >= n);
+        }
+        finally
+        {
+            _engine.FramePublished -= Handler;
+        }
+        Assert.True(Volatile.Read(ref seen) >= n);
     }
 
-    [Fact]
-    public void A_mode_started_in_the_window_before_the_end_decides_is_never_held_dark()
-    {
-        _provider.StartStudioLive(Body());
-        _provider.BeforeStudioEnd = () => _provider.StartAnimate(Animate("plasma"));
-
-        _provider.StopStudioLive();
-
-        Assert.False(_engine.Blackout);
-        Assert.Equal("plasma", _engine.CurrentEffectName);
-    }
-
-    [Fact]
-    public void Ending_a_session_during_a_hold_keeps_the_hold_and_a_new_start_is_refused()
-    {
-        _provider.StartStudioLive(Body());
-        _engine.SetBlackout(true);
-
-        _provider.StopStudioLive();
-
-        Assert.True(_engine.Blackout);
-        Assert.Null(_engine.CurrentEffect);
-        Assert.False(_provider.StartStudioLive(Body()).Ok);
-        Assert.True(_engine.Blackout);
-    }
-
-    [Fact]
-    public void Installing_the_idle_effect_never_releases_a_hold()
-    {
-        _engine.SetBlackout(true);
-
-        Assert.False(_engine.SetEffectUnlessBlackout(new FakeEffect("x")));
-
-        Assert.True(_engine.Blackout);
-        Assert.Null(_engine.CurrentEffect);
-    }
-
-    [Fact]
-    public void Paused_under_the_overlay_then_ended_during_a_hold_does_not_republish_black_on_wake()
+    // A paused red effect with a green overlay over it, one device.
+    private (DeviceFrame Dev, FakeEffect Global) PausedUnderOverlay()
     {
         var dev = Device("d", 1);
         _engine.UpdateDevices([dev]);
@@ -591,14 +427,112 @@ public sealed class StudioLiveTests : IDisposable
         _engine.SetPaused(true);
         _engine.SetStudioOverlay(new FakeEffect("studio", g: 90));
         WaitForLed(dev, 0, 0, 90, 0);
+        return (dev, global);
+    }
+
+    private static void AssertRed(DeviceFrame dev)
+    {
+        WaitForLed(dev, 0, 200, 0, 0);
+        Assert.Equal(new byte[] { 200, 0, 0 }, dev.LedBytes[..3].ToArray());
+    }
+
+    [Fact]
+    public void Clearing_the_overlay_on_a_paused_effect_shows_the_effects_own_frame()
+    {
+        var (dev, _) = PausedUnderOverlay();
+
+        _engine.SetStudioOverlay(null);
+
+        AssertRed(dev);
+        Assert.True(_engine.Paused);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(100)]
+    public void Ending_during_a_fade_then_releasing_shows_the_effects_own_frame(int releaseMs)
+    {
+        var (dev, _) = PausedUnderOverlay();
+        Assert.True(_engine.BeginBlackoutFade(TimeSpan.FromMilliseconds(400)));
+
+        _engine.SetStudioOverlay(null);
+        _engine.SetBlackout(true);
+        WaitForLed(dev, 0, 0, 0, 0);
+        _engine.BeginBlackoutRelease(TimeSpan.FromMilliseconds(releaseMs));
+
+        AssertRed(dev);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(100)]
+    public void Ending_during_a_hold_then_releasing_shows_the_effects_own_frame(int releaseMs)
+    {
+        var (dev, _) = PausedUnderOverlay();
         _engine.SetBlackout(true);
         WaitForLed(dev, 0, 0, 0, 0);
 
         _engine.SetStudioOverlay(null);
-        _engine.SetBlackout(false);
+        WaitTicks(3);
+        _engine.BeginBlackoutRelease(TimeSpan.FromMilliseconds(releaseMs));
 
-        // The hold cleared the canvas, so a paused effect has nothing to show; the point is that no resample is queued.
-        Assert.True(_engine.Paused);
-        Assert.False(_engine.StudioOverlayActive);
+        AssertRed(dev);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(100)]
+    public void Ending_before_a_hold_then_releasing_shows_the_effects_own_frame(int releaseMs)
+    {
+        var (dev, _) = PausedUnderOverlay();
+
+        _engine.SetStudioOverlay(null);
+        AssertRed(dev);
+        WaitTicks(2);
+        _engine.SetBlackout(true);
+        WaitForLed(dev, 0, 0, 0, 0);
+        _engine.BeginBlackoutRelease(TimeSpan.FromMilliseconds(releaseMs));
+
+        AssertRed(dev);
+    }
+
+    [Fact]
+    public void Ending_across_a_whole_fade_hold_and_release_never_leaves_the_studio_frame()
+    {
+        var (dev, _) = PausedUnderOverlay();
+        _engine.BeginBlackoutFade(TimeSpan.FromMilliseconds(100));
+        WaitForLed(dev, 0, 0, 0, 0);
+        _engine.BeginBlackoutRelease(TimeSpan.FromMilliseconds(100));
+        _engine.SetStudioOverlay(null);
+
+        AssertRed(dev);
+    }
+
+    [Fact]
+    public void A_post_from_off_succeeds_reports_lighting_off_and_shows_once_a_mode_starts()
+    {
+        var open = _provider.StartStudioLive(Body());
+
+        Assert.True(open.Ok);
+        Assert.True(open.LightingOff);
+        Assert.Null(_engine.CurrentEffect);
+        Assert.True(_engine.StudioOverlayActive);
+
+        _provider.StartAnimate(Animate("plasma"));
+
+        Assert.False(_provider.StartStudioLive(Body(sessionId: open.SessionId)).LightingOff);
+        Assert.True(_engine.StudioOverlayActive);
+    }
+
+    [Fact]
+    public void Lighting_off_is_recomputed_on_every_renewal()
+    {
+        _provider.StartAnimate(Animate("plasma"));
+        var open = _provider.StartStudioLive(Body());
+        Assert.False(open.LightingOff);
+
+        _provider.StopAll();
+
+        Assert.True(_provider.StartStudioLive(Body(sessionId: open.SessionId)).LightingOff);
     }
 }

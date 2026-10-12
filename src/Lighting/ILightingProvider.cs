@@ -126,14 +126,14 @@ public interface ILightingProvider
 public enum StudioLiveOutcome
 {
     Ok,
-    /// <summary>Refused: lighting off, or a fragment the shader could not be built from.</summary>
+    /// <summary>Refused: the Lighting feature is off, or a fragment the shader could not be built from.</summary>
     Failed,
     /// <summary>The session the caller names is over (lease lapse, another tab).</summary>
     Ended,
 }
 
 /// <summary>Outcome of <see cref="ILightingProvider.StartStudioLive"/>.</summary>
-public readonly record struct StudioLiveResult(StudioLiveOutcome Outcome, string Message, string SessionId)
+public readonly record struct StudioLiveResult(StudioLiveOutcome Outcome, string Message, string SessionId, bool LightingOff = false)
 {
     public bool Ok => Outcome == StudioLiveOutcome.Ok;
 }

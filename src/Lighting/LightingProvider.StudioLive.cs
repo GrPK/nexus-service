@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Nexus.Service.Lighting.Engine;
-using Nexus.Service.Lighting.Engine.Effects;
 using Nexus.Service.Lighting.Engine.Gpu;
 using Nexus.Service.Models.Lighting;
 using Nexus.Service.Sockets;
@@ -11,8 +10,9 @@ namespace Nexus.Service.Lighting;
 
 /// <summary>
 /// Shader Studio live preview. A session is an engine overlay (<see cref="LightingEngine.SetStudioOverlay"/>)
-/// painted over every device above pins and the running effect, so nothing global changes: no mode,
-/// setting or effect is touched and ending the session just clears the overlay.
+/// painted over every device above pins and the running effect, like the LED mapper's wipes: no mode,
+/// setting or effect is touched and ending the session just clears the overlay. In Off the engine
+/// loop is stopped and the overlay shows once a mode starts.
 /// </summary>
 public sealed partial class LightingProvider
 {
@@ -26,10 +26,6 @@ public sealed partial class LightingProvider
     private readonly object _studioLock = new();
     private volatile StudioSession? _studio;
     private Timer? _studioTimer;
-    // Runs the engine loop while the mode is Off; the loop only ticks with an effect.
-    private volatile IEffect? _studioIdle;
-    // Test seam: runs just before the end-of-session Off restore decides anything.
-    internal Action? BeforeStudioEnd;
     // The overlay's fragment reads audio uniforms, which counts as audio demand for capture.
     private volatile bool _studioAudio;
 
@@ -45,7 +41,6 @@ public sealed partial class LightingProvider
         public required string Id { get; set; }
         public required ShaderEffect Live { get; set; }
         public required string Frag { get; set; }
-        public bool RgbWasActive { get; set; }
         public long LeaseDeadline { get; set; }
     }
 
@@ -88,11 +83,6 @@ public sealed partial class LightingProvider
         }
         else
         {
-            // From Off the loop has to be started, which would end a sleep or lock hold; refuse while it holds.
-            if (_engine.CurrentEffect is null && _engine.Blackout)
-            {
-                return Fail("lighting is held dark for sleep or lock");
-            }
             ShaderEffect live;
             try
             {
@@ -108,9 +98,9 @@ public sealed partial class LightingProvider
             SetStudioAudio(frag);
             _studioTimer ??= new Timer(_ => CheckStudioLease(), null, 1000, 1000);
         }
-        EnsureEngineLoop(session);
         session.LeaseDeadline = StudioClockMs() + StudioLeaseMs;
-        return new StudioLiveResult(StudioLiveOutcome.Ok, "Ok", session.Id);
+        // In Off the engine loop is stopped, as for the LED mapper's wipes: the overlay shows once any mode starts.
+        return new StudioLiveResult(StudioLiveOutcome.Ok, "Ok", session.Id, _engine.CurrentEffect is null);
     }
 
     private static string NewSessionId() => Guid.NewGuid().ToString("N");
@@ -149,25 +139,6 @@ public sealed partial class LightingProvider
         return true;
     }
 
-    // The engine loop only ticks while an effect runs. In Off a placeholder effect keeps it going (and the bridge up)
-    // for the session; a mode started later by anyone replaces it and the overlay carries on over that.
-    private void EnsureEngineLoop(StudioSession session)
-    {
-        // Installing the placeholder would end a sleep or lock hold; the renewal after the hold lifts puts it in.
-        if (_engine.CurrentEffect is not null || _engine.Blackout)
-        {
-            return;
-        }
-        session.RgbWasActive = _rgb?.IsActive ?? false;
-        EnsureRgbActive();
-        var idle = new StudioIdleEffect();
-        // Atomic with the hold: a sleep or lock that engages after the check above keeps it.
-        if (_engine.SetEffectUnlessBlackout(idle))
-        {
-            _studioIdle = idle;
-        }
-    }
-
     private void SetStudioAudio(string? frag)
     {
         _studioAudio = frag is not null && ShaderLibrary.ReadsAudio(frag);
@@ -203,25 +174,6 @@ public sealed partial class LightingProvider
         _studioTimer = null;
         _engine.SetStudioOverlay(null)?.Dispose();
         SetStudioAudio(null);
-        var idle = _studioIdle;
-        _studioIdle = null;
-        // Only while the placeholder is still the running effect: a mode someone started meanwhile is theirs,
-        // and both the hold and the stop are conditional on it atomically with a concurrent SetEffect.
-        if (idle is not null)
-        {
-            BeforeStudioEnd?.Invoke();
-            // Latch and currentness are decided together under the engine lock; a hold that was already engaged is kept through the stop.
-            var held = _engine.SetBlackoutIfCurrent(idle, out var wasHeld);
-            if (held && !wasHeld)
-            {
-                BlackoutBeforeRelinquish(alreadyLatched: true);
-            }
-            if (held && _engine.StopIfCurrent(idle, keepBlackout: wasHeld) && !s.RgbWasActive)
-            {
-                _rgb?.Deactivate();
-                _rgb?.AwaitShutdown();
-            }
-        }
         return true;
     }
 
