@@ -23,7 +23,7 @@ public enum LintScope
 
 public sealed record LintHazard(string ChannelId, string ChannelName, string Kind, string RootId, string RootName);
 
-public sealed class LintInput
+public sealed record LintInput
 {
     public IReadOnlyList<CurveDocument> Curves { get; init; } = Array.Empty<CurveDocument>();
     public IReadOnlyList<FanChannel> Channels { get; init; } = Array.Empty<FanChannel>();
@@ -81,6 +81,7 @@ public static class CoolingConfigLint
 
     public static List<LintHazard> Analyze(LintInput input)
     {
+        input = Normalize(input);
         var result = new List<LintHazard>();
         var byId = input.Channels.ToDictionary(c => c.Id, StringComparer.Ordinal);
         foreach (var ch in input.Channels)
@@ -107,6 +108,16 @@ public static class CoolingConfigLint
         }
         return result;
     }
+
+    // A persisted curves list can hold a null entry, and a curve a null outputs list; both are
+    // normalized once here so Analyze and Heal never see them. The input curves are not mutated.
+    private static LintInput Normalize(LintInput input) => input with
+    {
+        Curves = input.Curves
+            .Where(c => c is not null)
+            .Select(c => c.Outputs is null ? CloneCurve(c) : c)
+            .ToList(),
+    };
 
     private readonly record struct Found(string Kind, string RootId, string RootName);
 
@@ -303,6 +314,7 @@ public static class CoolingConfigLint
     /// </summary>
     public static HealResult? Heal(LintInput input, IReadOnlyList<LintHazard> hazards)
     {
+        input = Normalize(input);
         var cpuInput = PickGuardInput(input.Curves.FirstOrDefault(c => c.Id == GuardCurveId), input.Sources);
         var legacy = input.Curves.Where(IsLegacyGuardCurve).ToList();
         if (cpuInput is null || (hazards.Count == 0 && legacy.Count == 0))

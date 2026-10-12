@@ -1062,7 +1062,7 @@ public sealed class UpdateService : BackgroundService
         {
             SetProgressFailed("Install cancelled.", manifest.Version);
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         catch (Exception ex)
@@ -1071,7 +1071,7 @@ public sealed class UpdateService : BackgroundService
             SetProgressFailed($"{ex.GetType().Name}: {ex.Message}", manifest.Version);
             UpdateStatusState("failed");
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         finally
@@ -1214,7 +1214,7 @@ public sealed class UpdateService : BackgroundService
         {
             SetProgressFailed("Install cancelled.", manifest.Version);
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         catch (Exception ex)
@@ -1223,7 +1223,7 @@ public sealed class UpdateService : BackgroundService
             SetProgressFailed($"{ex.GetType().Name}: {ex.Message}", manifest.Version);
             UpdateStatusState("failed");
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         finally

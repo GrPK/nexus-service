@@ -131,6 +131,7 @@ public class WebSocketHub
     {
         private readonly WebSocket _socket;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private readonly CancellationTokenSource _disposeCts = new();
 
         public ClientEntry(WebSocket socket) { _socket = socket; }
 
@@ -141,18 +142,31 @@ public class WebSocketHub
                 return;
             }
 
-            await _writeLock.WaitAsync();
+            var acquired = false;
             try
             {
+                await _writeLock.WaitAsync().WaitAsync(_disposeCts.Token);
+                acquired = true;
                 await _socket.SendAsync(payload, type, endOfMessage: true, CancellationToken.None);
             }
-            catch { /* peer dead, will be reaped on next ReceiveAsync */ }
+            catch { /* peer dead or entry disposed mid-send; reaped by the receive loop */ }
             finally
             {
-                _writeLock.Release();
+                if (acquired)
+                {
+                    try
+                    { _writeLock.Release(); }
+                    catch (ObjectDisposedException) { /* disposed while the send was in flight */ }
+                }
             }
         }
 
-        public void Dispose() => _writeLock.Dispose();
+        public void Dispose()
+        {
+            // Pending async waiters on a disposed SemaphoreSlim never complete, so SendAsync
+            // bounds its wait with this token via Task.WaitAsync.
+            _disposeCts.Cancel();
+            _writeLock.Dispose();
+        }
     }
 }

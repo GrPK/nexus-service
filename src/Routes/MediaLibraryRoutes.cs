@@ -273,7 +273,7 @@ public static class MediaLibraryRoutes
                     if (registry is null ||
                         !await Nexus.Service.Helper.Domains.FileDialogCommands.OpenFolderAsync(registry, dir))
                     {
-                        return Results.Problem("no interactive user session");
+                        return Results.Problem("no interactive user session", statusCode: StatusCodes.Status503ServiceUnavailable);
                     }
 
                     return Results.Ok(new MediaPlayResponse());

@@ -18,7 +18,7 @@ namespace Nexus.Service.Helper;
 /// typed JSON send call.
 ///
 /// HelperClientLoop pumps the active pipe in and out of this via
-/// <see cref="SetActivePipe"/>. While disconnected, sends are dropped
+/// <see cref="SetActivePipe"/>. While disconnected, sends and replies are dropped
 /// (one-way telemetry is fire-and-forget; transient drops during a service
 /// restart are acceptable trade-off for not needing an unbounded buffer).
 /// </summary>
@@ -43,7 +43,7 @@ public sealed class HelperOutbound
 
     /// <summary>
     /// Tear down the current pipe reference. Acquires the write lock so
-    /// any in-flight <see cref="SendAsync{T}"/> completes before we hand
+    /// any in-flight send or reply completes before we hand
     /// control back to the caller (who then disposes the pipe). After
     /// this returns, no new send can latch onto the dying pipe.
     /// </summary>
@@ -55,6 +55,22 @@ public sealed class HelperOutbound
     }
 
     public bool IsConnected => Volatile.Read(ref _activePipe)?.IsConnected == true;
+
+    /// <summary>Replies share the telemetry lock: a frame is two pipe writes, and an
+    /// interleaved writer desyncs the service's reader. Drops replies to a stale pipe.</summary>
+    internal async Task WriteReplyAsync(NamedPipeClientStream pipe, byte[] bytes, CancellationToken ct)
+    {
+        await _writeLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!ReferenceEquals(Volatile.Read(ref _activePipe), pipe) || !pipe.IsConnected) return;
+            await Framing.WriteFrameAsync(pipe, bytes, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
 
     public async Task SendAsync<T>(string type, T payload, JsonTypeInfo<T> payloadType, CancellationToken ct = default)
     {

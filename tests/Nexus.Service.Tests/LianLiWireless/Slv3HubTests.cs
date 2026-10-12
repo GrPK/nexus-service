@@ -2022,7 +2022,7 @@ public class Slv3HubTests
     }
 
     [Fact]
-    public void A_busy_rx_that_a_reopen_does_not_clear_is_reset_via_tx_on_the_backoff()
+    public void A_busy_rx_that_a_reopen_does_not_clear_keeps_reopening_without_a_reset()
     {
         var clock = new ManualClock();
         var net = new FakeSlv3Network();
@@ -2047,14 +2047,17 @@ public class Slv3HubTests
         Assert.Equal(2, rxOpens);
         Assert.DoesNotContain(tx.SentFrames, f => f.Length >= 1 && f[0] == Slv3Protocol.UsbResetAnother);
 
-        clock.AdvanceMs(5_000);
-        for (var i = 0; i < 60; i++) Assert.True(hub.PollTick());
-        Assert.Single(tx.SentFrames, f => f.Length >= 1 && f[0] == Slv3Protocol.UsbResetAnother);
+        for (var round = 0; round < 3; round++)
+        {
+            clock.AdvanceMs(60_000);
+            for (var i = 0; i < 60; i++) Assert.True(hub.PollTick());
+        }
+        Assert.Equal(5, rxOpens);
+        Assert.DoesNotContain(tx.SentFrames, f => f.Length >= 1 && f[0] == Slv3Protocol.UsbResetAnother);
         Assert.Single(hub.State.Fans);
 
         rx.BusyReads = false;
         Assert.True(hub.PollTick());
-        Assert.Equal(3, rxOpens);
         Assert.False(Assert.Single(hub.State.Fans).Stale);
     }
 

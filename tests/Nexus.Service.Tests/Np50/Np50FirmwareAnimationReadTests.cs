@@ -46,6 +46,35 @@ public class Np50FirmwareAnimationReadTests
     }
 
     [Fact]
+    public async Task A_route_read_waits_for_an_in_flight_heartbeat_exchange()
+    {
+        using var heartbeatReading = new ManualResetEventSlim();
+        using var releaseHeartbeat = new ManualResetEventSlim();
+        var hub = NewHub(out var transport, GoodHubInfo);
+        transport.NextRead = () =>
+        {
+            if (transport.Writes[^1][2] == 0x0D)
+                return new byte[] { 0xFF, 0xCC, 0x0D, Np50Protocol.FwAnimationColor, 1, 2, 3, 40 };
+            heartbeatReading.Set();
+            releaseHeartbeat.Wait();
+            return GoodHubInfo();
+        };
+
+        var heartbeat = Task.Run(hub.PollHubInfo);
+        Assert.True(heartbeatReading.Wait(TimeSpan.FromSeconds(5)));
+        var route = Task.Run(hub.GetFirmwareAnimation);
+
+        // The route's request must not reach the wire while the heartbeat awaits its reply.
+        await Task.WhenAny(route, Task.Delay(200));
+        Assert.False(route.IsCompleted);
+        Assert.Single(transport.Writes);
+
+        releaseHeartbeat.Set();
+        Assert.True(await heartbeat);
+        Assert.Equal(Np50Protocol.FwAnimationColor, (await route)!.Value.Animation);
+    }
+
+    [Fact]
     public void An_identical_write_is_skipped_when_0x0D_reports_it()
     {
         var hub = NewHub(out var transport, GoodHubInfo);

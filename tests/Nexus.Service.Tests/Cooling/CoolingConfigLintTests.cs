@@ -67,6 +67,29 @@ public class CoolingConfigLintTests
         AppJsonContext.Default.SetCurvesBody);
 
     [Fact]
+    public void AnalyzeAndHeal_NullCurveEntryAndNullOutputs_MatchTheCleanInput()
+    {
+        var clean = T1Curves();
+        clean.Add(new CurveDocument { Id = "mix", Name = "Mix", Type = "Mixed", Mixed = new MixedCurveData { CurveIds = { "broken", "sync-fan1" } } });
+        clean.Add(new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Flat = new FlatCurveData { Speed = 50 } });
+
+        var dirty = T1Curves();
+        dirty.Insert(0, null!);
+        dirty.Add(new CurveDocument { Id = "mix", Name = "Mix", Type = "Mixed", Mixed = new MixedCurveData { CurveIds = { "broken", "sync-fan1" } } });
+        dirty.Add(new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Flat = new FlatCurveData { Speed = 50 }, Outputs = null! });
+
+        var expected = CoolingConfigLint.Analyze(Input(clean));
+        var actual = CoolingConfigLint.Analyze(Input(dirty));
+        Assert.Equal(expected, actual);
+        Assert.NotEmpty(actual);
+
+        var healedClean = CoolingConfigLint.Heal(Input(clean), expected)!;
+        var healedDirty = CoolingConfigLint.Heal(Input(dirty), actual)!;
+        Assert.Equal(healedClean.Healed, healedDirty.Healed);
+        Assert.Equal(Json(healedClean.Curves), Json(healedDirty.Curves));
+    }
+
+    [Fact]
     public void T1Config_SyncChainRootedAtGpuFan_FlagsEveryMotherboardFan()
     {
         var hazards = CoolingConfigLint.Analyze(Input(T1Curves()));
@@ -339,6 +362,27 @@ public class CoolingConfigLintTests
         Assert.False(undone.UndoAvailable);
         Assert.Empty(undone.Channels);
         Assert.Equal(before, Json(store.Load().Cooling.Curves));
+    }
+
+    [Fact]
+    public void ControllerHeal_WithANullCurveEntry_HealsAndSnapshotsWithoutIt()
+    {
+        var fans = new LintFans(T1Channels(), Sources());
+        var store = new InMemoryConfigStore();
+        store.Update(s =>
+        {
+            s.Cooling.Curves.Add(null!);
+            s.Cooling.Curves.AddRange(T1Curves());
+        });
+        var controller = new ThermalGuardController(fans, store);
+
+        var healed = controller.HealNow(automatic: false);
+
+        Assert.True(healed.UndoAvailable);
+        Assert.Equal(4, healed.Channels.Count);
+        var cooling = store.Load().Cooling;
+        Assert.DoesNotContain(null, cooling.Curves);
+        Assert.DoesNotContain(null, cooling.HealSnapshot!);
     }
 
     [Fact]

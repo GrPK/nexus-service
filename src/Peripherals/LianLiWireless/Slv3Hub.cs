@@ -163,7 +163,8 @@ public sealed class Slv3Hub : IDisposable
     // A reply opening with 0 is the RX's "no device list this cycle". It does
     // this on its own every ~17 s for a few seconds and recovers without help,
     // so only a busy spell this long is treated as a wedge. A wedge gets a fresh
-    // RX handle; one with no good reply since the last RX recovery gets UsbResetAnother.
+    // RX handle, never UsbResetAnother: the reset re-enumerates the RX, a Windows
+    // device sound each time.
     private const int RxBusyPollsBeforeReset = 60;
     private int _rxBusyStreak;
     private byte[]? _firstBusyReply;
@@ -1663,8 +1664,7 @@ public sealed class Slv3Hub : IDisposable
             return true;
         }
         var first = _firstBusyReply is { } b ? Convert.ToHexString(b, 0, Math.Min(b.Length, Slv3Protocol.UsbPacketSize)) : "";
-        // Any earlier RX recovery with no good reply since makes this one reset the RX MCU.
-        return BeginRxRecoveryLocked($"{RxBusyPollsBeforeReset} consecutive busy GetDev replies (first {first})", resetViaTx: _rxRecoveries > 0);
+        return BeginRxRecoveryLocked($"{RxBusyPollsBeforeReset} consecutive busy GetDev replies (first {first})", resetViaTx: false);
     }
 
     // Only a good reply clears the busy and failure streaks, so an RX that
