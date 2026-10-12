@@ -30,6 +30,12 @@ public sealed class Np50Hub : IDisposable, IDfuFlashTarget
     private readonly INp50PortDiscovery _discovery;
     private readonly Func<Np50PortInfo, INp50Transport> _transportFactory;
     private readonly object _lock = new();
+
+    // Serializes request/response exchanges. The firmware-defaults/animation
+    // routes and FW Control exchange off the heartbeat thread, and an
+    // interleaved DiscardInput/Write/Read pair eats or misaligns the other's
+    // reply. Write-only frames (duty, LEDs) stay outside it.
+    private readonly object _exchangeLock = new();
     private INp50Transport? _transport;
     private bool _disposed;
 
@@ -444,29 +450,32 @@ public sealed class Np50Hub : IDisposable, IDfuFlashTarget
     {
         if (!EnsureConnected()) return false;
         var transport = _transport!;
-        if (!SendRequest(transport, operation, request)) return false;
+        lock (_exchangeLock)
+        {
+            if (!SendRequest(transport, operation, request)) return false;
 
-        try
-        {
-            var buf = new byte[expectedLength];
-            var n = transport.Read(buf, timeoutMs);
-            if (n < 2)
+            try
             {
-                return FailPoll(operation, $"short read ({n} bytes)");
+                var buf = new byte[expectedLength];
+                var n = transport.Read(buf, timeoutMs);
+                if (n < 2)
+                {
+                    return FailPoll(operation, $"short read ({n} bytes)");
+                }
+                parse(buf.AsSpan(0, n));
+                State.LastPollMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                _pollFailures.Reset();
+                return true;
             }
-            parse(buf.AsSpan(0, n));
-            State.LastPollMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            _pollFailures.Reset();
-            return true;
-        }
-        catch (ObjectDisposedException)
-        {
-            // Port was torn down by Dispose/Disconnect from another thread.
-            return false;
-        }
-        catch (Exception ex)
-        {
-            return FailPoll(operation, $"{ex.GetType().Name}: {ex.Message}");
+            catch (ObjectDisposedException)
+            {
+                // Port was torn down by Dispose/Disconnect from another thread.
+                return false;
+            }
+            catch (Exception ex)
+            {
+                return FailPoll(operation, $"{ex.GetType().Name}: {ex.Message}");
+            }
         }
     }
 
