@@ -49,12 +49,9 @@ public sealed class KrakenPanelDiscovery : IStreamedPanelDiscovery
                     CssWidth = _hub.LcdWidth,
                     CssHeight = _hub.LcdHeight,
                     Dpr = 1.0,
-                    // Frames go out Q565-compressed: 7-11 KB rather than 1.6 MB, so a full
-                    // bucket cycle measures ~8.5 ms median (13 ms worst) against the ~450 ms
-                    // a raw frame took. The wire would take more than this; 30 is the display
-                    // limit - a frame swaps the panel between two buckets, and driving that
-                    // swap harder reads as flicker.
-                    Fps = 30,
+                    // The Q565 models' rate is a display limit: a frame swaps buckets, and
+                    // driving that harder reads as flicker.
+                    Fps = _hub.Model.StreamFps,
                     Codec = StreamCodec.RawBgra,
                 },
             },
