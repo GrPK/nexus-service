@@ -44,6 +44,26 @@ public class KrakenModelTests
     }
 
     [Fact]
+    public void Only_the_2023_Elite_streams_on_the_direct_path()
+    {
+        Assert.Equal(new[] { 0x300C }, KrakenModel.All.Where(m => m.DirectStream).Select(m => m.ProductId));
+    }
+
+    [Fact]
+    public void Only_the_Z3_recreates_its_stream_buckets_at_fifteen_frames_a_second()
+    {
+        Assert.Equal(new[] { 0x3008 }, KrakenModel.All.Where(m => m.StreamRecreatesBuckets).Select(m => m.ProductId));
+        Assert.Equal(new[] { 0x3008 }, KrakenModel.All.Where(m => m.HasLcd && m.StreamFps != 30).Select(m => m.ProductId));
+        Assert.Equal(15, KrakenModel.Find(0x3008)!.StreamFps);
+    }
+
+    [Fact]
+    public void Only_the_Z3_plays_an_uploaded_gif()
+    {
+        Assert.Equal(new[] { 0x3008 }, KrakenModel.All.Where(m => m.FirmwareGif).Select(m => m.ProductId));
+    }
+
+    [Fact]
     public void Unknown_product_id_has_no_model()
     {
         Assert.Null(KrakenModel.Find(0x170E));

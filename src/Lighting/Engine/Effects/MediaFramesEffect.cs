@@ -24,10 +24,16 @@ public sealed class MediaFramesEffect : IEffect
     private bool _started;
 
     public MediaFramesEffect(string framesBinPath, int width, int height, int fps, PostProcessState? postProcess = null)
+        : this(File.Exists(framesBinPath) ? File.ReadAllBytes(framesBinPath) : Array.Empty<byte>(), width, height, fps, postProcess)
+    {
+    }
+
+    /// <summary>Plays frames already loaded by the caller (not copied).</summary>
+    public MediaFramesEffect(byte[] frames, int width, int height, int fps, PostProcessState? postProcess = null)
     {
         _frameWidth = Math.Max(1, width);
         _frameHeight = Math.Max(1, height);
-        _frames = File.Exists(framesBinPath) ? File.ReadAllBytes(framesBinPath) : Array.Empty<byte>();
+        _frames = frames;
         var perFrame = _frameWidth * _frameHeight * 3;
         _frameCount = perFrame > 0 ? _frames.Length / perFrame : 0;
         _frameDurationMs = fps > 0 ? 1000.0 / fps : 0;

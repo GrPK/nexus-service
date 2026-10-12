@@ -499,11 +499,20 @@ internal static class TrayBootstrap
             {
                 Nexus.Service.Helper.Domains.LockLightingCommands.SetLockInputWatchAsync(helperRegistry, demand.Armed).ObserveFaults();
             };
-            helperRegistry.InboundEnvelope += (_, env) =>
+            helperRegistry.InboundEnvelope += (conn, env) =>
             {
                 if (env.Type != Nexus.Service.Helper.Domains.LockLightingCommands.InputSeenType) return;
                 lockBlackout?.OnLockScreenInput();
-                deckWorker?.OnLockScreenInput();
+                // Off the read loop: the deck lock can be held across an icon
+                // round trip that only this loop can answer.
+                if (deckWorker is not null)
+                {
+                    _ = Task.Run(() =>
+                    {
+                        try { deckWorker.OnLockScreenInput(); }
+                        catch (Exception ex) { ServiceLog.Warn($"[streamdeck] lock-screen wake failed: {ex.Message}"); }
+                    });
+                }
                 sentry?.OnLockScreenInput();
             };
         }

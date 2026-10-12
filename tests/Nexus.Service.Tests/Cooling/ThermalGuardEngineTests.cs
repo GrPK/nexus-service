@@ -168,10 +168,10 @@ public class ThermalGuardEngineTests
     public void LockedChannelNexusDrives_IsRaisedByTheGuard_ButUncontrolledNever()
     {
         var (engine, fans, store, clock) = Build();
-        fans.Channels[0].Kind = FanKinds.Pump; // pumps are locked by default
+        fans.Channels[0].Kind = FanKinds.Pump; // pumps are pinned by default
         store.Update(s =>
         {
-            s.Cooling.FanLockOverrides["f2"] = true;
+            s.Cooling.FanPinOverrides["f2"] = true;
             s.Cooling.Curves.Add(Flat("f3", 10));
         });
         fans.Channels.Add(new FanChannel { Id = "f3", Name = "Fan 3" });
@@ -1103,7 +1103,7 @@ public class ThermalGuardEngineTests
     }
 
     [Fact]
-    public void Watchdog_ReleasesAfterTenSecondsWhenHot_ThirtyWhenCool()
+    public void Watchdog_ReleasesAfterTenSecondsWhenHot_OnlyOnceTheReadingIsStaleWhenCool()
     {
         var (_, fans, store, _) = Build();
         var (e, guard, mono) = WatchdogRig(fans, store);
@@ -1120,9 +1120,9 @@ public class ThermalGuardEngineTests
         fans2.CpuTemp = 50f;
         e2.Tick();
         guard2.TickCompleted();
-        guard2.WatchdogCheck(mono2[0] + 11_000);
+        guard2.WatchdogCheck(mono2[0] + 119_000);
         Assert.Equal(0, fans2.ReleaseAllCalls);
-        guard2.WatchdogCheck(mono2[0] + 31_000);
+        guard2.WatchdogCheck(mono2[0] + 121_000);
         Assert.Equal(1, fans2.ReleaseAllCalls);
     }
 

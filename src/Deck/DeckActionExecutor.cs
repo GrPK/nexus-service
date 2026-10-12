@@ -526,7 +526,6 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
             case "screen":
                 _lighting.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart
                 {
-                    Monitor = "",
                     Effect = "average",
                 });
                 break;

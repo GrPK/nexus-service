@@ -158,17 +158,17 @@ public sealed class FanChannel
     public int? MinDuty { get; set; }
     public string? Classification { get; set; }
     public bool Calibrated => MinRpm is not null;
-    /// <summary>True when the channel is exempt from Silent/Balanced/Turbo/Max/Off/Custom preset applies. An explicit user lock wins; otherwise pumps and GPU fans default locked. Computed from settings plus <see cref="IsGpu"/>.</summary>
-    public bool Locked { get; set; }
+    /// <summary>True when the channel is exempt from Silent/Balanced/Turbo/Max/Off/Custom preset applies. An explicit user pin wins; otherwise pumps and GPU fans default pinned. Computed from settings plus <see cref="IsGpu"/>.</summary>
+    public bool Pinned { get; set; }
     /// <summary>False when the user marked this channel not controlled: Nexus drives no duty onto it and no preset reclaims it, so the motherboard or a vendor app owns it. Computed from settings; not read from hardware.</summary>
     public bool Controlled { get; set; } = true;
     /// <summary>Duty points added to whatever drives this channel, in [-100,100]. Computed from settings; 0 when the channel has none. Surfaced so an imported offset is never invisible on the card.</summary>
     public int Offset { get; set; }
-    /// <summary>True when this channel belongs to an all-in-one liquid cooler - derived from the device exposing a pump head, not from its name. Read from hardware, like <see cref="IsGpu"/>; drives the default in <see cref="Nexus.Service.Cooling.FanProfiles.IsLockedByDefault"/>.</summary>
+    /// <summary>True when this channel belongs to an all-in-one liquid cooler - derived from the device exposing a pump head, not from its name. Read from hardware, like <see cref="IsGpu"/>; drives the default in <see cref="Nexus.Service.Cooling.FanProfiles.IsPinnedByDefault"/>.</summary>
     public bool IsAio { get; set; }
-    /// <summary>True when this channel is a fan on the graphics card, decided by the hardware the provider enumerated it from (LibreHardwareMonitor GpuNvidia/GpuAmd/GpuIntel on Windows, NVML on Linux) - never by its name. Read from hardware, unlike <see cref="Role"/>; drives the default in <see cref="Nexus.Service.Cooling.FanProfiles.IsLockedByDefault"/>.</summary>
+    /// <summary>True when this channel is a fan on the graphics card, decided by the hardware the provider enumerated it from (LibreHardwareMonitor GpuNvidia/GpuAmd/GpuIntel on Windows, NVML on Linux) - never by its name. Read from hardware, unlike <see cref="Role"/>; drives the default in <see cref="Nexus.Service.Cooling.FanProfiles.IsPinnedByDefault"/>.</summary>
     public bool IsGpu { get; set; }
-    /// <summary>Display/monitoring-grouping role: one of <see cref="FanRoleKind.None"/> / <see cref="FanRoleKind.Cpu"/> / <see cref="FanRoleKind.Gpu"/>. Computed from settings; not read from hardware. Never affects fan control, locking, or preset logic.</summary>
+    /// <summary>Display/monitoring-grouping role: one of <see cref="FanRoleKind.None"/> / <see cref="FanRoleKind.Cpu"/> / <see cref="FanRoleKind.Gpu"/>. Computed from settings; not read from hardware. Never affects fan control, pinning, or preset logic.</summary>
     public string Role { get; set; } = FanRoleKind.None;
     /// <summary>The hardware name <see cref="Name"/> replaced, set only on a renamed channel. Null means <see cref="Name"/> IS the hardware name.</summary>
     public string? OriginalName { get; set; }
@@ -298,9 +298,9 @@ public sealed class SetFanNameBody
     public string Name { get; set; } = "";
 }
 
-public sealed class SetFanLockBody
+public sealed class SetFanPinBody
 {
-    public bool Locked { get; set; }
+    public bool Pinned { get; set; }
 }
 
 /// <summary>Body for POST /cooling/fan/{id}/controlled. False hands the channel back to the motherboard and keeps every preset off it.</summary>

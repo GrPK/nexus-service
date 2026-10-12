@@ -90,11 +90,14 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _gates = gates ?? FeatureGates.AllEnabled;
         _store = store;
         _engine = engine;
-        // The engine renders per-device Static assignments but must not know how
-        // to build a shader; hand it the same builder StartStatic uses.
-        _engine.StaticEffectFactory = a => BuildAnimateEffect(
-            a.Effect, 0f, a.Intensity, a.Hue, a.Colorize, a.Saturation, a.Contrast,
+        // The engine renders per-device pins but must not know how to build a
+        // shader; hand it the same builders the modes use.
+        _engine.StaticPinEffectFactory = a => BuildAnimateEffect(
+            a.Effect ?? "", 0f, DevicePinLook.Intensity(a), a.Hue ?? 0f, a.Colorize ?? 0f, DevicePinLook.Saturation(a), DevicePinLook.Contrast(a),
             a.Params is null ? null : new System.Collections.Generic.Dictionary<string, float>(a.Params));
+        _engine.PinLookTag = PinTag;
+        _engine.PinEffectFactory = BuildPinnedEffect;
+        _sharedSource = frameSource is null ? null : new SharedScreenFrameSource(frameSource);
         _hub = hub;
         _rgb = rgb;
         _gpu = gpu;
@@ -105,11 +108,15 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _beats = beats;
 
         var s = _store.Load().Lighting;
+        _mirrorMonitor = s.ScreenMonitor ?? "";
         _screenPP.Set(s.ScreenEffect.Hue, s.ScreenEffect.Colorize, s.ScreenEffect.Saturation, s.ScreenEffect.Contrast, s.ScreenEffect.FlipX, s.ScreenEffect.FlipY, s.ScreenEffect.Reactive, s.ScreenEffect.Reactivity, s.ScreenEffect.Intensity);
         _mediaPP.Set(s.MediaEffect.Hue, s.MediaEffect.Colorize, s.MediaEffect.Saturation, s.MediaEffect.Contrast, s.MediaEffect.FlipX, s.MediaEffect.FlipY);
 
         _engine.OnFrame += frame => _ = _hub.BroadcastBinaryAsync(frame);
         _engine.OnEffectChanged += ReconcileAudioCapture;
+        // Any settings write can move a pinned effect's look, the pin set, or the mirrored screen.
+        _store.OnChanged += RefreshPinnedLooks;
+        RefreshPinnedLooks();
         _scanner?.OnScanComplete = OnGameScanComplete;
     }
 
@@ -118,13 +125,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     /// bridge is null on platforms without an OpenRGB binary (macOS / Linux),
     /// in which case the call is a no-op.
     /// </summary>
-    // Every mode start routes through here, so clearing the Static ownership
-    // flag in one place means a new mode can never inherit per-device colours
-    // (locked looks excepted - the tracker keeps honouring those);
-    // StartStatic re-asserts it immediately after.
     private void EnsureRgbActive()
     {
-        _engine.StaticEffects?.Enabled = false;
         // Only simple mode's sweep set samples every device across the whole
         // canvas; StartAnimate re-asserts it, so a mode start cannot inherit it.
         _engine.FullFrameSampling = false;
@@ -163,7 +165,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
         lock (_audioCaptureLock)
         {
-            var forLeds = _store.Load().Lighting.MusicReactive && ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName);
+            var music = _store.Load().Lighting.MusicReactive;
+            var forLeds = music && (ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName) || _pinnedAudio);
             if (forLeds || Volatile.Read(ref _audioCaptureDemand) > 0)
             {
                 _beats.Start();
@@ -297,6 +300,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     {
         Effects = new[] { "average" },
         Monitors = _monitors.Enumerate(),
+        SelectedMonitor = _mirrorMonitor,
         // On Linux the Wayland portal owns screen selection (the app can't pick a
         // monitor for the user), so the client offers a "Change screen" action
         // that re-opens the system picker rather than a monitor dropdown.
@@ -439,8 +443,16 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             return;
         }
+        if (!string.IsNullOrEmpty(body.Color) && !StaticColorHex.TryParse(body.Color, out _, out _, out _))
+        {
+            throw new System.ArgumentException($"'{body.Color}' is not a #rrggbb color", nameof(body));
+        }
         EnsureRgbActive();
-        _engine.StaticEffects?.Enabled = true;
+        if (StaticColorHex.TryParse(body.Color, out var flatR, out var flatG, out var flatB))
+        {
+            StartFlatStatic(body, flatR, flatG, flatB);
+            return;
+        }
         var name = (body.Effect ?? "").ToLowerInvariant();
         if (!StaticEffectCatalog.Contains(name))
         {
@@ -493,6 +505,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             s.Lighting.Sync = "static";
             s.Lighting.Static.Effect = name;
+            s.Lighting.Static.Color = null;
             var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, name);
             // The slot carries an animate speed and may carry intensity 0; both
             // are coerced here so an untouched look still compares equal and
@@ -515,6 +528,27 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             {
                 s.Lighting.Static.States[name] = incoming;
             }
+            LightingPresetLooks.CaptureIntoActive(s);
+        });
+    }
+
+    /// <summary>The global Static look as one exact flat color: every unpinned device shows it.</summary>
+    private void StartFlatStatic(StaticHeadlessStart body, byte r, byte g, byte b)
+    {
+        _engine.SetEffect(new FlatColorEffect(r, g, b));
+        _engine.SetFrozen(true);
+        if (!body.Persist)
+        {
+            return;
+        }
+        var hex = $"#{r:x2}{g:x2}{b:x2}";
+        _store.Update(s =>
+        {
+            s.Lighting.Sync = "static";
+            s.Lighting.Static.Color = hex;
+            s.Lighting.StaticColor.R = r;
+            s.Lighting.StaticColor.G = g;
+            s.Lighting.StaticColor.B = b;
             LightingPresetLooks.CaptureIntoActive(s);
         });
     }
@@ -701,6 +735,263 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             ReapplyActiveLook();
         }
+    }
+
+    // Immutable look per pinned Animate effect, resolved off the engine thread and
+    // published by reference swap; the engine only ever reads this.
+    private sealed record PinnedLook(Nexus.Service.Persistence.AnimateEffectState State, string Tag);
+    private volatile System.Collections.Generic.Dictionary<string, PinnedLook> _pinnedLooks = new();
+    private volatile bool _pinnedAudio;
+    private long _pinnedLooksSeq;
+
+    // The one screen capture. The global Mirror effect and the mirror-pin effect
+    // each take a handle, so the capture runs once and closes with its last user.
+    private readonly SharedScreenFrameSource? _sharedSource;
+    // Monitor and its pin tag change together, so a reader never sees one
+    // without the other and the per-tick tag lookup allocates nothing.
+    private sealed record MirrorSelection(string Monitor, string Tag);
+    private volatile MirrorSelection _mirrorSel = new("", "m|");
+    private string _mirrorMonitor
+    {
+        get => _mirrorSel.Monitor;
+        set => _mirrorSel = new MirrorSelection(value, "m|" + value);
+    }
+    private static readonly string EmptyMediaTag = MediaTag("");
+    // The media item pinned devices play, loaded off the engine thread and
+    // published by reference swap. Null when no media pin exists.
+    private sealed record PinnedMedia(string Id, string Tag, int Width, int Height, int Fps, byte[]? Frames);
+    private volatile PinnedMedia? _pinnedMedia;
+
+    private IScreenFrameSource? ScreenSource() => _sharedSource is null ? _frameSource : _sharedSource.CreateHandle();
+
+    private string? PinTag(string key) =>
+        key == LightingEngine.MirrorPinKey
+            ? _mirrorSel.Tag
+            : key == LightingEngine.MediaPinKey
+                ? _pinnedMedia?.Tag ?? EmptyMediaTag
+                : _pinnedLooks.TryGetValue(key, out var l) ? l.Tag : null;
+
+    /// <summary>
+    /// Re-resolves every pinned Animate effect's look the way the active effect
+    /// does (<see cref="ActiveLookTag"/>: the selected preset slot) from a copy
+    /// taken under the store lock, then re-evaluates audio capture. Runs on
+    /// whichever thread wrote settings, never the engine thread.
+    /// </summary>
+    private void RefreshPinnedLooks()
+    {
+        // A profile apply or cloud pull replaces the persisted screen.
+        var persisted = _store.Load().Lighting;
+        _mirrorMonitor = persisted.ScreenMonitor ?? "";
+        var next = new System.Collections.Generic.Dictionary<string, PinnedLook>(System.StringComparer.Ordinal);
+        var mediaWanted = false;
+        var mediaId = "";
+        long mediaSeq = 0;
+        _store.Read(s =>
+        {
+            // Read in the same locked snapshot; the sequence orders snapshots.
+            mediaSeq = System.Threading.Interlocked.Increment(ref _mediaSeq);
+            mediaId = s.Lighting.LastMediaId ?? "";
+            foreach (var mp in s.Lighting.DevicePins.Values)
+            {
+                if (mp?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+                {
+                    mediaWanted = true;
+                    break;
+                }
+            }
+            foreach (var pin in s.Lighting.DevicePins.Values)
+            {
+                var key = pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate ? pin.Effect : null;
+                if (string.IsNullOrEmpty(key) || next.ContainsKey(key))
+                {
+                    continue;
+                }
+                var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, key);
+                if (slot is null && ShaderLibrary.IsSweepEffect(key))
+                {
+                    // Simple mode's sweeps have no preset bundle: use what simple
+                    // mode last persisted for them, else the plain defaults.
+                    slot = s.Lighting.Animate.States.TryGetValue(key, out var persisted) && persisted is not null
+                        ? persisted
+                        : new Nexus.Service.Persistence.AnimateEffectState();
+                }
+                if (slot is null)
+                {
+                    continue;
+                }
+                var copy = new Nexus.Service.Persistence.AnimateEffectState
+                {
+                    Speed = slot.Speed,
+                    Intensity = slot.Intensity,
+                    Hue = slot.Hue,
+                    Colorize = slot.Colorize,
+                    Saturation = slot.Saturation,
+                    Contrast = slot.Contrast,
+                    Params = slot.Params is null
+                        ? new()
+                        : new System.Collections.Generic.Dictionary<string, float>(slot.Params),
+                };
+                next[key] = new PinnedLook(copy, HashSlot(copy));
+            }
+        });
+        var audio = false;
+        foreach (var key in next.Keys)
+        {
+            audio |= ShaderLibrary.IsAudioEffect(key);
+        }
+        bool audioChanged;
+        lock (_mediaLoadLock)
+        {
+            // An older snapshot never publishes over a newer one.
+            if (mediaSeq < _pinnedLooksSeq)
+            {
+                return;
+            }
+            _pinnedLooksSeq = mediaSeq;
+            _pinnedLooks = next;
+            audioChanged = _pinnedAudio != audio;
+            _pinnedAudio = audio;
+        }
+        LoadPinnedMedia(mediaWanted, mediaId, mediaSeq);
+        // With no pins, a settings write leaves capture alone unless this cleared it.
+        if (next.Count > 0 || audioChanged)
+        {
+            ReconcileAudioCapture();
+        }
+    }
+
+    // The loaded flag changes the tag when a retried load succeeds for the same id.
+    private static string MediaTag(string id, bool loaded = false) => "md|" + id + (loaded ? "|1" : "");
+
+    private readonly object _mediaLoadLock = new();
+    private long _mediaSeq;
+    private long _mediaPublishedSeq;
+
+    /// <summary>
+    /// Loads the media item media pins play (meta and frame bytes) on the calling
+    /// thread, only when a media pin exists and the item changed, so the engine
+    /// thread never touches the disk. The inputs come from a locked settings
+    /// snapshot taken by the caller; <paramref name="seq"/> orders snapshots so a
+    /// slow load of an older one never publishes over a newer one. The snapshot
+    /// is kept while global Media is active, so switching away does not rebuild
+    /// pins from black. A failed load is retried on the next refresh. Nothing in
+    /// here touches the store, so no change notification fires under the lock.
+    /// </summary>
+    private void LoadPinnedMedia(bool wanted, string id, long seq)
+    {
+        lock (_mediaLoadLock)
+        {
+            if (seq < _mediaPublishedSeq)
+            {
+                return;
+            }
+            _mediaPublishedSeq = seq;
+            if (!wanted)
+            {
+                _pinnedMedia = null;
+                return;
+            }
+            if (_pinnedMedia is { } current && current.Id == id && (current.Frames is not null || id.Length == 0))
+            {
+                return;
+            }
+            var item = id.Length == 0 ? null : _media.GetItem(id);
+            byte[]? frames = null;
+            if (item is not null)
+            {
+                try
+                {
+                    var path = _media.GetFramesBinPath(id);
+                    if (System.IO.File.Exists(path))
+                    {
+                        frames = System.IO.File.ReadAllBytes(path);
+                    }
+                }
+                catch (Exception)
+                {
+                    frames = null;
+                }
+            }
+            _pinnedMedia = frames is null || item is null
+                ? new PinnedMedia(id, MediaTag(id), 0, 0, 0, null)
+                : new PinnedMedia(id, MediaTag(id, loaded: true), item.Width, item.Height, item.Fps, frames);
+        }
+    }
+
+    /// <summary>
+    /// Builds, or updates in place, the source a pinned device runs: the shared
+    /// screen-capture effect for a mirror pin, the shared Media item for a media
+    /// pin, else the pinned Animate shader. In place updates mirror
+    /// <see cref="ReapplyActiveLook"/>, so a slider drag does not recompile the
+    /// shader.
+    /// </summary>
+    private IEffect? BuildPinnedEffect(string effect, IEffect? existing)
+    {
+        if (effect == LightingEngine.MirrorPinKey)
+        {
+            // A monitor change since the instance was built needs a new capture.
+            // One read, so the tag always names the monitor the instance captures.
+            var sel = _mirrorSel;
+            var monitor = sel.Monitor;
+            var mirrorTag = sel.Tag;
+            if (existing is not null && mirrorTag == _builtMirrorTag)
+            {
+                return existing;
+            }
+            _builtMirrorTag = mirrorTag;
+            return new ScreenMirrorEffect(monitor, _screenPP, ScreenSource(), _gpu);
+        }
+        if (effect == LightingEngine.MediaPinKey)
+        {
+            return BuildPinnedMedia(existing);
+        }
+        if (!_pinnedLooks.TryGetValue(effect, out var pinned))
+        {
+            return null;
+        }
+        var look = pinned.State;
+        var speed = (float)(look.Speed / 50.0);
+        var intensity = look.Intensity > 0 ? look.Intensity : 1f;
+        var extras = look.Params is { Count: > 0 }
+            ? new System.Collections.Generic.Dictionary<string, float>(look.Params)
+            : null;
+        if (existing is ShaderEffect cur && cur.Name == effect)
+        {
+            cur.Speed = effect == "pulse" ? speed * 0.5f : speed;
+            cur.Intensity = intensity;
+            cur.Hue = look.Hue;
+            cur.Colorize = look.Colorize;
+            cur.Saturation = look.Saturation;
+            cur.Contrast = look.Contrast;
+            cur.ExtraParams = extras;
+            return cur;
+        }
+        return BuildAnimateEffect(effect, speed, intensity, look.Hue, look.Colorize, look.Saturation, look.Contrast, extras);
+    }
+
+    private string? _builtMirrorTag;
+    private string? _builtMediaTag;
+
+    /// <summary>
+    /// The one Media source for a media pin: the item global Media mode plays,
+    /// through the same post-process. With no playable item it renders what idle
+    /// Media does. A new item since the instance was built needs a new one.
+    /// </summary>
+    private IEffect BuildPinnedMedia(IEffect? existing)
+    {
+        // One read, so the tag always names the item the instance plays.
+        var snapshot = _pinnedMedia;
+        var tag = snapshot?.Tag ?? EmptyMediaTag;
+        if (existing is not null && tag == _builtMediaTag)
+        {
+            return existing;
+        }
+        _builtMediaTag = tag;
+        if (snapshot?.Frames is { } frames)
+        {
+            return new MediaFramesEffect(frames, snapshot.Width, snapshot.Height, snapshot.Fps, _mediaPP);
+        }
+        return new Engine.Effects.BlackEffect();
     }
 
     /// <summary>Content tag of the slot currently driving the LEDs, or null when no animate effect is active.</summary>
@@ -1100,6 +1391,17 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             return;
         }
+        if (body.KeepMode
+            && !string.Equals(_store.Load().Lighting.Sync, "screen", StringComparison.OrdinalIgnoreCase))
+        {
+            // Only the shared capture's screen moves; mirror pins rebuild on the new tag.
+            if (body.Monitor is not null)
+            {
+                _store.Update(s => s.Lighting.ScreenMonitor = body.Monitor);
+                _mirrorMonitor = body.Monitor;
+            }
+            return;
+        }
         EnsureRgbActive();
         _engine.FrameIntervalMs = 16;
         // Do NOT overwrite _screenPP from body. The post-process holder is the
@@ -1108,7 +1410,13 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // client calls /start with empty post-process fields before it has
         // fetched the current values, overwriting here would silently clobber
         // the user's saved look back to identity on every mode swap.
-        _engine.SetEffect(new ScreenMirrorEffect(body.Monitor, _screenPP, _frameSource, _gpu));
+        if (body.Monitor is not null)
+        {
+            // Persist first: the settings-change handler re-reads the monitor from the store.
+            _store.Update(s => s.Lighting.ScreenMonitor = body.Monitor);
+            _mirrorMonitor = body.Monitor;
+        }
+        _engine.SetEffect(new ScreenMirrorEffect(_mirrorMonitor, _screenPP, ScreenSource(), _gpu));
         _store.Update(s =>
         {
             s.Lighting.Sync = "screen";
@@ -1294,6 +1602,33 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _store.Update(s =>
         {
             s.Lighting.Sync = "media";
+            s.Lighting.LastMediaId = mediaId;
+            LightingPresetLooks.CaptureIntoActive(s);
+        });
+        return true;
+    }
+
+    public bool StartMedia(string mediaId, bool keepMode)
+    {
+        if (!keepMode)
+        {
+            return StartMedia(mediaId);
+        }
+        if (!_gates.Lighting)
+        {
+            return false;
+        }
+        // Global Media is showing the old item, so it follows the change.
+        if (string.Equals(_store.Load().Lighting.Sync, "media", StringComparison.OrdinalIgnoreCase))
+        {
+            return StartMedia(mediaId);
+        }
+        if (_media.GetItem(mediaId) is null || !System.IO.File.Exists(_media.GetFramesBinPath(mediaId)))
+        {
+            return false;
+        }
+        _store.Update(s =>
+        {
             s.Lighting.LastMediaId = mediaId;
             LightingPresetLooks.CaptureIntoActive(s);
         });

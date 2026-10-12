@@ -80,9 +80,6 @@ public sealed class McpSetStaticColorResult
 {
     /// <summary>Echoes the requested color as "#rrggbb".</summary>
     public string Color { get; set; } = "";
-
-    /// <summary>Friendly name of the built-in preset the color snapped to (e.g. "red").</summary>
-    public string Preset { get; set; } = "";
 }
 
 /// <summary>Payload for the set_brightness MCP tool.</summary>

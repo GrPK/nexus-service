@@ -79,6 +79,9 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 // still existed, so this is not a fresh install for the v8
                 // OnboardingCompleted migration below.
                 _cached ??= new NexusSettings { SchemaVersion = 0 };
+                // Pre-pin per-device locks and fan locks fold into pins before
+                // anything reads the document; a no-op once migrated.
+                var pinsMigrated = Nexus.Service.Lighting.PinMigration.Apply(_cached);
                 if (_cached.SchemaVersion < NexusSettings.CurrentSchemaVersion)
                 {
                     Migrate(_cached);
@@ -87,7 +90,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 }
                 else
                 {
-                    var recovered = false;
+                    var recovered = pinsMigrated;
                     if (NeedsDeckModesRecovery(_cached))
                     {
                         // A downgrade to a pre-deck-modes build (then a re-upgrade)
@@ -336,6 +339,14 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         try
         { OnChanged?.Invoke(); }
         catch (Exception ex) { Console.Error.WriteLine($"[config-store] OnChanged handler threw: {ex.Message}"); }
+    }
+
+    public void Read(Action<NexusSettings> reader)
+    {
+        lock (_lock)
+        {
+            reader(_cached ?? Load());
+        }
     }
 
     public void Reload()

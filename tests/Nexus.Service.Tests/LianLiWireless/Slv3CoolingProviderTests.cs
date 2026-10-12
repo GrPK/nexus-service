@@ -151,7 +151,7 @@ public class Slv3CoolingProviderTests
         var pump = Assert.Single(provider.GetFanChannels());
         Assert.Equal(2100, pump.Rpm);
         Assert.Equal(FanModes.Auto, pump.Mode);
-        Assert.True(FanProfiles.IsLockedByDefault(pump));
+        Assert.True(FanProfiles.IsPinnedByDefault(pump));
         var liquid = Assert.Single(provider.GetTemperatureSources());
         Assert.Equal("Cooler", liquid.Category);
         Assert.Equal(31f, liquid.Value);

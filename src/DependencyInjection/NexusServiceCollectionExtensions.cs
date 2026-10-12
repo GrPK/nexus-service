@@ -550,7 +550,7 @@ public static class NexusServiceCollectionExtensions
 
     public static IServiceCollection AddNexusLighting(this IServiceCollection services)
     {
-        services.AddSingleton<Nexus.Service.Lighting.StaticDeviceEffectTracker>();
+        services.AddSingleton<Nexus.Service.Lighting.DevicePinTracker>();
         services.AddSingleton<Nexus.Service.Lighting.LedColorLockTracker>();
         services.AddSingleton<Nexus.Service.Lighting.KeyReactive.KeyReactiveOverlay>();
         services.AddSingleton<LightingEngine>(sp =>
@@ -558,7 +558,7 @@ public static class NexusServiceCollectionExtensions
             // Property, not ctor: the engine is constructed directly in tests
             // and by hosts that assign no per-device colours.
             var engine = new LightingEngine();
-            engine.StaticEffects = sp.GetRequiredService<Nexus.Service.Lighting.StaticDeviceEffectTracker>();
+            engine.Pins = sp.GetRequiredService<Nexus.Service.Lighting.DevicePinTracker>();
             engine.LedColorLocks = sp.GetRequiredService<Nexus.Service.Lighting.LedColorLockTracker>();
             engine.KeyReactive = sp.GetRequiredService<Nexus.Service.Lighting.KeyReactive.KeyReactiveOverlay>();
             engine.SetStackSlots(sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>().Load().Lighting.DeviceStacks);
@@ -938,13 +938,19 @@ public static class NexusServiceCollectionExtensions
             // App icons come from the user-session helper; keys painted and
             // Deck widget icons fetched before it connects carry the generic
             // fallback until this repaint and the "icons" refetch.
+            // Connected raises before the pipe's read loop starts, so the
+            // repaint's blocking icon round trips run on the pool.
             var helperRegistry = sp.GetService<Nexus.Service.Helper.HelperRegistry>();
             var deckHub = sp.GetRequiredService<Nexus.Service.Sockets.MultiplexHub>();
-            helperRegistry?.Connected += _ =>
+            helperRegistry?.Connected += conn => _ = Task.Run(() =>
             {
-                worker.OnHelperConnected();
-                Nexus.Service.Sockets.PanelTopics.BroadcastDeck(deckHub, new Nexus.Service.Models.Deck.DeckChangedFrame { Kind = "icons" });
-            };
+                try
+                {
+                    worker.OnHelperConnected();
+                    Nexus.Service.Sockets.PanelTopics.BroadcastDeck(deckHub, new Nexus.Service.Models.Deck.DeckChangedFrame { Kind = "icons" });
+                }
+                catch (Exception ex) { ServiceLog.Warn($"[streamdeck] helper-connect repaint failed: {ex.Message}"); }
+            });
 #endif
             return worker;
         });

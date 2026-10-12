@@ -59,6 +59,14 @@ internal sealed class TestableConfigStore : IConfigStore
         }
     }
 
+    public void Read(Action<NexusSettings> reader)
+    {
+        lock (_lock)
+        {
+            reader(_cached ?? Load());
+        }
+    }
+
     public void Update(Action<NexusSettings> mutator)
     {
         lock (_lock)
