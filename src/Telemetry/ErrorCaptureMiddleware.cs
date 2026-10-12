@@ -1,5 +1,6 @@
 using System;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
@@ -29,8 +30,12 @@ internal static class ErrorCaptureMiddleware
     {
         // Marked even when skipped, so the logger provider never reports the same exception.
         try { ex.Data[ErrorKinds.ReportedMarker] = true; } catch { /* read-only Data */ }
-        if (ex is OperationCanceledException || ctx.RequestAborted.IsCancellationRequested)
+        // Client faults: the peer dropped the connection, or Kestrel rejects the body with a 4xx.
+        if (ex is OperationCanceledException or ConnectionResetException or BadHttpRequestException
+            || ctx.RequestAborted.IsCancellationRequested)
+        {
             return false;
+        }
         reporter.Report(ex, ErrorKinds.Request, RoutePattern(ctx));
         return false;
     }
