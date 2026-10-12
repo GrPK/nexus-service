@@ -1816,7 +1816,7 @@
         }
       }
     },
-    "/cooling/fan/{id}/lock": {
+    "/cooling/fan/{id}/pin": {
       "post": {
         "tags": [
           "Nexus"
@@ -1835,7 +1835,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SetFanLockBody"
+                "$ref": "#/components/schemas/SetFanPinBody"
               }
             }
           },
@@ -4544,11 +4544,31 @@
         }
       }
     },
-    "/devices/lighting-devices/static-looks": {
+    "/devices/lighting-devices/pins": {
       "get": {
         "tags": [
           "Nexus"
         ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Nexus"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDevicePinsBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "OK"
@@ -4831,28 +4851,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SetLightingDeviceColor"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
-      }
-    },
-    "/devices/lighting-devices/static-lock": {
-      "post": {
-        "tags": [
-          "Nexus"
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetStaticLockBody"
               }
             }
           },
@@ -17102,6 +17100,94 @@
           }
         }
       },
+      "DevicePin": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "effect": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "color": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "intensity": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "hue": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "colorize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "saturation": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "contrast": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "params": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+              "type": [
+                "number",
+                "string"
+              ],
+              "format": "float"
+            }
+          },
+          "slot": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
       "DiagnosticAppInfo": {
         "type": "object",
         "properties": {
@@ -18331,6 +18417,12 @@
           "rpmUnavailable": {
             "type": "boolean"
           },
+          "controlBlocked": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "minRpm": {
             "pattern": "^-?(?:0|[1-9]\\d*)$",
             "type": [
@@ -18367,7 +18459,7 @@
           "calibrated": {
             "type": "boolean"
           },
-          "locked": {
+          "pinned": {
             "type": "boolean"
           },
           "controlled": {
@@ -20094,6 +20186,69 @@
           }
         }
       },
+      "IdleDimBody": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "timeoutSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "level": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "IdleDimStatus": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "timeoutSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "level": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "screenOffSupported": {
+            "type": "boolean"
+          },
+          "osScreenOffSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
       "ImportOpenRgbConfigBody": {
         "type": "object",
         "properties": {
@@ -20168,7 +20323,7 @@
           }
         }
       },
-      "JsonElement": { },
+      "JsonElement": {},
       "KeebDefaults": {
         "type": "object",
         "properties": {
@@ -20952,6 +21107,15 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "frameIndex": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
           },
           "name": {
             "type": "string"
@@ -24561,69 +24725,6 @@
           }
         }
       },
-      "IdleDimBody": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "timeoutSeconds": {
-            "pattern": "^-?(?:0|[1-9]\\d*)$",
-            "type": [
-              "integer",
-              "string"
-            ],
-            "format": "int32"
-          },
-          "level": {
-            "pattern": "^-?(?:0|[1-9]\\d*)$",
-            "type": [
-              "integer",
-              "string"
-            ],
-            "format": "int32"
-          }
-        }
-      },
-      "IdleDimStatus": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "timeoutSeconds": {
-            "pattern": "^-?(?:0|[1-9]\\d*)$",
-            "type": [
-              "integer",
-              "string"
-            ],
-            "format": "int32"
-          },
-          "level": {
-            "pattern": "^-?(?:0|[1-9]\\d*)$",
-            "type": [
-              "integer",
-              "string"
-            ],
-            "format": "int32"
-          },
-          "supported": {
-            "type": "boolean"
-          },
-          "screenOffSupported": {
-            "type": "boolean"
-          },
-          "osScreenOffSeconds": {
-            "pattern": "^-?(?:0|[1-9]\\d*)$",
-            "type": [
-              "null",
-              "integer",
-              "string"
-            ],
-            "format": "int32"
-          }
-        }
-      },
       "RenderGpuBody": {
         "type": "object",
         "properties": {
@@ -25323,6 +25424,30 @@
           }
         }
       },
+      "SetDevicePinsBody": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "pin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DevicePin"
+              }
+            ]
+          }
+        }
+      },
       "SetDeviceStacksBody": {
         "type": "object",
         "properties": {
@@ -25338,14 +25463,6 @@
         "type": "object",
         "properties": {
           "controlled": {
-            "type": "boolean"
-          }
-        }
-      },
-      "SetFanLockBody": {
-        "type": "object",
-        "properties": {
-          "locked": {
             "type": "boolean"
           }
         }
@@ -25368,6 +25485,14 @@
               "string"
             ],
             "format": "int32"
+          }
+        }
+      },
+      "SetFanPinBody": {
+        "type": "object",
+        "properties": {
+          "pinned": {
+            "type": "boolean"
           }
         }
       },
@@ -25605,58 +25730,6 @@
               "string"
             ],
             "format": "float"
-          },
-          "effect": {
-            "type": "string"
-          },
-          "color": {
-            "type": "string"
-          },
-          "intensity": {
-            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
-            "type": [
-              "number",
-              "string"
-            ],
-            "format": "float"
-          },
-          "colorize": {
-            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
-            "type": [
-              "number",
-              "string"
-            ],
-            "format": "float"
-          },
-          "contrast": {
-            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
-            "type": [
-              "number",
-              "string"
-            ],
-            "format": "float"
-          },
-          "params": {
-            "type": [
-              "null",
-              "object"
-            ],
-            "additionalProperties": {
-              "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
-              "type": [
-                "number",
-                "string"
-              ],
-              "format": "float"
-            }
-          },
-          "slot": {
-            "pattern": "^-?(?:0|[1-9]\\d*)$",
-            "type": [
-              "integer",
-              "string"
-            ],
-            "format": "int32"
           }
         }
       },
@@ -25786,17 +25859,6 @@
               "null",
               "boolean"
             ]
-          }
-        }
-      },
-      "SetStaticLockBody": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "locked": {
-            "type": "boolean"
           }
         }
       },
