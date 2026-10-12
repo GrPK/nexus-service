@@ -93,6 +93,13 @@ public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
     }
 
     [Fact]
+    public async Task A_malformed_static_colour_is_a_400()
+    {
+        var res = await _client.PostAsync("/lighting/static/headless-start", Json("""{"color":"not-a-colour"}"""));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+    }
+
+    [Fact]
     public async Task A_static_effect_from_the_catalog_is_accepted()
     {
         var res = await Pin("\"pin-d1\"", """{"kind":"static","effect":"gradientlinear","hue":0.25,"params":{"u_angle":90}}""");

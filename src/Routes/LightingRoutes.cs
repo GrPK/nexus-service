@@ -349,6 +349,13 @@ public static class LightingRoutes
             {
                 return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
             }
+            if (!string.IsNullOrEmpty(body.Color) && !Nexus.Service.Lighting.StaticColorHex.TryParse(body.Color, out _, out _, out _))
+            {
+                return Results.Json(
+                    ApiResponse.Fail("color must be #rrggbb"),
+                    Nexus.Service.Serialization.AppJsonContext.Default.ApiResponse,
+                    statusCode: 400);
+            }
             try { l.StartStatic(body); }
             catch (System.ArgumentException ex) { return Results.Ok(ApiResponse.Fail(ex.Message)); }
             CaptureEffect(telemetry, "static", body.Effect);

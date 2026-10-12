@@ -492,4 +492,56 @@ public class DevicePinEngineTests : IDisposable
         Assert.Equal(0.3f, rig.Store.Load().Lighting.ScreenEffect.Hue, 3);
         Assert.Equal(0.3f, rig.Provider.ScreenPostProcess.Hue, 3);
     }
+
+    [Fact]
+    public void A_start_that_arrives_after_the_handle_stopped_takes_no_reference()
+    {
+        var inner = new FakeScreen();
+        var shared = new SharedScreenFrameSource(inner);
+        var handle = shared.CreateHandle();
+
+        handle.Stop();                    // the effect was disposed first
+        handle.Start("", 160, 90);        // a render that raced the disposal starts late
+
+        Assert.Equal(0, inner.Starts);
+        Assert.Equal(0, shared.ActiveHandles);
+        Assert.False(inner.Running);
+    }
+
+    [Fact]
+    public async Task Disposing_while_another_thread_starts_always_ends_with_the_capture_stopped()
+    {
+        for (var i = 0; i < 200; i++)
+        {
+            var inner = new FakeScreen();
+            var shared = new SharedScreenFrameSource(inner);
+            var handle = shared.CreateHandle();
+            var starter = Task.Run(() => handle.Start("", 160, 90));
+            var stopper = Task.Run(() => handle.Stop());
+            await Task.WhenAll(starter, stopper);
+            Assert.Equal(0, shared.ActiveHandles);
+            Assert.False(inner.Running);
+        }
+    }
+
+    [Fact]
+    public async Task A_profile_switch_that_changes_the_screen_is_picked_up_by_the_next_mirror_start()
+    {
+        using var rig = new Rig(_tempDir, store => store.Update(s => s.Lighting.ScreenMonitor = "1"));
+        // What a profile apply does: replace the whole Lighting object.
+        rig.Store.Update(s => s.Lighting = new LightingSettings { ScreenMonitor = "5" });
+
+        rig.Provider.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart());
+
+        Assert.True(await Eventually(() => rig.Screen.Running));
+        Assert.Equal("5", rig.Screen.LastMonitor);
+    }
+
+    [Fact]
+    public void A_malformed_static_colour_is_refused()
+    {
+        using var rig = new Rig(_tempDir);
+        Assert.Throws<ArgumentException>(() =>
+            rig.Provider.StartStatic(new Nexus.Service.Models.Lighting.StaticHeadlessStart { Color = "zzz" }));
+    }
 }

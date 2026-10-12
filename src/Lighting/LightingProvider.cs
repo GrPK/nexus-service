@@ -114,8 +114,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
         _engine.OnFrame += frame => _ = _hub.BroadcastBinaryAsync(frame);
         _engine.OnEffectChanged += ReconcileAudioCapture;
-        // Any settings write can move a locked effect's look (template save,
-        // preset activate, profile switch) or the lock set itself.
+        // Any settings write can move a pinned effect's look, the pin set, or the mirrored screen.
         _store.OnChanged += RefreshPinnedLooks;
         RefreshPinnedLooks();
         _scanner?.OnScanComplete = OnGameScanComplete;
@@ -126,10 +125,6 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     /// bridge is null on platforms without an OpenRGB binary (macOS / Linux),
     /// in which case the call is a no-op.
     /// </summary>
-    // Every mode start routes through here, so clearing the Static ownership
-    // flag in one place means a new mode can never inherit per-device colours
-    // (locked looks excepted - the tracker keeps honouring those);
-    // StartStatic re-asserts it immediately after.
     private void EnsureRgbActive()
     {
         // Only simple mode's sweep set samples every device across the whole
@@ -447,6 +442,10 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         if (!_gates.Lighting)
         {
             return;
+        }
+        if (!string.IsNullOrEmpty(body.Color) && !StaticColorHex.TryParse(body.Color, out _, out _, out _))
+        {
+            throw new System.ArgumentException($"'{body.Color}' is not a #rrggbb colour", nameof(body));
         }
         EnsureRgbActive();
         if (StaticColorHex.TryParse(body.Color, out var flatR, out var flatG, out var flatB))
@@ -774,6 +773,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _refreshingLooks = true;
         try
         {
+            // A profile apply or cloud pull replaces the persisted screen.
+            _mirrorMonitor = _store.Load().Lighting.ScreenMonitor ?? "";
             if (_store.Load().Lighting.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
             {
                 return;
@@ -1282,8 +1283,9 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // the user's saved look back to identity on every mode swap.
         if (body.Monitor is not null)
         {
+            // Persist first: the settings-change handler re-reads the monitor from the store.
+            _store.Update(s => s.Lighting.ScreenMonitor = body.Monitor);
             _mirrorMonitor = body.Monitor;
-            _store.Update(s => s.Lighting.ScreenMonitor = _mirrorMonitor);
         }
         _engine.SetEffect(new ScreenMirrorEffect(_mirrorMonitor, _screenPP, ScreenSource(), _gpu));
         _store.Update(s =>

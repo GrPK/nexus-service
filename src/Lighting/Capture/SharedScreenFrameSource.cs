@@ -61,21 +61,31 @@ public sealed class SharedScreenFrameSource
     {
         private readonly SharedScreenFrameSource _owner;
         private bool _started;
+        private bool _closed;
 
         public Handle(SharedScreenFrameSource owner) => _owner = owner;
 
         public void Start(string monitorId, int width, int height)
         {
-            if (_started) return;
-            _owner.StartShared(monitorId, width, height);
-            _started = true;
+            // Under the owner's gate, and a no-op once stopped: a render that races the
+            // effect's disposal must not take a reference nothing will release.
+            lock (_owner._gate)
+            {
+                if (_started || _closed) return;
+                _owner.StartShared(monitorId, width, height);
+                _started = true;
+            }
         }
 
         public void Stop()
         {
-            if (!_started) return;
-            _started = false;
-            _owner.StopShared();
+            lock (_owner._gate)
+            {
+                _closed = true;
+                if (!_started) return;
+                _started = false;
+                _owner.StopShared();
+            }
         }
 
         public byte[]? TryAcquireFrame(out int width, out int height) => _owner._inner.TryAcquireFrame(out width, out height);

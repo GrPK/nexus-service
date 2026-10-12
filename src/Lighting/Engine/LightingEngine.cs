@@ -836,15 +836,13 @@ public sealed class LightingEngine : IDisposable
             {
                 continue;
             }
-            if (key != MirrorPinKey && Gpu.ShaderLibrary.IsSweepEffect(key))
-            {
-                _pinFullFrame.Add(dev.Id);
-            }
+            var sweep = key != MirrorPinKey && Gpu.ShaderLibrary.IsSweepEffect(key);
             // Pinned to what is already running globally: share its canvas.
             var shared = key == MirrorPinKey ? ScreenEffectName : key;
             if (string.Equals(activeName, shared, StringComparison.Ordinal))
             {
                 _pinnedDevices[dev.Id] = null;
+                if (sweep) _pinFullFrame.Add(dev.Id);
                 continue;
             }
             if (!_pinRenders.TryGetValue(key, out var render))
@@ -882,6 +880,7 @@ public sealed class LightingEngine : IDisposable
             if (render.Rendered)
             {
                 _pinnedDevices[dev.Id] = render.Canvas;
+                if (sweep) _pinFullFrame.Add(dev.Id);
             }
         }
         if (used < _pinRenders.Count)
