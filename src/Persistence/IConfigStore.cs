@@ -20,10 +20,10 @@ public interface IConfigStore
     void Update(System.Action<NexusSettings> mutator);
 
     /// <summary>
-    /// Runs <paramref name="reader"/> against the settings document under the
-    /// same lock <see cref="Update"/> holds, so it sees a consistent snapshot.
-    /// Unlike Update it never marks the document dirty or raises OnChanged; the
-    /// reader must not mutate.
+    /// Runs <paramref name="reader"/> against the settings document without
+    /// marking it dirty or raising OnChanged; the reader must not mutate. This
+    /// default takes no lock, so a store with concurrent writers overrides it to
+    /// read under the lock <see cref="Update"/> holds.
     /// </summary>
     void Read(System.Action<NexusSettings> reader) => reader(Load());
 

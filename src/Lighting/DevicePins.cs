@@ -209,7 +209,7 @@ public sealed class DevicePinTracker
         {
             foreach (var (id, pin) in stored)
             {
-                if (!string.IsNullOrEmpty(id) && pin is not null && DevicePinKinds.IsKnown(pin.Kind)) rebuilt[id] = pin.Copy();
+                if (!string.IsNullOrEmpty(id) && pin is not null && DevicePinKinds.IsKnown(pin.Kind)) rebuilt[id] = Normalize(pin);
             }
         }
         lock (_lock)

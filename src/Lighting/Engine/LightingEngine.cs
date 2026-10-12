@@ -816,6 +816,9 @@ public sealed class LightingEngine : IDisposable
     /// longer exists is disposed so a cleared mirror pin stops screen capture.
     /// Existing pins keep their held frame. Engine thread.
     /// </summary>
+    private int _prunedPinsVersion = -1;
+    private DeviceFrame[]? _prunedDevices;
+
     private void PrunePinRenders(DeviceFrame[] devices)
     {
         if (_pinRenders.Count == 0)
@@ -828,6 +831,13 @@ public sealed class LightingEngine : IDisposable
             DisposePinRenders();
             return;
         }
+        // A held pause costs nothing until the pins or the device set change.
+        if (tracker.Version == _prunedPinsVersion && ReferenceEquals(devices, _prunedDevices))
+        {
+            return;
+        }
+        _prunedPinsVersion = tracker.Version;
+        _prunedDevices = devices;
         var pins = tracker.Snapshot();
         HashSet<string> live = new(StringComparer.Ordinal);
         foreach (var dev in devices)

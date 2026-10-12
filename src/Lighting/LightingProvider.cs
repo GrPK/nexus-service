@@ -782,13 +782,6 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // A profile apply or cloud pull replaces the persisted screen.
         var persisted = _store.Load().Lighting;
         _mirrorMonitor = persisted.ScreenMonitor ?? "";
-        if (persisted.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
-        {
-            // No pins at all: nothing to load, and no write, so a settings
-            // write elsewhere never causes a second one from here.
-            LoadPinnedMedia(false, "", System.Threading.Interlocked.Increment(ref _mediaSeq));
-            return;
-        }
         var next = new System.Collections.Generic.Dictionary<string, PinnedLook>(System.StringComparer.Ordinal);
         var mediaWanted = false;
         var mediaId = "";
@@ -846,6 +839,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             audio |= ShaderLibrary.IsAudioEffect(key);
         }
+        bool audioChanged;
         lock (_mediaLoadLock)
         {
             // An older snapshot never publishes over a newer one.
@@ -855,10 +849,15 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             }
             _pinnedLooksSeq = mediaSeq;
             _pinnedLooks = next;
+            audioChanged = _pinnedAudio != audio;
             _pinnedAudio = audio;
         }
         LoadPinnedMedia(mediaWanted, mediaId, mediaSeq);
-        ReconcileAudioCapture();
+        // With no pins, a settings write leaves capture alone unless this cleared it.
+        if (next.Count > 0 || audioChanged)
+        {
+            ReconcileAudioCapture();
+        }
     }
 
     // The loaded flag changes the tag when a retried load succeeds for the same id.
