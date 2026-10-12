@@ -39,6 +39,12 @@ public static partial class DevicesRoutes
         var reControlled = uncontrolled is null
             ? new List<string>()
             : s.Devices.UncontrolledLightingDevices.FindAll(x => !uncontrolled.Contains(x));
+        // A preset look that names a mode starts its own effect below, which replaces a live Shader Studio preview;
+        // end the session first and touch nothing, so no restore, bridge shutdown or blackout runs mid-activation.
+        if (look is not null && !string.IsNullOrEmpty(look.Sync))
+        {
+            lighting.EndStudioLiveBeforeSyncChange(restore: false);
+        }
         store.Update(settings =>
         {
             settings.Lighting.DeviceLayouts.Clear();

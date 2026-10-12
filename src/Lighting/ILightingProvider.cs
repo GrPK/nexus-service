@@ -112,6 +112,13 @@ public interface ILightingProvider
     /// <summary>Ends a live session and restores the lighting it replaced. A <paramref name="sessionId"/> that is not the running session is a no-op. True when a session was ended.</summary>
     bool StopStudioLive(string? sessionId = null) => false;
 
+    /// <summary>
+    /// A caller is about to change the saved mode. Ends a live session first: with <paramref name="restore"/> the
+    /// replaced lighting goes back (the change starts no effect of its own), without it nothing is touched (the
+    /// caller's own effect start replaces the preview). True when a session was ended.
+    /// </summary>
+    bool EndStudioLiveBeforeSyncChange(bool restore) => false;
+
     /// <summary>True while a live session runs.</summary>
     bool StudioLiveActive => false;
 }

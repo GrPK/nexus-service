@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Nexus.Service.Lighting.Engine;
 using Nexus.Service.Lighting.Engine.Gpu;
 using Nexus.Service.Models.Lighting;
+using Nexus.Service.Platform;
 using Nexus.Service.Sockets;
 
 namespace Nexus.Service.Lighting;
@@ -24,9 +25,6 @@ public sealed partial class LightingProvider
 
     /// <summary>No POST for this long and the service restores on its own.</summary>
     public const int StudioLeaseMs = 15_000;
-
-    // A store change that does not touch the engine gets this long for the change's own effect start to land before the preview is put back.
-    private const int StudioDeferredRestoreMs = 300;
 
     private readonly MultiplexHub? _panelHub;
     private readonly object _studioLock = new();
@@ -58,7 +56,7 @@ public sealed partial class LightingProvider
         public required string Id { get; set; }
         public required ShaderEffect Live { get; set; }
         public required string Frag { get; set; }
-        public required IEffect? PrevEffect { get; init; }
+        public IEffect? PrevEffect { get; set; }
         public required bool PrevPaused { get; init; }
         public required bool PrevFrozen { get; init; }
         public required bool PrevFullFrame { get; init; }
@@ -158,24 +156,12 @@ public sealed partial class LightingProvider
             return Fail(ex.Message);
         }
 
-        IEffect? prev;
-        t_studioChanging = true;
-        try
-        {
-            EnsureRgbActive();
-            _engine.FullFrameSampling = true;
-            prev = _engine.SetEffect(live, disposePrevious: false);
-        }
-        finally
-        {
-            t_studioChanging = false;
-        }
         var started = new StudioSession
         {
             Id = NewSessionId(),
             Live = live,
             Frag = frag,
-            PrevEffect = prev,
+            PrevEffect = null,
             PrevPaused = reportedPaused,
             PrevFrozen = prevFrozen,
             PrevFullFrame = prevFullFrame,
@@ -185,7 +171,19 @@ public sealed partial class LightingProvider
             PersistedSync = persistedSync,
             LeaseDeadline = StudioClockMs() + StudioLeaseMs,
         };
+        // Published before the engine changes, so a change another client lands right after ours is seen as a conflict.
         _studio = started;
+        t_studioChanging = true;
+        try
+        {
+            EnsureRgbActive();
+            _engine.FullFrameSampling = true;
+            started.PrevEffect = _engine.SetEffect(live, disposePrevious: false);
+        }
+        finally
+        {
+            t_studioChanging = false;
+        }
         _studioTimer ??= new Timer(_ => CheckStudioLease(), null, 1000, 1000);
         return new StudioLiveResult(StudioLiveOutcome.Ok, "Ok", started.Id);
     }
@@ -308,27 +306,30 @@ public sealed partial class LightingProvider
     {
         if (s.PrevEffect is not null)
         {
-            if (!_engine.RestoreEffectIfCurrent(s.Live, s.PrevEffect, s.PrevFrozen, s.PrevPaused))
+            // The sampling flags go back inside the swap, so the frames painted before a pause already use the restored effect's settings.
+            if (!_engine.RestoreEffectIfCurrent(s.Live, s.PrevEffect, s.PrevFrozen, s.PrevPaused, () =>
+            {
+                _engine.FullFrameSampling = s.PrevFullFrame;
+                _engine.StaticEffects?.Enabled = s.PrevStaticEnabled;
+            }))
             {
                 return false;
             }
+            return true;
         }
-        else
+        // The session started from Off: put the engine and the bridge back to Off, as StopAll does, without its settings write.
+        if (!_engine.Blackout)
         {
-            // The session started from Off: put the engine and the bridge back to Off, as StopAll does, without its settings write.
-            if (!_engine.Blackout)
-            {
-                BlackoutBeforeRelinquish();
-            }
-            if (!_engine.StopIfCurrent(s.Live))
-            {
-                return false;
-            }
-            if (!s.RgbWasActive)
-            {
-                _rgb?.Deactivate();
-                _rgb?.AwaitShutdown();
-            }
+            BlackoutBeforeRelinquish();
+        }
+        if (!_engine.StopIfCurrent(s.Live))
+        {
+            return false;
+        }
+        if (!s.RgbWasActive)
+        {
+            _rgb?.Deactivate();
+            _rgb?.AwaitShutdown();
         }
         _engine.FullFrameSampling = s.PrevFullFrame;
         _engine.StaticEffects?.Enabled = s.PrevStaticEnabled;
@@ -356,36 +357,76 @@ public sealed partial class LightingProvider
         }
     }
 
-    // A saved-mode change ends the session; the new look wins. It is never restored inline, on whatever thread
-    // called Update. When the change brings no effect start of its own (music), the preview is put back shortly
-    // after, off this thread, only if the engine still runs it.
+    // A Sync write the callers that start no effect (music, SetSync, preset activation) did not announce first. The
+    // known callers end the session explicitly before they write; this only catches an unknown one.
+    // The preview no longer running: nothing to restore, abandon and log. Still running with an effect to put back:
+    // swap it back right here under the lock; that is a pointer swap with no blackout or bridge work, so it is safe
+    // on the writer's thread. Started from Off: stopping needs the blackout push and a bridge shutdown, which can
+    // block for seconds, so that restore goes to a pool thread (gated on the preview still running, no delay).
     private void OnStudioStoreChanged()
     {
         if (_studio is null)
         {
             return;
         }
-        StudioSession? ended = null;
+        StudioSession? offRestore = null;
+        var ended = false;
         lock (_studioLock)
         {
             if (_studio is { } s && !string.Equals(_store.Load().Lighting.Sync, s.PersistedSync, StringComparison.Ordinal))
             {
-                ended = EndStudioLocked(StudioEnd.Defer);
+                ended = true;
+                if (!EngineRunsLive(s))
+                {
+                    ServiceLog.Warn("[studio-live] saved mode changed under a live session; abandoned, the engine had moved on");
+                    EndStudioLocked(StudioEnd.Abandon);
+                }
+                else if (s.PrevEffect is not null)
+                {
+                    ServiceLog.Warn("[studio-live] saved mode changed under a live session; restored");
+                    EndStudioLocked(StudioEnd.Restore);
+                }
+                else
+                {
+                    ServiceLog.Warn("[studio-live] saved mode changed under a live session; restoring Off");
+                    offRestore = EndStudioLocked(StudioEnd.Defer);
+                }
             }
         }
-        if (ended is null)
+        if (!ended)
         {
             return;
         }
         NotifyStudioEnded();
-        _ = Task.Run(async () =>
+        if (offRestore is not null)
         {
-            await Task.Delay(StudioDeferredRestoreMs).ConfigureAwait(false);
-            lock (_studioLock)
+            _ = Task.Run(() =>
             {
-                FinishStudio(ended, StudioEnd.Restore);
-            }
-        });
+                lock (_studioLock)
+                {
+                    FinishStudio(offRestore, StudioEnd.Restore);
+                }
+            });
+        }
+    }
+
+    /// <summary>
+    /// A caller is about to change the saved mode (or start an effect for a new one). Ends the session first.
+    /// With <paramref name="restore"/> the replaced lighting goes back, for callers whose change starts no effect
+    /// (music, SetSync). Without it nothing is touched, for a caller whose own effect start replaces the preview.
+    /// </summary>
+    public bool EndStudioLiveBeforeSyncChange(bool restore)
+    {
+        bool ended;
+        lock (_studioLock)
+        {
+            ended = EndStudioLocked(restore ? StudioEnd.Restore : StudioEnd.Abandon) is not null;
+        }
+        if (ended)
+        {
+            NotifyStudioEnded();
+        }
+        return ended;
     }
 
     internal void CheckStudioLease()
@@ -404,8 +445,8 @@ public sealed partial class LightingProvider
         }
     }
 
-    // A custom effect the session replaced is being edited or deleted: put it back first, so the edit runs against it
-    // and neither resurrects a deleted effect nor leaves a stale compile.
+    // A custom effect the session replaced was deleted: put it back first, so the drop runs against it and a deleted
+    // effect is never resurrected.
     private void EndStudioForCustomEdit(string key)
     {
         var ended = false;
@@ -419,6 +460,33 @@ public sealed partial class LightingProvider
         if (ended)
         {
             NotifyStudioEnded();
+        }
+    }
+
+    // A custom effect the session replaced was saved: rebuild the held effect from the new source and keep the
+    // session, so leaving the Studio is what ends it, not saving.
+    private void RefreshStudioSnapshot(string key)
+    {
+        lock (_studioLock)
+        {
+            if (_studio is not { PrevEffect: ShaderEffect prev } s || prev.Name != key || !ShaderLibrary.IsKnownKey(key))
+            {
+                return;
+            }
+            ShaderEffect fresh;
+            try
+            {
+                var extras = prev.ExtraParams is null ? null : new Dictionary<string, float>(prev.ExtraParams);
+                fresh = MakeShader(key, ShaderLibrary.Get(key), prev.Speed, prev.Intensity, prev.Hue, prev.Colorize, prev.Saturation, prev.Contrast, extras);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            s.PrevEffect = fresh;
+            try
+            { prev.Dispose(); }
+            catch { }
         }
     }
 

@@ -118,7 +118,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         // restored meanwhile is running the rainbow stand-in until this rebuilds it.
         customEffects?.Recovered += () =>
         {
-            if (_engine.CurrentEffect is ShaderEffect running && ShaderLibrary.IsCustomKey(running.Name))
+            if (_engine.CurrentEffect is ShaderEffect running && ShaderLibrary.IsCustomKey(running.Name) && running.Name != StudioLiveKey)
             {
                 ReloadCustomEffect(running.Name);
             }
@@ -153,16 +153,22 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         {
             return studio.ReportedSync;
         }
-        if (_engine.CurrentEffectName == "none")
+        // The preview, with its session already ended and the replacing start still to land, is never a user's mode.
+        if (_engine.CurrentEffectName is "none" or StudioLiveKey)
         {
             return _store.Load().Lighting.Sync;
         }
         return _engine.Frozen ? "static" : _engine.CurrentEffectName;
     }
 
-    public void SetSync(string sync) => _store.Update(s => s.Lighting.Sync = sync);
+    public void SetSync(string sync)
+    {
+        // Starts no effect, so nothing else will replace a live preview.
+        EndStudioLiveBeforeSyncChange(restore: true);
+        _store.Update(s => s.Lighting.Sync = sync);
+    }
 
-    public bool IsPaused => _studio?.PrevPaused ?? _engine.Paused;
+    public bool IsPaused => _studio?.PrevPaused ?? (_engine.Paused || _engine.PausePending);
 
     public void SetPaused(bool paused) => _engine.SetPaused(paused);
 
@@ -747,7 +753,12 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     public void ReloadCustomEffect(string key)
     {
-        EndStudioForCustomEdit(key);
+        // The preview's own key is not a stored effect; reloading it would orphan the running preview.
+        if (key == StudioLiveKey)
+        {
+            return;
+        }
+        RefreshStudioSnapshot(key);
         ClearThumbnails(key);
         // A lost swap means another thread changed the effect after we read it (often a
         // concurrent PUT of the same id). Re-read until our swap lands or the running effect
@@ -1240,6 +1251,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         }
         // No audio capture impl yet. Persist intent so the SPA can reflect it,
         // but the engine doesn't render anything.
+        EndStudioLiveBeforeSyncChange(restore: true);
         _store.Update(s =>
         {
             s.Lighting.Sync = "music";

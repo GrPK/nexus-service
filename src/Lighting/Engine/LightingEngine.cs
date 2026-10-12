@@ -62,8 +62,16 @@ public sealed class LightingEngine : IDisposable
     // marks the frame current if no invalidate landed mid-render.
     private int _frozenEpoch;
     private int _frozenRenderedEpoch = -1;
-    // Counts finished loop ticks; lets a caller wait until a swapped-in effect has been painted.
+    // Counts finished loop ticks; a caller waits on _tickGate until a swapped-in effect has been painted.
     private int _tickCount;
+    private readonly object _tickGate = new();
+    // Longest a restore waits for the restored effect to paint before it pauses anyway.
+    private const int PauseRenderWaitMs = 500;
+    // A pause that has to wait out a blackout hold. Applied on the first tick painted after the hold ends.
+    private volatile bool _pausePending;
+
+    /// <summary>True while a requested pause is waiting for a blackout hold to end.</summary>
+    public bool PausePending => _pausePending;
     private byte[] _frameBuffer = Array.Empty<byte>();
 
     /// <summary>Logical canvas size that device frames and the 3D scene camera are laid out in.</summary>
@@ -194,6 +202,7 @@ public sealed class LightingEngine : IDisposable
                 return;
             }
             _paused = paused;
+            _pausePending = false;
         }
     }
 
@@ -549,6 +558,7 @@ public sealed class LightingEngine : IDisposable
             old = _currentEffect;
             _currentEffect = effect;
             _paused = false;
+            _pausePending = false;
             _frozen = false;
             // The user picking a mode is the escape hatch if a resume event
             // never lands: it always ends in a lit device, never a dark one.
@@ -610,7 +620,7 @@ public sealed class LightingEngine : IDisposable
     /// With <paramref name="paused"/> it first lets the loop paint the replacement, so the
     /// frozen frame is the restored effect's, not the one it replaced.
     /// </summary>
-    public bool RestoreEffectIfCurrent(IEffect expected, IEffect replacement, bool frozen, bool paused)
+    public bool RestoreEffectIfCurrent(IEffect expected, IEffect replacement, bool frozen, bool paused, Action? prepare = null)
     {
         lock (_lock)
         {
@@ -618,23 +628,39 @@ public sealed class LightingEngine : IDisposable
             {
                 return false;
             }
+            // Under the same lock as the swap, so the first tick of the restored effect already samples with its own settings.
+            prepare?.Invoke();
             _currentEffect = replacement;
             _paused = false;
+            _pausePending = false;
             _frozen = frozen;
             Interlocked.Increment(ref _frozenEpoch);
             try
             { expected.Dispose(); }
             catch { }
+            if (paused && _blackout)
+            {
+                // Nothing paints during the hold; the loop pauses after the first frame painted once it ends.
+                _pausePending = true;
+            }
         }
         OnEffectChanged?.Invoke();
-        if (paused && !_blackout)
+        if (paused && !_pausePending)
         {
             // Two ticks: the one in flight may have picked up the old effect.
-            var target = Volatile.Read(ref _tickCount) + 2;
-            var deadline = Environment.TickCount64 + 500;
-            while (Volatile.Read(ref _tickCount) < target && Environment.TickCount64 < deadline && LoopPublishing)
+            int target;
+            lock (_tickGate)
             {
-                Thread.Sleep(2);
+                target = _tickCount + 2;
+                var deadline = Environment.TickCount64 + PauseRenderWaitMs;
+                while (_tickCount < target)
+                {
+                    var left = deadline - Environment.TickCount64;
+                    if (left <= 0 || !Monitor.Wait(_tickGate, (int)left))
+                    {
+                        break;
+                    }
+                }
             }
             lock (_lock)
             {
@@ -658,6 +684,7 @@ public sealed class LightingEngine : IDisposable
             var old = _currentEffect;
             _currentEffect = null;
             _paused = false;
+            _pausePending = false;
             _frozen = false;
             ReleaseBlackoutState();
             Interlocked.Increment(ref _frozenEpoch);
@@ -769,6 +796,18 @@ public sealed class LightingEngine : IDisposable
                         {
                             CompleteReleaseIfDone();
                         }
+                        if (_pausePending && !_blackout)
+                        {
+                            // The hold has ended and this tick painted the restored effect: hold it.
+                            lock (_lock)
+                            {
+                                if (_pausePending && ReferenceEquals(_currentEffect, effect))
+                                {
+                                    _paused = true;
+                                }
+                                _pausePending = false;
+                            }
+                        }
                         aheadDevices = devices;
                     }
                     else if (wakeMs > 0)
@@ -790,7 +829,7 @@ public sealed class LightingEngine : IDisposable
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"[lighting-engine] {effect.Name} threw: {ex.Message}"); }
 
-                Interlocked.Increment(ref _tickCount);
+                PulseTick();
                 var nextPeriodMs = Math.Max(1, FrameIntervalMs);
                 if (nextPeriodMs != periodMs)
                 {
@@ -822,6 +861,17 @@ public sealed class LightingEngine : IDisposable
             {
                 dev.Clear();
             }
+            // Wakes a restore waiting on a tick that will not come.
+            PulseTick();
+        }
+    }
+
+    private void PulseTick()
+    {
+        lock (_tickGate)
+        {
+            _tickCount++;
+            Monitor.PulseAll(_tickGate);
         }
     }
 

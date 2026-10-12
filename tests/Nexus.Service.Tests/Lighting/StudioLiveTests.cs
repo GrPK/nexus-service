@@ -37,7 +37,7 @@ public sealed class StudioLiveTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    private sealed class FakeEffect(string name, byte red = 0) : IEffect
+    private sealed class FakeEffect(string name, byte red = 0, Action? onRender = null) : IEffect
     {
         private int _renders;
         public string Name { get; } = name;
@@ -46,6 +46,7 @@ public sealed class StudioLiveTests : IDisposable
         public void RenderFrame(CanvasBuffer canvas, double tickMs)
         {
             canvas.Fill(red, 0, 0);
+            onRender?.Invoke();
             Interlocked.Increment(ref _renders);
         }
         public void Dispose() => Disposed = true;
@@ -366,7 +367,7 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void A_saved_mode_change_ends_the_session_at_once_and_puts_the_preview_back_off_thread()
+    public void Music_ends_the_session_with_a_restore_before_it_writes()
     {
         _provider.StartAnimate(Animate("rainbow"));
         var before = _engine.CurrentEffect;
@@ -375,24 +376,79 @@ public sealed class StudioLiveTests : IDisposable
         _provider.StartMusic(new MusicHeadlessStart());
 
         Assert.False(_provider.StudioLiveActive);
-        WaitFor(() => ReferenceEquals(_engine.CurrentEffect, before));
         Assert.Same(before, _engine.CurrentEffect);
         Assert.Equal("music", _config.Load().Lighting.Sync);
     }
 
     [Fact]
-    public void A_saved_mode_change_followed_by_its_own_effect_start_wins_over_the_deferred_restore()
+    public void Set_sync_ends_the_session_with_a_restore_before_it_writes()
+    {
+        _provider.StartAnimate(Animate("rainbow"));
+        var before = _engine.CurrentEffect;
+        _provider.StartStudioLive(Body());
+
+        _provider.SetSync("screen");
+
+        Assert.False(_provider.StudioLiveActive);
+        Assert.Same(before, _engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void Preset_activation_ends_the_session_without_touching_the_engine_so_its_own_start_replaces_the_preview()
     {
         var prior = new FakeEffect("prior");
         _engine.SetEffect(prior);
         _provider.StartStudioLive(Body());
+        var live = _engine.CurrentEffect;
 
-        _config.Update(c => c.Lighting.Sync = "preset-look");
+        _provider.EndStudioLiveBeforeSyncChange(restore: false);
+
+        Assert.False(_provider.StudioLiveActive);
+        Assert.Same(live, _engine.CurrentEffect);
+        Assert.Equal(_config.Load().Lighting.Sync, _provider.GetSync());
         _provider.StartAnimate(Animate("plasma"));
-        Thread.Sleep(600);
-
         Assert.Equal("plasma", _engine.CurrentEffectName);
         Assert.True(prior.Disposed);
+    }
+
+    [Fact]
+    public void An_unannounced_sync_write_restores_synchronously_when_the_preview_still_runs()
+    {
+        _provider.StartAnimate(Animate("rainbow"));
+        var before = _engine.CurrentEffect;
+        _provider.StartStudioLive(Body());
+
+        _config.Update(c => c.Lighting.Sync = "unknown-writer");
+
+        Assert.False(_provider.StudioLiveActive);
+        Assert.Same(before, _engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void An_unannounced_sync_write_from_off_stops_the_preview_off_thread()
+    {
+        _provider.StartStudioLive(Body());
+
+        _config.Update(c => c.Lighting.Sync = "unknown-writer");
+
+        Assert.False(_provider.StudioLiveActive);
+        WaitFor(() => _engine.CurrentEffect is null);
+        Assert.Null(_engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void A_sync_write_after_another_client_took_the_engine_abandons_and_leaves_it_alone()
+    {
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
+        _provider.StartStudioLive(Body());
+        _provider.StartAnimate(Animate("plasma"));
+        var other = _engine.CurrentEffect;
+
+        _config.Update(c => c.Lighting.Sync = "later");
+
+        Assert.Same(other, _engine.CurrentEffect);
+        Assert.False(_provider.StudioLiveActive);
     }
 
     [Fact]
@@ -464,7 +520,11 @@ public sealed class StudioLiveTests : IDisposable
     public void A_pause_restore_shows_the_restored_effects_frame_not_the_previews()
     {
         _engine.UpdateDevices([new DeviceFrame(0, "d", 1)]);
-        var prior = new FakeEffect("prior", red: 200);
+        _engine.StaticEffects = new StaticDeviceEffectTracker();
+        _engine.StaticEffects.Enabled = true;
+        // What the restored effect samples with each time it paints: a pause must not hold a frame made with the preview's settings.
+        var samples = new System.Collections.Concurrent.ConcurrentQueue<(bool Full, bool Static)>();
+        var prior = new FakeEffect("prior", red: 200, onRender: () => samples.Enqueue((_engine.FullFrameSampling, _engine.StaticEffects!.Enabled)));
         _engine.SetEffect(prior);
         WaitFor(() => prior.Renders > 0);
         _engine.SetPaused(true);
@@ -476,6 +536,7 @@ public sealed class StudioLiveTests : IDisposable
         Assert.True(_engine.Paused);
         Assert.True(prior.Renders > rendersBefore);
         Assert.Equal(200, _engine.Devices[0].LedBytes[0]);
+        Assert.All(samples, x => Assert.Equal((false, true), x));
     }
 
     [Fact]
@@ -582,24 +643,65 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void Reloading_the_custom_effect_the_session_replaced_restores_it_first()
+    public void Saving_the_custom_effect_the_session_replaced_keeps_the_session_and_restores_the_new_source()
     {
         var id = CustomFrags.NewId();
-        ShaderLibrary.RegisterCustom(id, CustomFrags.Frag());
+        ShaderLibrary.RegisterCustom(id, CustomFrags.Frag(0.2f));
         try
         {
             _provider.StartAnimate(Animate("custom:" + id));
-            _provider.StartStudioLive(Body());
+            var old = _engine.CurrentEffect;
+            var open = _provider.StartStudioLive(Body());
+            ShaderLibrary.RegisterCustom(id, CustomFrags.Frag(0.8f));
 
             _provider.ReloadCustomEffect("custom:" + id);
 
-            Assert.False(_provider.StudioLiveActive);
+            Assert.True(_provider.StudioLiveActive);
+            Assert.True(_provider.StartStudioLive(Body(sessionId: open.SessionId)).Ok);
+            _provider.StopStudioLive();
+            Assert.NotSame(old, _engine.CurrentEffect);
             Assert.Equal("custom:" + id, _engine.CurrentEffectName);
         }
         finally
         {
             ShaderLibrary.UnregisterCustom(id);
         }
+    }
+
+    [Fact]
+    public void Reloading_the_reserved_preview_key_does_not_orphan_the_preview()
+    {
+        _provider.StartStudioLive(Body());
+        var live = _engine.CurrentEffect;
+
+        _provider.ReloadCustomEffect(LightingProvider.StudioLiveKey);
+
+        Assert.Same(live, _engine.CurrentEffect);
+        Assert.True(_provider.StudioLiveActive);
+    }
+
+    [Fact]
+    public void A_paused_restore_during_a_blackout_pauses_after_the_hold_ends()
+    {
+        var prior = new FakeEffect("prior", red: 90);
+        _engine.SetEffect(prior);
+        WaitFor(() => prior.Renders > 0);
+        _engine.SetPaused(true);
+        _provider.StartStudioLive(Body());
+        _engine.SetBlackout(true);
+
+        _now += 20_000;
+        _provider.CheckStudioLease();
+
+        Assert.Same(prior, _engine.CurrentEffect);
+        Assert.True(_engine.PausePending);
+        Assert.True(_provider.IsPaused);
+        var rendersBefore = prior.Renders;
+        _engine.SetBlackout(false);
+        WaitFor(() => _engine.Paused);
+        Assert.True(_engine.Paused);
+        Assert.False(_engine.PausePending);
+        Assert.True(prior.Renders > rendersBefore);
     }
 
     [Fact]
