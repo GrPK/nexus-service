@@ -326,6 +326,17 @@ public sealed class CloudAccountService
         return await RefreshAsync(accountId, ct).ConfigureAwait(false);
     }
 
+    /// <summary>Same as <see cref="GetValidAccessTokenAsync"/>, but says when a null token is because the refresh could not reach the cloud.</summary>
+    private async Task<(string? Token, bool Unreachable)> GetValidAccessTokenDetailedAsync(string accountId, CancellationToken ct)
+    {
+        if (_accessTokens.TryGetValue(accountId, out var cached) &&
+            cached.ExpiresAt > _clock.GetUtcNow().AddSeconds(AccessTokenRefreshSkewSeconds))
+        {
+            return (cached.Token, false);
+        }
+        return await RefreshDetailedAsync(accountId, ct).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Rotates the refresh token against the cloud and caches the new access
     /// token. Serialized per account: the refresh token rotates on every use
@@ -338,17 +349,20 @@ public sealed class CloudAccountService
     /// usable (the old refresh token is already dead on the server either way
     /// - rotation is one-shot).
     /// </summary>
-    internal Task<string?> RefreshAsync(string accountId, CancellationToken ct)
+    internal async Task<string?> RefreshAsync(string accountId, CancellationToken ct) =>
+        (await RefreshDetailedAsync(accountId, ct).ConfigureAwait(false)).Token;
+
+    private Task<(string? Token, bool Unreachable)> RefreshDetailedAsync(string accountId, CancellationToken ct)
     {
         if (Volatile.Read(ref _stopping) != 0)
         {
-            return Task.FromResult<string?>(null);
+            return Task.FromResult<(string?, bool)>((null, false));
         }
         var gate = _refreshGates.GetOrAdd(accountId, _ => new SemaphoreSlim(1, 1));
         return RefreshGatedAsync(accountId, gate, ct);
     }
 
-    private async Task<string?> RefreshGatedAsync(string accountId, SemaphoreSlim gate, CancellationToken ct)
+    private async Task<(string? Token, bool Unreachable)> RefreshGatedAsync(string accountId, SemaphoreSlim gate, CancellationToken ct)
     {
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -357,7 +371,7 @@ public sealed class CloudAccountService
             // QuiesceForShutdown enumerated them must not start a rotation.
             if (Volatile.Read(ref _stopping) != 0)
             {
-                return null;
+                return (null, false);
             }
             return await RefreshCoreAsync(accountId).ConfigureAwait(false);
         }
@@ -367,13 +381,13 @@ public sealed class CloudAccountService
         }
     }
 
-    private async Task<string?> RefreshCoreAsync(string accountId)
+    private async Task<(string? Token, bool Unreachable)> RefreshCoreAsync(string accountId)
     {
         var storedRefreshToken = _store.Load().Auth?.CloudAccounts.FirstOrDefault(a => a.AccountId == accountId)?.RefreshToken;
         var refreshToken = SecretProtector.Unprotect(storedRefreshToken);
         if (string.IsNullOrEmpty(refreshToken))
         {
-            return null;
+            return (null, false);
         }
 
         // Never cancelled by the caller, only by the client's own timeout: an
@@ -394,7 +408,7 @@ public sealed class CloudAccountService
                 Console.Error.WriteLine($"[cloud] refresh rejected ({result.StatusCode} {result.ErrorCode}: {result.ErrorMessage}); signing out {accountId}");
                 RemoveAccountLocally(accountId);
             }
-            return null;
+            return (null, result.Offline);
         }
 
         var session = result.Value;
@@ -416,7 +430,7 @@ public sealed class CloudAccountService
 
         var expiresAt = _clock.GetUtcNow().AddMinutes(AccessTokenLifetimeMinutes);
         _accessTokens[accountId] = (session.AccessToken, expiresAt);
-        return session.AccessToken;
+        return (session.AccessToken, false);
     }
 
     /// <summary>Stops new refreshes and waits for in-flight ones, so a token the server already rotated is on disk before the process exits. Idempotent; a second caller blocks until the first finishes.</summary>
@@ -453,10 +467,13 @@ public sealed class CloudAccountService
     public async Task<CloudApiResult<T>> WithAuthAsync<T>(
         string accountId, Func<string, Task<CloudApiResult<T>>> call, CancellationToken ct)
     {
-        var token = await GetValidAccessTokenAsync(accountId, ct).ConfigureAwait(false);
+        var (token, unreachable) = await GetValidAccessTokenDetailedAsync(accountId, ct).ConfigureAwait(false);
         if (token is null)
         {
-            return CloudApiResult<T>.Fail(401, "no_session", "Not logged in.");
+            // An outage during refresh is not a sign-out: callers map Offline to "unavailable", not "log in".
+            return unreachable
+                ? CloudApiResult<T>.NetworkError("Cloud unreachable while refreshing the session.")
+                : CloudApiResult<T>.Fail(401, "no_session", "Not logged in.");
         }
 
         var result = await call(token).ConfigureAwait(false);

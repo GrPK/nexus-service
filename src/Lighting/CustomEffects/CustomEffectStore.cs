@@ -488,7 +488,7 @@ public sealed class CustomEffectStore
     }
 
     /// <summary>Insert or replace. Returns the saved entry, or an error message when the entry cap rejects a new id.</summary>
-    /// <summary>A null <paramref name="marketId"/> or <paramref name="marketAuthor"/> keeps the stored value, so a Studio re-save does not drop the link.</summary>
+    /// <remarks>A null <paramref name="marketId"/> or <paramref name="marketAuthor"/> keeps the stored value, so a Studio re-save does not drop the link.</remarks>
     public (CustomEffectEntry? Entry, string? Error) Put(string id, string name, string recipe, string frag, string? marketId = null, string? marketAuthor = null)
     {
         CustomEffectEntry saved;

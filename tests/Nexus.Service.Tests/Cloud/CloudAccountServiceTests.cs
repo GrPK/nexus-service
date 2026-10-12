@@ -721,4 +721,49 @@ public sealed class CloudAccountServiceTests
         Assert.Equal("code_attempts_exhausted", spent.ErrorCode);
         Assert.Equal("expired", svc.GetRecoveryStatus().Status);
     }
+
+    private static void Seed(InMemoryConfigStore store) =>
+        store.Update(s =>
+        {
+            s.Auth ??= new AuthSettings();
+            s.Auth.CloudAccounts.Add(new CloudAccountRecord { AccountId = "acct-1", RefreshToken = "old-refresh" });
+            s.Auth.ActiveCloudAccountId = "acct-1";
+        });
+
+    [Fact]
+    public async Task WithAuthAsync_reports_offline_when_the_refresh_cannot_reach_the_cloud_and_keeps_the_session()
+    {
+        var (svc, api, store) = Make();
+        Seed(store);
+        api.OnRefresh = _ => CloudApiResult<CloudAuthSession>.NetworkError("down");
+        var called = false;
+
+        var result = await svc.WithAuthAsync("acct-1", _ =>
+        {
+            called = true;
+            return Task.FromResult(CloudApiResult<CloudVoid>.Ok(CloudVoid.Instance));
+        }, CancellationToken.None);
+
+        Assert.True(result.Offline);
+        Assert.False(called);
+        Assert.Single(store.Load().Auth!.CloudAccounts);
+    }
+
+    [Theory]
+    [InlineData(401)]
+    [InlineData(403)]
+    public async Task WithAuthAsync_reads_a_refresh_the_cloud_refused_as_signed_out(int status)
+    {
+        var (svc, api, store) = Make();
+        Seed(store);
+        api.OnRefresh = _ => CloudApiResult<CloudAuthSession>.Fail(status, "revoked", "revoked");
+
+        var result = await svc.WithAuthAsync("acct-1",
+            _ => Task.FromResult(CloudApiResult<CloudVoid>.Ok(CloudVoid.Instance)), CancellationToken.None);
+
+        Assert.False(result.Offline);
+        Assert.Equal(401, result.StatusCode);
+        Assert.Equal("no_session", result.ErrorCode);
+        Assert.Empty(store.Load().Auth!.CloudAccounts);
+    }
 }

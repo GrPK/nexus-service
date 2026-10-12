@@ -249,6 +249,67 @@ public sealed class EffectMarketRoutesTests : IClassFixture<EffectMarketAppFacto
     }
 
     [Fact]
+    public async Task An_unreachable_cloud_during_token_refresh_is_503_not_sign_in_required()
+    {
+        SignIn();
+        _factory.Api.OnRefresh = _ => CloudApiResult<CloudAuthSession>.NetworkError("down");
+        // A different account id has no cached access token, forcing a refresh.
+        _factory.Services.GetRequiredService<IConfigStore>().Update(s =>
+        {
+            s.Auth!.CloudAccounts.Add(new CloudAccountRecord { AccountId = "acct-cold", RefreshToken = "r" });
+            s.Auth.ActiveCloudAccountId = "acct-cold";
+        });
+
+        var res = await Desktop().PostAsync("/lighting/effect-market", Json("{}"));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
+        Assert.Equal("market_unavailable", (await Read(res)).GetProperty("msg").GetString());
+    }
+
+    [Fact]
+    public async Task A_refused_token_refresh_is_403_sign_in_required()
+    {
+        SignIn();
+        _factory.Api.OnRefresh = _ => CloudApiResult<CloudAuthSession>.Fail(401, "revoked", "revoked");
+        _factory.Services.GetRequiredService<IConfigStore>().Update(s =>
+        {
+            s.Auth!.CloudAccounts.Add(new CloudAccountRecord { AccountId = "acct-cold2", RefreshToken = "r" });
+            s.Auth.ActiveCloudAccountId = "acct-cold2";
+        });
+
+        var res = await Desktop().PostAsync("/lighting/effect-market", Json("{}"));
+
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal("sign_in_required", (await Read(res)).GetProperty("msg").GetString());
+    }
+
+    [Theory]
+    [InlineData(502, "text/html", "<html>bad gateway</html>")]
+    [InlineData(503, "application/json", "")]
+    public async Task A_non_json_or_empty_cloud_5xx_is_503_market_unavailable(int status, string contentType, string body)
+    {
+        _factory.Api.OnSendRaw = (_, _, _, _) => CloudApiResult<CloudRawResponse>.Ok(
+            new CloudRawResponse { Body = body, ContentType = contentType }, status);
+
+        var res = await Desktop().GetAsync("/lighting/effect-market");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
+        Assert.Equal("market_unavailable", (await Read(res)).GetProperty("msg").GetString());
+    }
+
+    [Fact]
+    public async Task A_json_cloud_5xx_and_any_relayed_body_are_served_as_application_json()
+    {
+        _factory.Api.OnSendRaw = (_, _, _, _) => CloudApiResult<CloudRawResponse>.Ok(
+            new CloudRawResponse { Body = "{\"message\":\"x\"}", ContentType = "text/html" }, 404);
+
+        var res = await Desktop().GetAsync("/lighting/effect-market/" + Guid1);
+
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+        Assert.Equal("application/json", res.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
     public async Task A_cloud_403_passes_through_unchanged()
     {
         const string body = "{\"statusCode\":403,\"message\":\"listing_limit\",\"error\":\"Forbidden\"}";

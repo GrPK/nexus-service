@@ -125,16 +125,21 @@ public static class EffectMarketRoutes
         {
             return SignInRequired();
         }
-        if (result.Value is null)
+        if (result.Value is not { } value)
         {
-            // WithAuthAsync's own failure carries no body; anything else without one is a cloud we could not reach.
             return Fail(StatusCodes.Status503ServiceUnavailable, "market_unavailable");
         }
-        if (result.Value.Body.Length == 0)
+        var json = value.ContentType.Equals("application/json", StringComparison.OrdinalIgnoreCase);
+        if (result.StatusCode >= 500 && !(json && value.Body.Length > 0))
+        {
+            // An edge or proxy error page is not ours to relay onto the dashboard origin.
+            return Fail(StatusCodes.Status503ServiceUnavailable, "market_unavailable");
+        }
+        if (value.Body.Length == 0)
         {
             return Results.StatusCode(result.StatusCode);
         }
-        return Results.Text(result.Value.Body, result.Value.ContentType, statusCode: result.StatusCode);
+        return Results.Text(value.Body, "application/json", statusCode: result.StatusCode);
     }
 
     private static IResult Fail(int status, string msg) =>
