@@ -343,4 +343,68 @@ public sealed class CustomEffectRoutesTests : IClassFixture<CustomEffectAppFacto
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PutAsync(Url("abc"), Body("n", "", CustomFrags.Frag()))).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.DeleteAsync(Url("abc"))).StatusCode);
     }
+
+    private static StringContent LinkBody(string name, object? marketId, object? marketAuthor) =>
+        new(JsonSerializer.Serialize(new { name, recipe = "", frag = CustomFrags.Frag(), marketId, marketAuthor }), Encoding.UTF8, "application/json");
+
+    private const string MarketGuid = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    [Fact]
+    public async Task Put_stores_the_market_link_and_get_returns_it_camel_cased()
+    {
+        var id = CustomFrags.NewId();
+        var http = Desktop();
+
+        var put = await Read(await http.PutAsync(Url(id), LinkBody("Linked", MarketGuid, "Maker_1")));
+        var list = await Read(await http.GetAsync("/lighting/custom-effects"));
+
+        Assert.Equal(MarketGuid, put.GetProperty("marketId").GetString());
+        Assert.Equal("Maker_1", put.GetProperty("marketAuthor").GetString());
+        var entry = list.EnumerateArray().First(e => e.GetProperty("id").GetString() == id);
+        Assert.Equal(MarketGuid, entry.GetProperty("marketId").GetString());
+        Assert.Equal("Maker_1", entry.GetProperty("marketAuthor").GetString());
+    }
+
+    [Fact]
+    public async Task An_unlinked_entry_omits_the_market_fields()
+    {
+        var id = CustomFrags.NewId();
+
+        var put = await Read(await Desktop().PutAsync(Url(id), Body("Plain", "", CustomFrags.Frag())));
+
+        Assert.False(put.TryGetProperty("marketId", out _));
+        Assert.False(put.TryGetProperty("marketAuthor", out _));
+    }
+
+    [Fact]
+    public async Task A_put_that_omits_the_market_fields_keeps_the_stored_link()
+    {
+        var id = CustomFrags.NewId();
+        var http = Desktop();
+        await http.PutAsync(Url(id), LinkBody("Linked", MarketGuid, "Maker_1"));
+
+        var resave = await Read(await http.PutAsync(Url(id), Body("Renamed", "", CustomFrags.Frag())));
+
+        Assert.Equal("Renamed", resave.GetProperty("name").GetString());
+        Assert.Equal(MarketGuid, resave.GetProperty("marketId").GetString());
+        Assert.Equal("Maker_1", resave.GetProperty("marketAuthor").GetString());
+    }
+
+    [Theory]
+    [InlineData("not-a-guid", "Maker_1")]
+    [InlineData("3f2504e04f8941d39a0c0305e82c3301", "Maker_1")]
+    [InlineData("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "abc")]
+    [InlineData("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "has-dash")]
+    [InlineData("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "waytoolongusername1")]
+    [InlineData("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "caf\u00e9name")]
+    public async Task Put_rejects_a_malformed_market_link(string marketId, string marketAuthor)
+    {
+        var id = CustomFrags.NewId();
+
+        var res = await Desktop().PutAsync(Url(id), LinkBody("n", marketId, marketAuthor));
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.True((await Read(res)).GetProperty("error").GetBoolean());
+        Assert.Equal(HttpStatusCode.NotFound, (await Desktop().GetAsync("/lighting/shaders/custom:" + id)).StatusCode);
+    }
 }

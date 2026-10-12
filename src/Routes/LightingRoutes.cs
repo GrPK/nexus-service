@@ -171,6 +171,7 @@ public static class LightingRoutes
             return Results.Json(new ShaderSourceResponse { Frag = ShaderLibrary.Get(name) }, AppJsonContext.Default.ShaderSourceResponse);
         }).AllowPanel();
         MapCustomEffects(app);
+        EffectMarketRoutes.Map(app);
         app.MapGet("/lighting/screen/monitors", (ILightingProvider l) => l.GetScreenSyncOptions()).AllowPanel();
         app.MapGet("/lighting/status", (Nexus.Service.Lighting.Engine.LightingEngine engine, ILightingDeviceProvider devices, IServiceProvider sp) =>
         {
@@ -414,6 +415,8 @@ public static class LightingRoutes
         Recipe = e.Recipe,
         UpdatedAt = e.UpdatedAt,
         Audio = ShaderLibrary.ReadsAudio(e.Frag),
+        MarketId = e.MarketId,
+        MarketAuthor = e.MarketAuthor,
     };
 
     private static IResult CustomEffectError(string message) =>
@@ -441,12 +444,17 @@ public static class LightingRoutes
             {
                 return CustomEffectError(problem);
             }
-            var compileError = compile(body!.Frag!);
+            var linkProblem = Nexus.Service.Lighting.CustomEffects.CustomEffectStore.ValidateMarketLink(body!.MarketId, body.MarketAuthor);
+            if (linkProblem is not null)
+            {
+                return CustomEffectError(linkProblem);
+            }
+            var compileError = compile(body.Frag!);
             if (compileError is not null)
             {
                 return CustomEffectError(compileError);
             }
-            var (entry, error) = custom.Put(id, body.Name!, body.Recipe ?? "", body.Frag!);
+            var (entry, error) = custom.Put(id, body.Name!, body.Recipe ?? "", body.Frag!, body.MarketId, body.MarketAuthor);
             if (entry is null)
             {
                 return CustomEffectError(error ?? "rejected");

@@ -578,4 +578,66 @@ public sealed class CustomEffectStoreTests : IDisposable
 
         Assert.Equal([good], new CustomEffectStore(_dir).List().Select(e => e.Id));
     }
+
+    private const string MarketGuid = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    [Fact]
+    public void The_market_link_round_trips_through_the_file_and_is_kept_when_a_put_omits_it()
+    {
+        var id = CustomFrags.NewId();
+        var store = new CustomEffectStore(_dir);
+        store.Put(id, "Linked", "", CustomFrags.Frag(), MarketGuid, "Maker_1");
+
+        store.Put(id, "Renamed", "", CustomFrags.Frag());
+        var reloaded = new CustomEffectStore(_dir).Get(id)!;
+
+        Assert.Equal("Renamed", reloaded.Name);
+        Assert.Equal(MarketGuid, reloaded.MarketId);
+        Assert.Equal("Maker_1", reloaded.MarketAuthor);
+        Assert.Contains("\"marketId\"", File.ReadAllText(Path.Combine(_dir, "custom-effects.json")));
+    }
+
+    [Fact]
+    public void A_put_with_new_link_values_replaces_the_stored_ones()
+    {
+        var id = CustomFrags.NewId();
+        var store = new CustomEffectStore(_dir);
+        store.Put(id, "n", "", CustomFrags.Frag(), MarketGuid, "Maker_1");
+
+        var (entry, _) = store.Put(id, "n", "", CustomFrags.Frag(), "11111111-2222-3333-4444-555555555555", "Other");
+
+        Assert.Equal("11111111-2222-3333-4444-555555555555", entry!.MarketId);
+        Assert.Equal("Other", entry.MarketAuthor);
+    }
+
+    [Fact]
+    public void A_file_written_before_the_link_fields_loads_unchanged()
+    {
+        var id = CustomFrags.NewId();
+        var json = "{\"entries\":[{\"id\":\"" + id + "\",\"name\":\"old\",\"recipe\":\"r\",\"frag\":"
+            + System.Text.Json.JsonSerializer.Serialize(CustomFrags.Frag()) + ",\"updatedAt\":5}]}";
+        File.WriteAllText(Path.Combine(_dir, "custom-effects.json"), json);
+
+        var entry = new CustomEffectStore(_dir).Get(id)!;
+
+        Assert.Equal("old", entry.Name);
+        Assert.Equal(5, entry.UpdatedAt);
+        Assert.Null(entry.MarketId);
+        Assert.Null(entry.MarketAuthor);
+    }
+
+    [Theory]
+    [InlineData(null, null, true)]
+    [InlineData("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "abcd", true)]
+    [InlineData("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "A_b_C_d_E_f_G_h", true)]
+    [InlineData("{3f2504e0-4f89-41d3-9a0c-0305e82c3301}", null, false)]
+    [InlineData("", null, false)]
+    [InlineData(null, "abc", false)]
+    [InlineData(null, "", false)]
+    [InlineData(null, "sixteen_chars_xx", false)]
+    [InlineData(null, "a b c d", false)]
+    public void ValidateMarketLink_applies_the_guid_and_username_rules(string? marketId, string? marketAuthor, bool ok)
+    {
+        Assert.Equal(ok, CustomEffectStore.ValidateMarketLink(marketId, marketAuthor) is null);
+    }
 }

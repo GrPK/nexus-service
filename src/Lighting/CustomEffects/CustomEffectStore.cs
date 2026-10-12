@@ -18,6 +18,12 @@ public sealed class CustomEffectEntry
     public string Recipe { get; set; } = "";
     public string Frag { get; set; } = "";
     public long UpdatedAt { get; set; }
+
+    /// <summary>The marketplace listing this effect was downloaded from or published as; null when it has no link.</summary>
+    public string? MarketId { get; set; }
+
+    /// <summary>Account username of that listing's author.</summary>
+    public string? MarketAuthor { get; set; }
 }
 
 public sealed class CustomEffectsDoc
@@ -125,6 +131,22 @@ public sealed class CustomEffectStore
     }
 
     public static bool IsValidId(string? id) => id is not null && IdPattern.IsMatch(id);
+
+    private static readonly Regex MarketAuthorPattern = new(@"^[A-Za-z0-9_]{4,15}\z", RegexOptions.CultureInvariant);
+
+    /// <summary>The first problem with the optional marketplace link fields, or null. Mirrors the cloud's username rule (length and charset; reserved words are the cloud's call).</summary>
+    public static string? ValidateMarketLink(string? marketId, string? marketAuthor)
+    {
+        if (marketId is not null && !(marketId.Length == 36 && Guid.TryParseExact(marketId, "D", out _)))
+        {
+            return "marketId must be a GUID";
+        }
+        if (marketAuthor is not null && !MarketAuthorPattern.IsMatch(marketAuthor))
+        {
+            return "marketAuthor must be 4 to 15 letters, digits or underscores";
+        }
+        return null;
+    }
 
     /// <summary>Entries by UpdatedAt ascending.</summary>
     public IReadOnlyList<CustomEffectEntry> List()
@@ -466,7 +488,8 @@ public sealed class CustomEffectStore
     }
 
     /// <summary>Insert or replace. Returns the saved entry, or an error message when the entry cap rejects a new id.</summary>
-    public (CustomEffectEntry? Entry, string? Error) Put(string id, string name, string recipe, string frag)
+    /// <summary>A null <paramref name="marketId"/> or <paramref name="marketAuthor"/> keeps the stored value, so a Studio re-save does not drop the link.</summary>
+    public (CustomEffectEntry? Entry, string? Error) Put(string id, string name, string recipe, string frag, string? marketId = null, string? marketAuthor = null)
     {
         CustomEffectEntry saved;
         // Outside the lock, so a Recovered handler never runs under it.
@@ -490,6 +513,8 @@ public sealed class CustomEffectStore
                 Recipe = recipe ?? "",
                 Frag = frag,
                 UpdatedAt = Math.Max(_clock(), next.Count == 0 ? 0 : next.Max(x => x.UpdatedAt) + 1),
+                MarketId = marketId ?? (idx < 0 ? null : next[idx].MarketId),
+                MarketAuthor = marketAuthor ?? (idx < 0 ? null : next[idx].MarketAuthor),
             };
             if (idx < 0)
             {
@@ -617,5 +642,7 @@ public sealed class CustomEffectStore
         Recipe = e.Recipe,
         Frag = e.Frag,
         UpdatedAt = e.UpdatedAt,
+        MarketId = e.MarketId,
+        MarketAuthor = e.MarketAuthor,
     };
 }

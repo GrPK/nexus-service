@@ -8,6 +8,8 @@ public sealed class CustomEffectResponse
     public string Recipe { get; set; } = "";
     public long UpdatedAt { get; set; }
     public bool Audio { get; set; }
+    public string? MarketId { get; set; }
+    public string? MarketAuthor { get; set; }
 }
 
 /// <summary>PUT body for /lighting/custom-effects/{id}.</summary>
@@ -16,4 +18,6 @@ public sealed class CustomEffectPutBody
     public string? Name { get; set; }
     public string? Recipe { get; set; }
     public string? Frag { get; set; }
+    public string? MarketId { get; set; }
+    public string? MarketAuthor { get; set; }
 }
