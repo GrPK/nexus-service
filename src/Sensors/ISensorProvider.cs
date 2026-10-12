@@ -42,6 +42,14 @@ public interface ISensorProvider
     /// </summary>
     IReadOnlyList<GpuReadout> GetGpus();
 
+    /// <summary>
+    /// Restarts the ROG Astral "Level Sense" calibration of the GPU with this
+    /// <see cref="GpuReadout.Id"/>, or of every GPU that has one when null.
+    /// Returns the ids now calibrating; empty when no GPU has a G-sensor
+    /// (only the Windows provider reads one).
+    /// </summary>
+    IReadOnlyList<string> RecalibrateGpuLevelSense(string? gpuId) => System.Array.Empty<string>();
+
     IReadOnlyList<HardwareSensor> GetMemorySensors();
     string GetMemoryTotalFormatted();
     /// <summary>

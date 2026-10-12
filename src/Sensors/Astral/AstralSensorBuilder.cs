@@ -29,6 +29,17 @@ internal static class AstralSensorBuilder
         result.Add(PowerSensor($"{hwId}/astral/connector/power", "GPU 12VHPWR Connector Power", readout.ConnectorPowerWatts, parent));
     }
 
+    /// <summary>
+    /// Level Sense: how far the card tilted on X and Y since its calibration,
+    /// in degrees (<see cref="AstralLevelSense.Deviation"/>).
+    /// </summary>
+    public static void AppendLevelSense(string hwId, string hwName, float x, float y, List<HardwareSensor> result)
+    {
+        var parent = new SensorParent { Id = hwId, Name = hwName };
+        result.Add(AngleSensor($"{hwId}/astral/level/x", "GPU Level Sense X", x, parent));
+        result.Add(AngleSensor($"{hwId}/astral/level/y", "GPU Level Sense Y", y, parent));
+    }
+
     private static HardwareSensor VoltageSensor(string id, string name, float value, SensorParent parent) => new()
     {
         Id = id,
@@ -59,6 +70,20 @@ internal static class AstralSensorBuilder
         Units = "W",
         Value = value,
         Formatted = $"{value:F1} W",
+        Parent = parent,
+    };
+
+    // No LHM sensor type measures an angle, so this one is Nexus's own. A level
+    // card reads a few hundredths either side of zero; those that round to zero
+    // show as "0.00", not "-0.00".
+    private static HardwareSensor AngleSensor(string id, string name, float value, SensorParent parent) => new()
+    {
+        Id = id,
+        Name = name,
+        Type = "Angle",
+        Units = "°",
+        Value = value,
+        Formatted = $"{(MathF.Abs(value) < 0.005f ? 0f : value):F2}°",
         Parent = parent,
     };
 }

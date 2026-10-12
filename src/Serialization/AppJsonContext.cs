@@ -1322,6 +1322,8 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Diagnostics.Gpu.GpuThrottleInfo))]
 [JsonSerializable(typeof(Nexus.Service.Routes.GpuInfoWire))]
 [JsonSerializable(typeof(Nexus.Service.Routes.GpuHealthResponse))]
+[JsonSerializable(typeof(Nexus.Service.Routes.LevelSenseCalibrateBody))]
+[JsonSerializable(typeof(Nexus.Service.Routes.LevelSenseCalibrateResponse))]
 [JsonSerializable(typeof(Nexus.Service.Diagnostics.Cooling.CoolingStallSnapshot))]
 [JsonSerializable(typeof(Nexus.Service.Diagnostics.Cooling.CoolingStallDevice))]
 [JsonSerializable(typeof(Nexus.Service.Diagnostics.Memory.MemoryModuleInfo))]

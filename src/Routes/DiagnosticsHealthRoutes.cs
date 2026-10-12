@@ -106,6 +106,12 @@ public static class DiagnosticsHealthRoutes
         app.MapGet("/diagnostics/gpu", (string? refresh, GpuHealthMonitor gpu, EventLogMonitor events) =>
             BuildGpuResponse(gpu, events, IsRefresh(refresh)));
 
+        // ROG Astral Level Sense: the card's next few G-sensor readings become
+        // its new level. GpuId is a GpuReadout id; without one every GPU with a
+        // G-sensor recalibrates.
+        app.MapPost("/diagnostics/gpu/level-sense/calibrate", (LevelSenseCalibrateBody? body, ISensorProvider sensors) =>
+            new LevelSenseCalibrateResponse { Gpus = sensors.RecalibrateGpuLevelSense(body?.GpuId) });
+
         app.MapGet("/diagnostics/cooling", (CoolingStallDetector cooling) => cooling.Snapshot()).AllowPanel();
 
         // date (yyyy-MM-dd, service host's local calendar day) takes priority
@@ -606,6 +612,17 @@ public sealed record GpuHealthResponse
 {
     public bool Supported { get; init; }
     public IReadOnlyList<GpuInfoWire> Gpus { get; init; } = Array.Empty<GpuInfoWire>();
+}
+
+public sealed record LevelSenseCalibrateBody
+{
+    public string? GpuId { get; init; }
+}
+
+public sealed record LevelSenseCalibrateResponse
+{
+    /// <summary>Ids of the GPUs now calibrating; empty when none has a G-sensor.</summary>
+    public IReadOnlyList<string> Gpus { get; init; } = Array.Empty<string>();
 }
 
 public sealed record MemoryHealthResponse
