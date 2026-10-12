@@ -238,7 +238,7 @@ internal static class ShaderLibrary
         "ringtunnel", "vortextunnel", "helixtunnel", "boxtunnel",
         "meshgradient", "tide", "vapor", "satinflow",
         "ridgeline", "chevron", "terrace", "harlequin", "mosaic",
-        "sharplines", "breathing",
+        "sharplines", "breathing", "radialfill",
         // Constellation mesh plus the Nexus 2 theme set.
         "constellation", "cybertunnel", "hyperspace",
         "synthwave", "retropetals", "contourbands",

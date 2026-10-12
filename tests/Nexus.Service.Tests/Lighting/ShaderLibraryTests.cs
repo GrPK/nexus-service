@@ -44,6 +44,7 @@ public class ShaderLibraryTests
     [InlineData("mosaic")]
     [InlineData("sharplines")]
     [InlineData("breathing")]
+    [InlineData("radialfill")]
     [InlineData("spectrumaurora")]
     [InlineData("neonwaveform")]
     [InlineData("liquidbeat")]
