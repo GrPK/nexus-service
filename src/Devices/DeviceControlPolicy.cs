@@ -40,19 +40,9 @@ public static class DeviceControlPolicy
         ["corsair-link-lcd"] = "icue",
     };
 
-    // Hyte + iBUYPOWER hardware: the brands Nexus is built for. Every other
-    // first-party handler outside StableThirdPartyHandlers drives third-party
-    // hardware whose support is experimental (surfaced with a badge in the UI).
-    private static readonly HashSet<string> FirstPartyHandlers = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "cnvs", "keeb", "np50", "smarthub", "y70", "qseries", "fan-hub", "aw5",
-        "ibp-keyboard", "ibp-mouse",
-    };
-
-    private static readonly HashSet<string> StableThirdPartyHandlers = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "nzxt-kraken", "streamdeck", "tryx", "zmatrices-lcd", "nollie",
-    };
+    // Lian Li (incl. Strimer) and Corsair handlers drive the hardware whose
+    // support is experimental (surfaced with a badge in the UI); no other is.
+    private static readonly string[] ExperimentalHandlerPrefixes = { "lianli", "strimer", "corsair" };
 
     /// <summary>
     /// Handlers that default off for a reason other than a competing app: hardware whose
@@ -147,9 +137,9 @@ public static class DeviceControlPolicy
         => BusByHandler.TryGetValue(handlerId, out var bus) ? bus : "usb";
 
     /// <summary>
-    /// True for handlers driving third-party hardware whose support is
-    /// experimental. Drives the "Experimental" badge in the UI.
+    /// True for Lian Li and Corsair handlers, whose support is experimental.
+    /// Drives the "Experimental" badge in the UI.
     /// </summary>
     public static bool IsExperimental(string handlerId) =>
-        !FirstPartyHandlers.Contains(handlerId) && !StableThirdPartyHandlers.Contains(handlerId) && !BusByHandler.ContainsKey(handlerId);
+        ExperimentalHandlerPrefixes.Any(p => handlerId.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 }

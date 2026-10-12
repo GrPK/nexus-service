@@ -30,7 +30,11 @@ public class DeviceControlPolicyTests
     [InlineData("lianli-wireless")]
     [InlineData("lianli-aio")]
     [InlineData("strimer")]
-    public void IsExperimental_ThirdPartyHardware_IsTrue(string handlerId)
+    [InlineData("lianli-screen88")]
+    [InlineData("lianli-hydroshift2-curve")]
+    [InlineData("corsair-link-lcd")]
+    [InlineData("corsair-xc7-lcd")]
+    public void IsExperimental_LianLiOrCorsairHardware_IsTrue(string handlerId)
     {
         Assert.True(DeviceControlPolicy.IsExperimental(handlerId));
     }
@@ -41,7 +45,11 @@ public class DeviceControlPolicyTests
     [InlineData("tryx")]
     [InlineData("zmatrices-lcd")]
     [InlineData("nollie")]
-    public void IsExperimental_StableThirdPartyHardware_IsFalse(string handlerId)
+    [InlineData("asus-ryujin-lcd")]
+    [InlineData("asrock-lcd")]
+    [InlineData("thermalright-lcd")]
+    [InlineData("idcooling-fx-lcd")]
+    public void IsExperimental_OtherThirdPartyHardware_IsFalse(string handlerId)
     {
         Assert.False(DeviceControlPolicy.IsExperimental(handlerId));
     }

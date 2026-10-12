@@ -99,12 +99,12 @@ public sealed class WindowsMediaProvider : IMediaProvider, IMediaChangeSource, I
 
     public void Control(string source, string action)
     {
-        _ = MediaCommands.ControlAsync(_helper, source, action);
+        MediaCommands.ControlAsync(_helper, source, action).ObserveFaults();
     }
 
     public void Seek(string source, long positionMs)
     {
-        _ = MediaCommands.SeekAsync(_helper, source, positionMs);
+        MediaCommands.SeekAsync(_helper, source, positionMs).ObserveFaults();
     }
 
     public byte[] GetAlbumArt(string source)

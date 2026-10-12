@@ -15,7 +15,7 @@ public static partial class DevicesRoutes
     private static void MapKrakenEndpoints(WebApplication app)
     {
         // GET /devices/nzxt-kraken/state
-        app.MapGet("/devices/nzxt-kraken/state", (KrakenHub hub) =>
+        app.MapGet("/devices/nzxt-kraken/state", (KrakenHub hub, Nexus.Service.Persistence.IConfigStore store) =>
         {
             // Read the snapshot once; every field below uses this one reference.
             var snap = hub.Snapshot;
@@ -44,6 +44,7 @@ public static partial class DevicesRoutes
                     LcdWidth = hub.LcdWidth,
                     LcdHeight = hub.LcdHeight,
                     LcdBrightness = snap.LcdBrightness,
+                    LcdSleepWhenLocked = store.Load().Devices.KrakenLcdSleepWhenLocked,
                     LcdOrientation = snap.LcdOrientationQuarterTurns * 90,
                     LcdMode = snap.DisplayMode switch
                     {
@@ -57,10 +58,19 @@ public static partial class DevicesRoutes
         });
 
         // PUT /devices/nzxt-kraken/lcd - backlight, rotation and display mode.
-        app.MapPut("/devices/nzxt-kraken/lcd", (KrakenLcdRequest body, KrakenHub hub) =>
+        app.MapPut("/devices/nzxt-kraken/lcd", (KrakenLcdRequest body, KrakenHub hub, Nexus.Service.Persistence.IConfigStore store) =>
         {
+            // Stored whether or not the cooler is attached; it takes effect on the next lock.
+            if (body.SleepWhenLocked is { } sleepWhenLocked)
+            {
+                store.Update(st => st.Devices.KrakenLcdSleepWhenLocked = sleepWhenLocked);
+            }
             if (!hub.IsConnected)
             {
+                if (body.SleepWhenLocked.HasValue && !body.Brightness.HasValue && !body.Orientation.HasValue && body.Mode is null)
+                {
+                    return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
+                }
                 return Results.BadRequest(ApiResponse.Fail("kraken not connected"));
             }
 
@@ -317,6 +327,7 @@ public sealed class KrakenStateResponse
     public int LcdWidth { get; set; }
     public int LcdHeight { get; set; }
     public int LcdBrightness { get; set; }
+    public bool LcdSleepWhenLocked { get; set; }
     public int LcdOrientation { get; set; }
     public string LcdMode { get; set; } = "";
     public KrakenChannelDto[] Channels { get; set; } = Array.Empty<KrakenChannelDto>();
@@ -327,6 +338,7 @@ public sealed class KrakenLcdRequest
     public int? Brightness { get; set; }
     public int? Orientation { get; set; }
     public string? Mode { get; set; }
+    public bool? SleepWhenLocked { get; set; }
 }
 
 public sealed class KrakenEffectDto

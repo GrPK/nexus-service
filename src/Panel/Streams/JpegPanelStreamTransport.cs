@@ -32,6 +32,7 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
     private Func<int?>? _brightness;
     // Seeded from what the panel was last told, so a reconnect re-sends nothing it has.
     private int _brightnessApplied = -1;
+    private int _brightnessPrevious = -1;
     private long _brightnessNextReadMs;
     private bool _brightnessFaultLogged;
     private readonly object _brightnessLock = new();
@@ -64,13 +65,23 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
         _brightnessNextReadMs = 0;
     }
 
+    public int? CurrentBrightness
+    {
+        get { lock (_brightnessLock) { return _brightnessApplied >= 0 ? _brightnessApplied : null; } }
+    }
+
+    public int? PreviousBrightness
+    {
+        get { lock (_brightnessLock) { return _brightnessPrevious >= 0 ? _brightnessPrevious : null; } }
+    }
+
     /// <summary>Applies a changed backlight from either the frame or settings path.</summary>
-    public void ApplyBrightness()
+    public bool ApplyBrightness()
     {
         lock (_brightnessLock)
         {
             _brightnessNextReadMs = 0;
-            TryApplyBrightnessLocked();
+            return TryApplyBrightnessLocked();
         }
     }
 
@@ -104,6 +115,7 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
         }
         if (_hub.SetBrightness(percent))
         {
+            _brightnessPrevious = _brightnessApplied;
             _brightnessApplied = percent;
             ServiceLog.Info($"[{_hub.Model.HandlerId}] backlight {percent}%");
             return true;

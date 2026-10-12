@@ -10,8 +10,8 @@ namespace Nexus.Service.Peripherals.JpegPanels;
 ///
 /// Every row but <see cref="HydroShiftLcd"/> was reconstructed from third-party protocol
 /// documentation and has never been run against hardware: we own no unit of any of them.
-/// They ship experimental with Nexus Control off by default so a build never grabs an
-/// untested cooler on its own.
+/// They ship with Nexus Control off by default so a build never grabs an untested
+/// cooler on its own.
 /// </summary>
 public sealed record JpegPanelModel(
     string HandlerId,

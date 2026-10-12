@@ -240,12 +240,13 @@ public class JpegPanelHubTests
     /// This is the guard on that promise.
     /// </summary>
     [Fact]
-    public void Every_model_defaults_to_nexus_control_off_and_reads_as_experimental()
+    public void Every_model_defaults_to_nexus_control_off_and_only_lianli_and_corsair_read_as_experimental()
     {
+        var experimental = new[] { "lianli-galahad2-lcd", "lianli-hydroshift-lcd", "corsair-xc7-lcd", "corsair-capellix-lcd" };
         Assert.All(JpegPanelModel.All, m =>
         {
             Assert.False(DeviceControlPolicy.DefaultOn(m.HandlerId), $"{m.HandlerId} must default off");
-            Assert.True(DeviceControlPolicy.IsExperimental(m.HandlerId), $"{m.HandlerId} must be experimental");
+            Assert.Equal(experimental.Contains(m.HandlerId), DeviceControlPolicy.IsExperimental(m.HandlerId));
         });
     }
 

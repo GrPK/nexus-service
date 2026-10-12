@@ -37,6 +37,7 @@ public sealed class WindowsTryxRkTransport : ITryxPanoramaTransport
     private volatile IReadOnlyDictionary<string, long> _mediaFileSizes = EmptyMediaFileSizes;
     private int _mediaListVersion;
     private volatile string _panelSerial = "";
+    private volatile string _panelFirmwareVersion = "";
     private readonly TryxRkFrameReader _frames = new();
     private long _pullSession;
     private volatile PendingPull? _pendingPull;
@@ -92,6 +93,7 @@ public sealed class WindowsTryxRkTransport : ITryxPanoramaTransport
     public IReadOnlyDictionary<string, long> MediaFileSizes => _mediaFileSizes;
     public int MediaListVersion => Volatile.Read(ref _mediaListVersion);
     public string PanelSerial => _panelSerial;
+    public string PanelFirmwareVersion => _panelFirmwareVersion;
 
     // A write to a panel that has stopped draining its endpoint (mid re-enumeration,
     // or firmware-wedged) parks in the usbprint stack for ~45-60s before it errors. That
@@ -283,6 +285,12 @@ public sealed class WindowsTryxRkTransport : ITryxPanoramaTransport
         {
             _panelSerial = serial;
             ServiceLog.Info($"[tryx] panel serial {serial}");
+        }
+        var firmware = TryxMediaList.ParseFirmwareVersion(span);
+        if (!string.IsNullOrEmpty(firmware))
+        {
+            _panelFirmwareVersion = firmware;
+            ServiceLog.Info($"[tryx] panel firmware {firmware}");
         }
     }
 

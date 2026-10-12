@@ -19,6 +19,7 @@ public sealed class Slv3LcdScreenDto
     public int Width { get; set; } = Slv3LcdProtocol.PanelWidth;
     public int Height { get; set; } = Slv3LcdProtocol.PanelHeight;
     public byte Brightness { get; set; }
+    public bool SleepWhenLocked { get; set; } = true;
     public byte Rotation { get; set; }
     public string ContentType { get; set; } = "off";
     public string? MediaId { get; set; }
@@ -50,6 +51,7 @@ public sealed class Slv3LcdSettingsRequest
     public string Serial { get; set; } = "";
     public byte? Brightness { get; set; }
     public byte? Rotation { get; set; }
+    public bool? SleepWhenLocked { get; set; }
 }
 
 public sealed class Slv3LcdOrderRequest
@@ -155,6 +157,7 @@ public static class Slv3LcdRoutes
                     Position = screen.Position,
                     Order = settings.Order,
                     Brightness = settings.Brightness,
+                    SleepWhenLocked = settings.SleepWhenLocked,
                     Rotation = settings.Rotation,
                     ContentType = settings.ContentType,
                     MediaId = settings.MediaId,
@@ -185,7 +188,13 @@ public static class Slv3LcdRoutes
                 return Results.Json(ApiResponse.Fail("rotation must be 0-3"), AppJsonContext.Default.ApiResponse);
             }
 
-            if (body.Brightness.HasValue) hub.SetBrightness(body.Serial, body.Brightness.Value);
+            // While the lock holds this screen dark the new level is stored only; the worker
+            // shows it on unlock.
+            var current = store.Load().Devices.LianLiWireless.Screens.TryGetValue(body.Serial, out var cur)
+                ? cur
+                : new LianLiWirelessScreenSettings();
+            if (body.Brightness.HasValue && !hub.IsLockSleeping(body.Serial, () => current.SleepWhenLocked))
+                hub.SetBrightness(body.Serial, body.Brightness.Value);
             if (body.Rotation.HasValue) hub.SetRotation(body.Serial, body.Rotation.Value);
 
             store.Update(s =>
@@ -195,6 +204,7 @@ public static class Slv3LcdRoutes
                     : new LianLiWirelessScreenSettings();
                 if (body.Brightness.HasValue) screen.Brightness = body.Brightness.Value;
                 if (body.Rotation.HasValue) screen.Rotation = body.Rotation.Value;
+                if (body.SleepWhenLocked.HasValue) screen.SleepWhenLocked = body.SleepWhenLocked.Value;
                 s.Devices.LianLiWireless.Screens[body.Serial] = screen;
             });
 

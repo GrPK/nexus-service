@@ -1,4 +1,5 @@
 using System;
+using Nexus.Service.Lighting;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -85,6 +86,310 @@ public sealed class TryxPanoramaHub : IDisposable
 
     private static long NowMs() => Environment.TickCount64;
 
+    // Session lock. State.ScreenEnabled stays the user's choice; only what goes on the wire
+    // is forced off while the lock holds the panel, so unlock puts back exactly that choice.
+    private const string LockKey = "screen";
+    private LcdLockSleepSet? _lockSleep;
+    private volatile bool _lockDimmed;
+
+    private bool LockSetting() => _configStore.Load().Tryx.SleepWhenLocked;
+
+    private bool Wire(bool screenOn) => screenOn && !_lockDimmed;
+
+    /// <summary>The persisted Sleep-when-locked choice.</summary>
+    public bool SleepWhenLocked => LockSetting();
+
+    /// <summary>Wires the session lock; the setting is read once per lock.</summary>
+    public void BindLockSleep(LcdLockState state)
+    {
+        _lockSleep = new LcdLockSleepSet(state);
+        state.Changed += OnLockChanged;
+    }
+
+    // Lock order: _txGate, then _lock, then _lockGate, then _fadeGate. The two gates are leaves: nothing
+    // holding either sends, takes _txGate or takes _lock, so they cannot invert with the send path.
+    private readonly object _lockGate = new();
+
+    /// <summary>Test seam: runs between the lock's decision and the start of its fade.</summary>
+    internal Action? TestHookAfterLockDecision { get; set; }
+
+    /// <summary>True while the lock holds the screen off on the wire.</summary>
+    internal bool LockDimmed => _lockDimmed;
+
+    /// <summary>
+    /// Brightness steps a lock fade takes. Every step is a full config frame through the same
+    /// serialized write path as any other command, and the panel re-enumerates on its own every
+    /// so often, so this stays well under the other devices' step count.
+    /// </summary>
+    internal const int FadeSteps = 8;
+
+    // The fade, sampled by one runner loop: a new or reversed fade is just new state for the same
+    // loop, so steps never queue up behind each other, and a step that blocks on a slow write is
+    // simply skipped over because the level is read off the clock.
+    private readonly object _fadeGate = new();
+    private LcdFade? _fade;
+    private int _fadeLastSent = -1;
+    // The panel was last told the screen is off (the end of a fade down or an instant off).
+    private bool _offOnWire;
+    private LcdFadeRunner? _fadeRunner;
+
+    /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
+    internal Func<long> FadeClock { get; set; } = () => Environment.TickCount64;
+
+    internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: FaultFade);
+
+    /// <summary>True while a lock fade is in flight; the slideshow holds still meanwhile.</summary>
+    internal bool FadeActive
+    {
+        get { lock (_fadeGate) { return _fade is not null; } }
+    }
+
+    /// <summary>Test seam: runs inside the fade gate in the done branch, before it decides what to resend.</summary>
+    internal Action? TestHookInFadeDoneGate { get; set; }
+
+    /// <summary>Test seam: the unlock handler is about to take the lock gate.</summary>
+    internal Action? TestHookUnlockHandlerEntered { get; set; }
+
+    /// <summary>Test seam: the unlock handler has left the lock gate.</summary>
+    internal Action? TestHookUnlockHandlerCleared { get; set; }
+
+    /// <summary>Test seam: runs in a fade step between reading the ramp and writing the frame.</summary>
+    internal Action? TestHookBeforeStepSend { get; set; }
+
+    /// <summary>Test seam: runs in ApplyInitialConfig between the lock decision and the flag it sets.</summary>
+    internal Action? TestHookInInitialConfigDecision { get; set; }
+
+    // Caller holds _lockGate. Only records the ramp and wakes the loop; nothing is sent here.
+    private void BeginFadeLocked(int from, int to, TimeSpan duration)
+    {
+        lock (_fadeGate)
+        {
+            _fade = new LcdFade(from, to, duration, FadeClock(), FadeSteps);
+            _fadeLastSent = -1;
+        }
+        FadeRunner.Kick();
+    }
+
+    private void CancelFade()
+    {
+        lock (_fadeGate) { _fade = null; }
+    }
+
+    private int CurrentWireLevel()
+    {
+        lock (_fadeGate)
+        {
+            if (_fade is { } running)
+            {
+                return running.LevelAt(FadeClock());
+            }
+        }
+        return _offOnWire ? 0 : State.Brightness;
+    }
+
+    /// <summary>One sample of the fade: sends the stepped level when it changed, and the final state when it lands.</summary>
+    internal bool StepFade()
+    {
+        LcdFade? fade;
+        int lastSent;
+        lock (_fadeGate)
+        {
+            fade = _fade;
+            lastSent = _fadeLastSent;
+        }
+        if (fade is null)
+        {
+            return false;
+        }
+        var now = FadeClock();
+        var level = fade.LevelAt(now);
+        TestHookBeforeStepSend?.Invoke();
+        if (!fade.IsDoneAt(now))
+        {
+            if (level != lastSent && IsConnected)
+            {
+                bool sent;
+                // Under the send gate, with the ramp and the screen choice read again inside it: a
+                // step that was decided before an explicit change must not land after that change.
+                lock (_txGate)
+                {
+                    sent = IsCurrentFade(fade) && SendOnly(TryxRkProtocol.BuildConfig(State.ScreenEnabled, level));
+                }
+                if (sent)
+                {
+                    lock (_fadeGate)
+                    {
+                        if (ReferenceEquals(_fade, fade)) { _fadeLastSent = level; }
+                    }
+                    ResendSettledIfCancelled(fade);
+                }
+            }
+            return true;
+        }
+        // The end of the ramp: off for a fade down, the user's brightness for a fade up. Reliable,
+        // because this is the state the panel keeps. The frames carry the user's own enabled choice,
+        // so a screen switched off during the ramp is never relit by it.
+        bool endSent;
+        bool screenOn;
+        lock (_txGate)
+        {
+            screenOn = State.ScreenEnabled;
+            endSent = IsConnected && IsCurrentFade(fade) && SendReliable(fade.Down
+                ? TryxRkProtocol.BuildConfig(false, State.Brightness)
+                : TryxRkProtocol.BuildConfig(screenOn, State.Brightness));
+        }
+        var sentFinal = endSent;
+        bool resend;
+        bool more;
+        lock (_fadeGate)
+        {
+            TestHookInFadeDoneGate?.Invoke();
+            if (!ReferenceEquals(_fade, fade))
+            {
+                // Replaced by a reversal: the new ramp owns the screen. Cancelled by a reconnect: the
+                // settled state goes out again, after the gate is released, since that is a send.
+                resend = _fade is null;
+                more = _fade is not null;
+            }
+            else
+            {
+                _fade = null;
+                if (sentFinal)
+                {
+                    _offOnWire = fade.Down || !screenOn;
+                }
+                resend = false;
+                more = false;
+            }
+        }
+        if (resend)
+        {
+            ResendSettled();
+        }
+        return more;
+    }
+
+    /// <summary>A step threw: the ramp is dropped and the settled state goes out, so the screen is not left on a half step.</summary>
+    internal void FaultFade()
+    {
+        bool had;
+        lock (_fadeGate)
+        {
+            had = _fade is not null;
+            _fade = null;
+        }
+        if (!had)
+        {
+            return;
+        }
+        try { ResendSettled(); }
+        catch (Exception ex)
+        {
+            ServiceLog.Warn($"[tryx] settling after a failed fade step: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    // A reconnect's initial config writes without the send gate, so a step already in flight can
+    // land after it. When the ramp was cancelled under a step, the settled state goes out again.
+    private void ResendSettledIfCancelled(LcdFade fade)
+    {
+        lock (_fadeGate)
+        {
+            // Replaced by a reversal is not cancelled: resending then would flash the old state.
+            if (_fade is not null)
+            {
+                return;
+            }
+        }
+        ResendSettled();
+    }
+
+    private bool IsCurrentFade(LcdFade fade)
+    {
+        lock (_fadeGate) { return ReferenceEquals(_fade, fade); }
+    }
+
+    /// <summary>Test seam: runs in a resend after the frame is built, inside the send gate.</summary>
+    internal Action? TestHookInResend { get; set; }
+
+    // Built and sent under the send gate, so an explicit screen change cannot slip between reading
+    // the state and the write and then be overwritten by it.
+    private void ResendSettled()
+    {
+        lock (_txGate)
+        {
+            if (!IsConnected)
+            {
+                return;
+            }
+            var screenOn = Wire(State.ScreenEnabled);
+            var frame = TryxRkProtocol.BuildConfig(screenOn, State.Brightness);
+            TestHookInResend?.Invoke();
+            if (SendOnly(frame))
+            {
+                _offOnWire = !screenOn;
+            }
+        }
+    }
+
+    internal void OnLockChanged(bool locked)
+    {
+        if (_lockSleep is null)
+        {
+            return;
+        }
+        if (locked)
+        {
+            // Decided under the gate: a handler that ran after its unlock sees the unlock here.
+            lock (_lockGate)
+            {
+                if (!_lockSleep.IsSleeping(LockKey, LockSetting) || _lockDimmed)
+                {
+                    return;
+                }
+                _lockDimmed = true;
+            }
+            TestHookAfterLockDecision?.Invoke();
+            lock (_lockGate)
+            {
+                // The unlock may have run since; then there is nothing to fade out.
+                if (!_lockDimmed || !IsConnected || !State.ScreenEnabled)
+                {
+                    return;
+                }
+                ServiceLog.Info("[lcd-lock] tryx screen fading out");
+                BeginFadeLocked(CurrentWireLevel(), 0, SleepBlackoutCoordinator.LockFadeDuration);
+            }
+            return;
+        }
+        bool wasDimmed;
+        TestHookUnlockHandlerEntered?.Invoke();
+        try
+        {
+            lock (_lockGate)
+            {
+                _lockSleep.Drain();
+                wasDimmed = _lockDimmed;
+                _lockDimmed = false;
+                if (!wasDimmed || !IsConnected || !State.ScreenEnabled)
+                {
+                    return;
+                }
+                ServiceLog.Info("[lcd-lock] tryx screen fading in");
+                // Screen on at brightness 0, then up to the user's level: from 0 when the panel is off,
+                // or from the step a fade down was caught on.
+                BeginFadeLocked(CurrentWireLevel(), State.Brightness, SleepBlackoutCoordinator.UnlockFadeDuration);
+                // The clip that comes back with the screen gets a full hold from the start of the ramp,
+                // so the heartbeat inside it cannot select a clip at full brightness.
+                _slideshow.Rearm(State.CurrentMedia, NowMs());
+            }
+        }
+        finally
+        {
+            TestHookUnlockHandlerCleared?.Invoke();
+        }
+    }
+
     public TryxPanoramaState State { get; } = new();
 
     /// <summary>True while an import holds the port; the heartbeat skips STATE-all then.</summary>
@@ -160,6 +465,9 @@ public sealed class TryxPanoramaHub : IDisposable
     /// <summary>The panel's serial_number (needed as the sn on get_file_list / file_remove);
     /// empty until the device_info reply (from the connect-time CMD_Get_DeviceInfo) is parsed.</summary>
     public string PanelSerial => _transport?.PanelSerial ?? "";
+
+    /// <summary>The panel's firmware_version from the same device_info reply; empty until it is parsed.</summary>
+    public string PanelFirmwareVersion => _transport?.PanelFirmwareVersion ?? "";
 
     /// <summary>Bytes stored on the panel's /userdata: this session's own per-file map,
     /// re-synced from the transport's media-list push on each version bump and adjusted
@@ -463,12 +771,27 @@ public sealed class TryxPanoramaHub : IDisposable
     {
         try
         {
-            transport.Write(TryxRkProtocol.BuildConfig(State.ScreenEnabled, State.Brightness));
+            // A panel that attaches or re-enumerates while locked joins the sleep before its
+            // first write, so the remembered enabled state never reaches the wire.
+            lock (_lockGate)
+            {
+                var sleeping = _lockSleep?.IsSleeping(LockKey, LockSetting) == true;
+                TestHookInInitialConfigDecision?.Invoke();
+                if (sleeping)
+                {
+                    _lockDimmed = true;
+                }
+                // A reconnect starts from the settled state, not from half a ramp.
+                CancelFade();
+                _offOnWire = !Wire(State.ScreenEnabled);
+            }
+            transport.Write(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), State.Brightness));
             // Bootstrap the device serial: get_file_list needs the panel's serial_number (locked),
             // which we only learn from device_info. Request it here; once the drain parses the
             // reply, the heartbeat sends get_file_list so the media list + used-bytes populate
             // (a warm reconnect doesn't re-trigger the unprompted cold-boot list push).
             _fileListRequested = false;
+            ResetCoolerSession();
             transport.Write(TryxRkProtocol.BuildGetDeviceInfo());
             // Re-assert the last preset wallpaper so a reconnect (service restart, or the
             // panel's own re-enumeration) restores the picture instead of leaving the panel
@@ -476,7 +799,7 @@ public sealed class TryxPanoramaHub : IDisposable
             // not re-pushed here - only built-in presets, which are one cheap selection.
             if (!string.IsNullOrEmpty(State.CurrentMedia) && !State.CurrentMediaIsCustom)
             {
-                transport.Write(TryxRkProtocol.BuildPreset(State.CurrentMedia, State.ScreenEnabled, State.Brightness));
+                transport.Write(TryxRkProtocol.BuildPreset(State.CurrentMedia, Wire(State.ScreenEnabled), State.Brightness));
             }
             if (_overlay.Items.Count > 0)
             {
@@ -533,6 +856,7 @@ public sealed class TryxPanoramaHub : IDisposable
                     SendOnly(TryxRkProtocol.BuildGetFileList(sn));
                 }
             }
+            if (!_importInProgress) TickCooler();
             State.LastFrameMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
         finally
@@ -548,7 +872,7 @@ public sealed class TryxPanoramaHub : IDisposable
     // the screen on, so a screen the user switched off is left alone.
     private void AdvanceSlideshowIfDue()
     {
-        if (!State.ScreenEnabled) return;
+        if (!State.ScreenEnabled || _lockDimmed || FadeActive) return;
         var next = _slideshow.Tick(ListCustomMedia, NowMs());
         if (next is null) return;
         if (!SelectCustomMedia(next))
@@ -572,20 +896,28 @@ public sealed class TryxPanoramaHub : IDisposable
     {
         // Screen on/off rides the same f200.f5 config as brightness (f5.f1 = enable);
         // carry the current brightness so turning the screen back on restores it.
-        var ok = SendReliable(TryxRkProtocol.BuildConfig(enable, State.Brightness));
-        if (ok)
+        // An explicit choice ends any lock ramp: its next step must not undo it.
+        // The send and the state update stay under the send gate, so a ramp step or a resend cannot
+        // land between them and undo the choice.
+        lock (_txGate)
         {
-            State.ScreenEnabled = enable;
-            // The clip that comes back with the screen gets a full hold.
-            if (enable) _slideshow.Rearm(State.CurrentMedia, NowMs());
+            CancelFade();
+            var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(enable), State.Brightness));
+            if (ok)
+            {
+                _offOnWire = !Wire(enable);
+                State.ScreenEnabled = enable;
+                // The clip that comes back with the screen gets a full hold.
+                if (enable) _slideshow.Rearm(State.CurrentMedia, NowMs());
+            }
+            return ok;
         }
-        return ok;
     }
 
     public bool SetBrightness(int brightness)
     {
         var clamped = Math.Clamp(brightness, 0, 100);
-        var ok = SendReliable(TryxRkProtocol.BuildConfig(State.ScreenEnabled, clamped));
+        var ok = SendReliable(TryxRkProtocol.BuildConfig(Wire(State.ScreenEnabled), clamped));
         if (ok)
         {
             State.Brightness = clamped;
@@ -603,7 +935,7 @@ public sealed class TryxPanoramaHub : IDisposable
         // cannot land between them and leave State pointing at a clip the panel left.
         lock (_txGate)
         {
-            var ok = SendReliable(TryxRkProtocol.BuildPreset(wallpaperMedia, State.ScreenEnabled, State.Brightness));
+            var ok = SendReliable(TryxRkProtocol.BuildPreset(wallpaperMedia, Wire(State.ScreenEnabled), State.Brightness));
             if (ok)
             {
                 State.CurrentMedia = wallpaperMedia;
@@ -740,7 +1072,7 @@ public sealed class TryxPanoramaHub : IDisposable
             // file joins it (and the slideshow) without waiting for a media poll.
             RefreshMediaList(waitForGate: true);
             // Same f200 config that selects a built-in preset; wallpaper = the pushed file.
-            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, State.ScreenEnabled, State.Brightness)))
+            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, Wire(State.ScreenEnabled), State.Brightness)))
             {
                 return (false, "");
             }
@@ -912,7 +1244,7 @@ public sealed class TryxPanoramaHub : IDisposable
         RefreshMediaList(waitForGate: true);
         lock (_txGate)
         {
-            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, State.ScreenEnabled, State.Brightness))) return false;
+            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, Wire(State.ScreenEnabled), State.Brightness))) return false;
             State.CurrentMedia = deviceFileName;
             State.CurrentMediaIsCustom = false;
             _configStore.Update(s => { s.Tryx.CurrentMedia = deviceFileName; s.Tryx.CurrentMediaIsCustom = false; });
@@ -922,14 +1254,14 @@ public sealed class TryxPanoramaHub : IDisposable
     }
 
     // One request/reply exchange under the send gate; null when the panel does not answer.
-    private T? Request<T>(byte[] frame, int replyField, Func<byte[], T?> parse) where T : struct
+    private T? Request<T>(byte[] frame, int replyField, Func<byte[], T?> parse, int timeoutMs = DecryptReplyTimeoutMs) where T : struct
     {
         var transport = _transport;
         if (transport is not { IsOpen: true }) return null;
         byte[]? reply;
         lock (_txGate)
         {
-            try { reply = transport.Request(frame, replyField, DecryptReplyTimeoutMs); }
+            try { reply = transport.Request(frame, replyField, timeoutMs); }
             catch (Exception ex)
             {
                 ServiceLog.Warn($"[tryx] request {replyField} failed: {ex.GetType().Name}: {ex.Message}");
@@ -1098,7 +1430,7 @@ public sealed class TryxPanoramaHub : IDisposable
         if (!TryxThumbnailCache.IsSafeDeviceName(deviceFileName)) return false;
         lock (_txGate)
         {
-            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, screenOn: true, State.Brightness))) return false;
+            if (!SendReliable(TryxRkProtocol.BuildPreset(deviceFileName, screenOn: Wire(true), State.Brightness))) return false;
             State.CurrentMedia = deviceFileName;
             State.CurrentMediaIsCustom = true;
             State.ScreenEnabled = true;
@@ -1380,6 +1712,157 @@ public sealed class TryxPanoramaHub : IDisposable
             }
         }
         return null;
+    }
+
+    // ── Cooler: the small fan on the pump head ──
+    // Writes ride the heartbeat and go out only when the target changes, as Kanali's Smart Mode
+    // does, so a curve engine driving every second costs one frame per change. The panel's own fan
+    // config is read before Nexus first writes and is written back on release. The cooler fields
+    // below are touched under _txGate, except the target and baseline, which take _coolerLock.
+
+    // Kanali reads the speeds every 1.5 s; one request per 2 s keeps the heartbeat tick short.
+    internal TimeSpan CoolerPollInterval { get; set; } = TimeSpan.FromSeconds(2);
+    // Kanali waits 300 ms for the status notification before reading its cache.
+    private const int CoolerReplyTimeoutMs = 300;
+    // Unanswered status requests before polling stops for this connection, so a firmware without
+    // the cooler does not cost a reply timeout on every poll. Unanswered config reads before the
+    // fan is driven without the panel's own config to hand back.
+    private const int CoolerMaxMisses = 3;
+    // How long a release waits for a tick or a control write in flight to let go of _txGate.
+    private const int CoolerReleaseGateWaitMs = 2000;
+
+    private readonly object _coolerLock = new();
+    private int? _coolerTarget;
+    private TryxMediaList.CoolerFanConfig? _coolerBaseline;
+    private bool _coolerWritten;
+    private bool _coolerRestorePending;
+    private int _coolerConfigMisses;
+    private int? _coolerSentPower;
+    private int _coolerMisses;
+    private long _coolerPollDueMs;
+
+    /// <summary>True when the connected model has the software-driven small fan.</summary>
+    public bool HasCooler => TryxPanoramaProtocol.HasCoolerFan(State.ProductId);
+
+    /// <summary>The fixed power Nexus drives the small fan at, or null while the panel keeps its own config.</summary>
+    public int? CoolerFanTarget
+    {
+        get { lock (_coolerLock) return _coolerTarget; }
+    }
+
+    /// <summary>Drives the small fan at <paramref name="percent"/> from the next heartbeat tick on.</summary>
+    public void SetCoolerFanTarget(int percent)
+    {
+        lock (_coolerLock) _coolerTarget = Math.Clamp(percent, 0, 100);
+    }
+
+    /// <summary>Hands the small fan back the config the panel had before Nexus drove it. Sent at once
+    /// rather than on the next tick: ReleaseAll also runs at shutdown, after the last tick. Waits a
+    /// bounded time for a write in flight instead of skipping, since at shutdown no tick follows.</summary>
+    public void ReleaseCoolerFan()
+    {
+        lock (_coolerLock) _coolerTarget = null;
+        if (!IsConnected) return;
+        if (!Monitor.TryEnter(_txGate, CoolerReleaseGateWaitMs))
+        {
+            ServiceLog.Warn("[tryx] panel busy, VRM fan release left to the next heartbeat tick");
+            return;
+        }
+        try { ApplyCoolerTarget(); }
+        finally { Monitor.Exit(_txGate); }
+    }
+
+    // A fresh connection asks for the speeds again and re-sends the target, since the panel may
+    // have reset its fan while it re-enumerated. The last readings stay until new ones arrive.
+    private void ResetCoolerSession()
+    {
+        _coolerConfigMisses = 0;
+        _coolerSentPower = null;
+        _coolerMisses = 0;
+        _coolerPollDueMs = 0;
+    }
+
+    private void TickCooler()
+    {
+        if (!HasCooler) return;
+        // Both reads carry the panel serial from the connect-time device_info reply. No write goes
+        // out while the config read may still be answered, so the baseline is the panel's own
+        // config: a read that times out is retried on the next ticks, and only after
+        // CoolerMaxMisses of them is the fan driven without one.
+        var sn = PanelSerial;
+        if (string.IsNullOrEmpty(sn)) return;
+        bool needBaseline;
+        lock (_coolerLock) needBaseline = _coolerBaseline is null && !_coolerWritten;
+        var holdWrites = false;
+        if (needBaseline && _coolerConfigMisses < CoolerMaxMisses)
+        {
+            holdWrites = !ReadCoolerBaseline(sn) && _coolerConfigMisses < CoolerMaxMisses;
+        }
+        PollCoolerStatus(sn);
+        if (!holdWrites) ApplyCoolerTarget();
+    }
+
+    private bool ReadCoolerBaseline(string sn)
+    {
+        var config = Request(TryxRkProtocol.BuildGetCoolerConfig(sn), TryxRkProtocol.CoolerConfigReplyField,
+            r => TryxMediaList.ParseCoolerFanConfig(r), CoolerReplyTimeoutMs);
+        if (config is not { } c)
+        {
+            if (++_coolerConfigMisses == CoolerMaxMisses)
+            {
+                ServiceLog.Warn($"[tryx] panel left {CoolerMaxMisses} fan config requests unanswered; a released fan keeps the last power Nexus set");
+            }
+            return false;
+        }
+        lock (_coolerLock) _coolerBaseline = c;
+        State.CoolerFanPower ??= c.FixedPower;
+        return true;
+    }
+
+    private void PollCoolerStatus(string sn)
+    {
+        var now = NowMs();
+        if (_coolerMisses >= CoolerMaxMisses || now < _coolerPollDueMs) return;
+        _coolerPollDueMs = now + (long)CoolerPollInterval.TotalMilliseconds;
+        var status = Request(TryxRkProtocol.BuildGetCoolerStatus(sn), TryxRkProtocol.CoolerStatusReplyField,
+            r => TryxMediaList.ParseCoolerStatus(r), CoolerReplyTimeoutMs);
+        if (status is not { } s)
+        {
+            if (++_coolerMisses == CoolerMaxMisses)
+            {
+                ServiceLog.Warn($"[tryx] panel left {CoolerMaxMisses} cooler status requests unanswered; fan readings stop until it reconnects");
+            }
+            return;
+        }
+        _coolerMisses = 0;
+        if (s.FanRpm <= TryxRkProtocol.CoolerFanRpmCeiling) State.CoolerFanRpm = s.FanRpm;
+        State.CoolerPumpRpm = s.PumpRpm;
+    }
+
+    private void ApplyCoolerTarget()
+    {
+        int? target;
+        TryxMediaList.CoolerFanConfig? baseline;
+        lock (_coolerLock)
+        {
+            target = _coolerTarget;
+            baseline = _coolerBaseline;
+        }
+        if (target is { } t)
+        {
+            if (_coolerSentPower == t || !SendOnly(TryxRkProtocol.BuildCoolerFixedPower(t))) return;
+            _coolerSentPower = t;
+            _coolerRestorePending = true;
+            lock (_coolerLock) _coolerWritten = true;
+            State.CoolerFanPower = t;
+            return;
+        }
+        if (!_coolerRestorePending) return;
+        if (baseline is { } b && !SendOnly(TryxRkProtocol.BuildCoolerConfig(b.Raw))) return;
+        // Without a baseline there is nothing to hand back: the fan keeps the last power Nexus set.
+        _coolerRestorePending = false;
+        _coolerSentPower = null;
+        if (baseline is { } restored) State.CoolerFanPower = restored.FixedPower;
     }
 
     private bool SendOnly(byte[] request)

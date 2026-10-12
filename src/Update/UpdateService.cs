@@ -69,6 +69,18 @@ public sealed class UpdateService : BackgroundService
     private volatile bool _launchAfterStage;
     private volatile bool _launchAfterStageReopen;
 
+    // True while the install gate is held by a background auto-stage (never by a
+    // user-triggered install), so a channel switch may cancel it.
+    private volatile bool _installIsBackground;
+    // Serializes "Update now" adopting a background stage against a channel switch cancelling it.
+    private readonly object _adoptLock = new();
+
+    private sealed record ChannelPreview(string Channel, UpdateManifest Manifest, DateTime FetchedUtc);
+    private static readonly TimeSpan PreviewMaxAge = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan SwitchCancelWait = TimeSpan.FromSeconds(10);
+    // Last non-empty GET /update/channel-target result, reused by the switch POST.
+    private volatile ChannelPreview? _preview;
+
     private volatile UpdateManifest? _latestManifest;
     private volatile bool _updateReady;
 
@@ -340,8 +352,8 @@ public sealed class UpdateService : BackgroundService
             return;
         }
 
-        // Current version is at or beyond the marker's target: install succeeded.
-        if (!VersionCompare.IsNewer(marker.Version, BuildInfo.Version))
+        // Install succeeded: at or beyond the marker's target, or exactly it for a channel switch.
+        if (InstallSucceeded(marker, BuildInfo.Version))
         {
             // Ticks written before the string so any reader that observes the
             // non-empty string sees the already-committed ticks value.
@@ -353,8 +365,18 @@ public sealed class UpdateService : BackgroundService
         }
 
         // Marker names a version newer than what is running.
-        if (marker.State == StagedInstallMarkerStore.StatePending)
+        if (marker.State == StagedInstallMarkerStore.StatePending && !marker.ExactVersion)
         {
+            // Staged before a manual install moved this machine to the other track:
+            // applying it would undo that move.
+            if (VersionCompare.IsPrerelease(marker.Version) != VersionCompare.IsPrerelease(BuildInfo.Version))
+            {
+                Console.Error.WriteLine($"[update] dropping staged {marker.Version}: it belongs to the other track than {BuildInfo.Version}");
+                TryDeleteStagedFile(marker.InstallerPath);
+                StagedInstallMarkerStore.Delete();
+                return;
+            }
+
             if (s.Update.UpdateMode == "always")
             {
                 // Downloaded and verified but not yet launched. Apply it now.
@@ -373,7 +395,8 @@ public sealed class UpdateService : BackgroundService
         {
             CurrentVersion = BuildInfo.Version,
             LatestVersion = marker.Version,
-            UpdateAvailable = true,
+            // A failed channel switch may name an older build; it is not an update.
+            UpdateAvailable = !marker.ExactVersion,
             Channel = string.IsNullOrEmpty(s.Update.UpdateChannel) ? "production" : s.Update.UpdateChannel,
             UpdateMode = s.Update.UpdateMode,
             ReleaseNotes = "",
@@ -560,11 +583,16 @@ public sealed class UpdateService : BackgroundService
             // than rejecting the user mid-download. A click in the sub-ms window
             // where staging is flipping _updateReady true is acked but not
             // launched; status reverts to "ready" and the user re-triggers.
-            if (!_updateReady && _progress.Active)
+            lock (_adoptLock)
             {
-                _launchAfterStageReopen = reopenAfter;
-                _launchAfterStage = true;
-                return (true, "");
+                // Only a background stage is adopted: a channel switch holding the gate
+                // installs another version, and one cancelling this stage owns it now.
+                if (_installIsBackground && !_updateReady && _progress.Active && !IsCancelRequested(_installCts))
+                {
+                    _launchAfterStageReopen = reopenAfter;
+                    _launchAfterStage = true;
+                    return (true, "");
+                }
             }
             return (false, "An install is already in progress.");
         }
@@ -583,6 +611,227 @@ public sealed class UpdateService : BackgroundService
         }
 
         return (true, "");
+    }
+
+    internal static bool IsValidChannel(string? channel) => channel is "beta" or "production";
+
+    private static bool IsCancelRequested(CancellationTokenSource? cts) => cts?.IsCancellationRequested ?? false;
+
+    /// <summary>
+    /// Whether the build now running completes the install a marker recorded. A
+    /// channel switch may target an older version, so it needs the exact version;
+    /// a normal update succeeds at or beyond its target.
+    /// </summary>
+    internal static bool InstallSucceeded(StagedInstallMarker marker, string buildVersion) =>
+        marker.ExactVersion
+            ? string.Equals(marker.Version, buildVersion, StringComparison.OrdinalIgnoreCase)
+              || (VersionCompare.TryParseSemver(marker.Version, out _) && VersionCompare.TryParseSemver(buildVersion, out _)
+                  && !VersionCompare.IsNewer(marker.Version, buildVersion) && !VersionCompare.IsNewer(buildVersion, marker.Version))
+            : !VersionCompare.IsNewer(marker.Version, buildVersion);
+
+    /// <summary>"none" for no target or the same version, "upgrade" when newer, else "downgrade".</summary>
+    internal static string ComputeDirection(string targetVersion, string runningVersion)
+    {
+        if (string.IsNullOrEmpty(targetVersion)
+            || string.Equals(targetVersion, runningVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return "none";
+        }
+        return VersionCompare.IsNewer(targetVersion, runningVersion) ? "upgrade" : "downgrade";
+    }
+
+    /// <summary>First reason a channel switch to <paramref name="target"/> is refused, or null.</summary>
+    internal static string? CheckSwitchTarget(
+        string? channel, string? requestedVersion, UpdateManifest? target, string runningVersion, bool canApply)
+    {
+        if (!IsValidChannel(channel))
+        {
+            return "Invalid channel.";
+        }
+        if (!canApply)
+        {
+            return "This install cannot apply updates itself.";
+        }
+        if (target is null)
+        {
+            return "No release is available on that channel.";
+        }
+        if (!string.Equals(requestedVersion, target.Version, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Version mismatch: latest is {target.Version}, requested {requestedVersion}.";
+        }
+        if (string.Equals(target.Version, runningVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{target.Version} is already running.";
+        }
+        if (string.IsNullOrEmpty(target.Sha256))
+        {
+            return "Cannot install: no SHA-256 hash available for the release.";
+        }
+        return null;
+    }
+
+    private async Task<UpdateManifest?> FetchChannelTargetAsync(string channel, CancellationToken ct)
+    {
+        var manifest = await _source.GetLatestAsync(channel, ct).ConfigureAwait(false);
+        if (manifest is not null)
+        {
+            _preview = new ChannelPreview(channel, manifest, DateTime.UtcNow);
+        }
+        return manifest;
+    }
+
+    /// <summary>
+    /// GET /update/channel-target: the latest release on <paramref name="channel"/> and how it
+    /// compares to the running build. Changes no update state; only caches the manifest for
+    /// <see cref="SwitchChannelAsync"/>. A failed fetch is reported in <c>Error</c>, not thrown.
+    /// </summary>
+    public async Task<ChannelTargetResponse> GetChannelTargetAsync(string channel, CancellationToken ct)
+    {
+        var response = new ChannelTargetResponse { Channel = channel, CurrentVersion = BuildInfo.Version };
+        if (!Common.ClientCredential.IsOfficial)
+        {
+            response.Error = "Updates are managed outside this build.";
+            return response;
+        }
+
+        try
+        {
+            var manifest = await FetchChannelTargetAsync(channel, ct).ConfigureAwait(false);
+            if (manifest is null)
+            {
+                return response;
+            }
+
+            response.Version = manifest.Version;
+            response.Direction = ComputeDirection(manifest.Version, BuildInfo.Version);
+            response.CanAutoInstall = CanApplyUpdates && !string.IsNullOrEmpty(manifest.Sha256);
+            response.DownloadUrl = manifest.AssetUrl;
+            response.ReleaseNotes = manifest.Notes;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[update] channel target fetch failed: {ex.GetType().Name}: {ex.Message}");
+            response.Error = $"{ex.GetType().Name}: {ex.Message}";
+        }
+        return response;
+    }
+
+    /// <summary>
+    /// POST /update/switch-channel: installs the latest release of <paramref name="channel"/>
+    /// whatever the version direction. The channel setting is not written here; the new build
+    /// derives it from its own version on first run, so a failed switch changes nothing.
+    /// </summary>
+    public async Task<(bool started, string reason)> SwitchChannelAsync(string? channel, string? version, CancellationToken ct)
+    {
+        if (!Common.ClientCredential.IsOfficial)
+        {
+            return (false, "Updates are managed outside this build.");
+        }
+
+        if (_flasher.IsFlashing)
+        {
+            return (false, "A firmware update is in progress.");
+        }
+
+        if (!IsValidChannel(channel))
+        {
+            return (false, "Invalid channel.");
+        }
+
+        var preview = _preview;
+        UpdateManifest? target;
+        if (preview is not null
+            && preview.Channel == channel
+            && string.Equals(preview.Manifest.Version, version, StringComparison.OrdinalIgnoreCase)
+            && DateTime.UtcNow - preview.FetchedUtc < PreviewMaxAge)
+        {
+            target = preview.Manifest;
+        }
+        else
+        {
+            try
+            {
+                target = await FetchChannelTargetAsync(channel!, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Could not check the release: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        var refusal = CheckSwitchTarget(channel, version, target, BuildInfo.Version, CanApplyUpdates);
+        if (refusal is not null)
+        {
+            return (false, refusal);
+        }
+
+        if (Interlocked.CompareExchange(ref _installing, 1, 0) != 0)
+        {
+            lock (_adoptLock)
+            {
+                if (!_installIsBackground || _launchAfterStage)
+                {
+                    return (false, "An install is already in progress.");
+                }
+                try { _installCts?.Cancel(); } catch (ObjectDisposedException) { }
+            }
+            var deadline = DateTime.UtcNow + SwitchCancelWait;
+            while (Volatile.Read(ref _installing) != 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(100, ct).ConfigureAwait(false);
+            }
+
+            if (Interlocked.CompareExchange(ref _installing, 1, 0) != 0)
+            {
+                return (false, "An install is already in progress.");
+            }
+        }
+
+        try
+        {
+            DiscardStagedUpdate();
+            var cts = new CancellationTokenSource();
+            _installCts = cts;
+            var manifest = target!;
+            // Replaces the cancelled stage's "Install cancelled." before the client's first progress poll.
+            SetProgress("downloading", 0, $"Downloading {manifest.Version}...", manifest.Version);
+            _ = Task.Run(() => RunInstallAsync(manifest, launchAfterVerify: true, reopenAfter: true, cts.Token, exactVersion: true));
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _installing, 0);
+            throw;
+        }
+        return (true, "");
+    }
+
+    /// <summary>Drops the staged installer and its marker; the staged build belongs to the track being left.</summary>
+    private void DiscardStagedUpdate()
+    {
+        if (_stagedInstallerPath is { } staged)
+        {
+            TryDeleteStagedFile(staged);
+        }
+        _updateReady = false;
+        _stagedInstallerPath = null;
+        _stagedVersion = null;
+        StagedInstallMarkerStore.Delete();
+        UpdateStatusUpdateReady(false);
+        UpdateStatusState("idle");
+        lock (_broadcastLock)
+        {
+            _broadcastUpdateReady = false;
+        }
+        PanelTopics.BroadcastUpdate(_hub);
     }
 
     // --- Internal ---
@@ -664,6 +913,7 @@ public sealed class UpdateService : BackgroundService
                 {
                     var cts = new CancellationTokenSource();
                     _installCts = cts;
+                    _installIsBackground = true;
                     _ = Task.Run(() => RunInstallAsync(manifest, launchAfterVerify: false, reopenAfter: false, cts.Token));
                     Console.Error.WriteLine($"[update] auto-staging download for {manifest.Version} (mode={mode})");
                 }
@@ -748,6 +998,8 @@ public sealed class UpdateService : BackgroundService
     /// </summary>
     private async Task RunLaunchStagedAsync(UpdateManifest manifest, string installerPath, bool reopenAfter, CancellationToken ct)
     {
+        // Set when the fall-through below hands the gate to RunInstallAsync, whose finally releases it.
+        var handedOff = false;
         try
         {
             SetProgress("verifying", 99, "Verifying staged installer...", manifest.Version);
@@ -758,6 +1010,7 @@ public sealed class UpdateService : BackgroundService
                 _updateReady = false;
                 _stagedInstallerPath = null;
                 _stagedVersion = null;
+                handedOff = true;
                 await RunInstallAsync(manifest, launchAfterVerify: true, reopenAfter, ct).ConfigureAwait(false);
                 return;
             }
@@ -809,7 +1062,7 @@ public sealed class UpdateService : BackgroundService
         {
             SetProgressFailed("Install cancelled.", manifest.Version);
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         catch (Exception ex)
@@ -818,16 +1071,20 @@ public sealed class UpdateService : BackgroundService
             SetProgressFailed($"{ex.GetType().Name}: {ex.Message}", manifest.Version);
             UpdateStatusState("failed");
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         finally
         {
-            Interlocked.Exchange(ref _installing, 0);
-            _launchAfterStage = false;
-            _launchAfterStageReopen = false;
-            _installCts?.Dispose();
-            _installCts = null;
+            if (!handedOff)
+            {
+                // Release the gate last, as in RunInstallAsync.
+                _launchAfterStage = false;
+                _launchAfterStageReopen = false;
+                _installCts?.Dispose();
+                _installCts = null;
+                Interlocked.Exchange(ref _installing, 0);
+            }
         }
     }
 
@@ -837,7 +1094,7 @@ public sealed class UpdateService : BackgroundService
     /// net stop stops the service).
     /// When false, set <c>_updateReady</c> and send the tray notification.
     /// </summary>
-    private async Task RunInstallAsync(UpdateManifest manifest, bool launchAfterVerify, bool reopenAfter, CancellationToken ct)
+    private async Task RunInstallAsync(UpdateManifest manifest, bool launchAfterVerify, bool reopenAfter, CancellationToken ct, bool exactVersion = false)
     {
         try
         {
@@ -919,6 +1176,7 @@ public sealed class UpdateService : BackgroundService
                 Sha256 = manifest.Sha256 ?? "",
                 State = StagedInstallMarkerStore.StateAttempted,
                 ReopenDashboard = reopenAfter,
+                ExactVersion = exactVersion,
             });
 
             if (reopenAfter)
@@ -949,14 +1207,14 @@ public sealed class UpdateService : BackgroundService
             UpdateStatusState("installing");
             SetProgress("installing", 100, "Installing...", manifest.Version);
 #else
-            LaunchUnixInstall(manifest, installerPath);
+            LaunchUnixInstall(manifest, installerPath, exactVersion);
 #endif
         }
         catch (OperationCanceledException)
         {
             SetProgressFailed("Install cancelled.", manifest.Version);
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         catch (Exception ex)
@@ -965,21 +1223,24 @@ public sealed class UpdateService : BackgroundService
             SetProgressFailed($"{ex.GetType().Name}: {ex.Message}", manifest.Version);
             UpdateStatusState("failed");
 #if WINDOWS
-            try { _ = TrayCommands.CloseUpdaterWindowAsync(_helperRegistry); } catch { }
+            try { TrayCommands.CloseUpdaterWindowAsync(_helperRegistry).ObserveFaults(); } catch { }
 #endif
         }
         finally
         {
-            Interlocked.Exchange(ref _installing, 0);
+            // Release the gate last: a channel switch waiting on it installs its own
+            // _installCts the moment it drops.
+            _installIsBackground = false;
             _launchAfterStage = false;
             _launchAfterStageReopen = false;
             _installCts?.Dispose();
             _installCts = null;
+            Interlocked.Exchange(ref _installing, 0);
         }
     }
 
 #if !WINDOWS
-    private void LaunchUnixInstall(UpdateManifest manifest, string installerPath)
+    private void LaunchUnixInstall(UpdateManifest manifest, string installerPath, bool exactVersion = false)
     {
         StagedInstallMarkerStore.Write(new StagedInstallMarker
         {
@@ -987,6 +1248,7 @@ public sealed class UpdateService : BackgroundService
             InstallerPath = installerPath,
             Sha256 = manifest.Sha256 ?? "",
             State = StagedInstallMarkerStore.StateAttempted,
+            ExactVersion = exactVersion,
         });
         try
         {

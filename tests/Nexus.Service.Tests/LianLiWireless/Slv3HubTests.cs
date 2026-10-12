@@ -2022,7 +2022,7 @@ public class Slv3HubTests
     }
 
     [Fact]
-    public void A_busy_rx_that_a_reopen_does_not_clear_is_reset_via_tx_on_the_backoff()
+    public void A_busy_rx_that_a_reopen_does_not_clear_keeps_reopening_without_a_reset()
     {
         var clock = new ManualClock();
         var net = new FakeSlv3Network();
@@ -2047,14 +2047,17 @@ public class Slv3HubTests
         Assert.Equal(2, rxOpens);
         Assert.DoesNotContain(tx.SentFrames, f => f.Length >= 1 && f[0] == Slv3Protocol.UsbResetAnother);
 
-        clock.AdvanceMs(5_000);
-        for (var i = 0; i < 60; i++) Assert.True(hub.PollTick());
-        Assert.Single(tx.SentFrames, f => f.Length >= 1 && f[0] == Slv3Protocol.UsbResetAnother);
+        for (var round = 0; round < 3; round++)
+        {
+            clock.AdvanceMs(60_000);
+            for (var i = 0; i < 60; i++) Assert.True(hub.PollTick());
+        }
+        Assert.Equal(5, rxOpens);
+        Assert.DoesNotContain(tx.SentFrames, f => f.Length >= 1 && f[0] == Slv3Protocol.UsbResetAnother);
         Assert.Single(hub.State.Fans);
 
         rx.BusyReads = false;
         Assert.True(hub.PollTick());
-        Assert.Equal(3, rxOpens);
         Assert.False(Assert.Single(hub.State.Fans).Stale);
     }
 
@@ -2114,6 +2117,88 @@ public class Slv3HubTests
         }
 
         Assert.Single(tx.SentFrames, f => f.Length >= 1 && f[0] == Slv3Protocol.UsbResetAnother);
+    }
+
+    [Fact]
+    public void A_busy_spell_past_the_expiry_keeps_the_device_list()
+    {
+        var clock = new ManualClock();
+        var (hub, net, _, rx) = CreateConnectedHub(clock.NowMs);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac });
+        Assert.True(hub.DriveTick());
+
+        rx.BusyReads = true;
+        for (var i = 0; i < 600; i++)
+        {
+            clock.AdvanceMs(500);
+            Assert.True(hub.PollTick());
+        }
+        Assert.True(Assert.Single(hub.State.Fans).Stale);
+
+        rx.BusyReads = false;
+        Assert.True(hub.PollTick());
+        Assert.False(Assert.Single(hub.State.Fans).Stale);
+    }
+
+    [Fact]
+    public void A_chain_absent_after_a_busy_spell_expires_on_answered_time_only()
+    {
+        var clock = new ManualClock();
+        var (hub, net, _, rx) = CreateConnectedHub(clock.NowMs);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac });
+        Assert.True(hub.DriveTick());
+
+        rx.BusyReads = true;
+        clock.AdvanceMs(500);
+        Assert.True(hub.PollTick());
+        clock.AdvanceMs(60_000);
+        Assert.True(hub.PollTick());
+        Assert.Single(hub.State.Fans);
+
+        rx.BusyReads = false;
+        net.Fans.Clear();
+        clock.AdvanceMs(500);
+        Assert.True(hub.PollTick());
+        clock.AdvanceMs(28_000);
+        Assert.True(hub.PollTick());
+        Assert.Single(hub.State.Fans);
+
+        clock.AdvanceMs(2_000);
+        Assert.True(hub.PollTick());
+        Assert.Empty(hub.State.Fans);
+    }
+
+    [Fact]
+    public void A_busy_spell_repeats_a_pwm_target_only_every_few_seconds()
+    {
+        var clock = new ManualClock();
+        var (hub, net, tx, rx) = CreateConnectedHub(clock.NowMs);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1 });
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.DriveTick());
+
+        rx.BusyReads = true;
+        Assert.True(hub.DriveTick());
+        tx.SentFrames.Clear();
+        Assert.True(hub.SetPortDuty(Convert.ToHexString(FanMac), 0, 50));
+        for (var i = 0; i < 4; i++)
+        {
+            clock.AdvanceMs(1_000);
+            Assert.True(hub.DriveTick());
+        }
+        Assert.Equal(1, CountBindFrames(tx));
+
+        clock.AdvanceMs(2_000);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(2, CountBindFrames(tx));
+
+        Assert.True(hub.SetPortDuty(Convert.ToHexString(FanMac), 0, 80));
+        Assert.True(hub.DriveTick());
+        Assert.Equal(3, CountBindFrames(tx));
+
+        rx.BusyReads = false;
+        Ticks(hub, 3);
+        Assert.Equal(3, CountBindFrames(tx));
     }
 
     [Fact]
@@ -2510,6 +2595,58 @@ public class Slv3HubTests
         Assert.True(CountBindFrames(tx) > settled);
     }
 
+    [Fact]
+    public void BindingChanged_tracks_master_slot_and_channel_only()
+    {
+        var master = Convert.FromHexString("AABBCCDDEEFF");
+        var bound = Record(master, rxType: 3, channel: 8);
+
+        Assert.False(Slv3Hub.BindingChanged(bound, Record(master, rxType: 3, channel: 8, fanCount: 1)));
+        Assert.True(Slv3Hub.BindingChanged(bound, Record(master, rxType: 1, channel: 8)));
+        Assert.True(Slv3Hub.BindingChanged(bound, Record(master, rxType: 3, channel: 0)));
+        Assert.True(Slv3Hub.BindingChanged(bound, Record(new byte[6], rxType: 3, channel: 8)));
+    }
+
+    [Fact]
+    public void DescribeBinding_reports_bound_only_for_our_master_on_a_valid_slot()
+    {
+        var master = Convert.FromHexString("AABBCCDDEEFF");
+
+        Assert.Equal("master AABBCCDDEEFF slot 3 ch 8 bound",
+            Slv3Hub.DescribeBinding(Record(master, rxType: 3, channel: 8), master));
+        Assert.Equal("master AABBCCDDEEFF slot 20 ch 8 unbound",
+            Slv3Hub.DescribeBinding(Record(master, rxType: 20, channel: 8), master));
+        Assert.Equal("master 000000000000 slot 0 ch 8 unbound",
+            Slv3Hub.DescribeBinding(Record(new byte[6], rxType: 0, channel: 8), master));
+    }
+
+    [Fact]
+    public void TraceBinding_rate_limits_a_flapping_chain_and_reports_its_current_state()
+    {
+        var (hub, _, _, _) = CreateConnectedHub();
+        var master = Convert.FromHexString("AABBCCDDEEFF");
+        var slot3 = Record(master, rxType: 3, channel: 8);
+        var slot1 = Record(master, rxType: 1, channel: 8);
+        var raw = new byte[Slv3Protocol.RecordLength];
+        const long Interval = Slv3Hub.BindingLogIntervalMs;
+
+        Assert.Null(hub.TraceBindingLocked("K", slot3, slot3, raw, 0, nowMs: 0));
+        Assert.Contains("slot 3 ch 8", hub.TraceBindingLocked("K", slot3, slot1, raw, 0, nowMs: 0));
+        Assert.Null(hub.TraceBindingLocked("K", slot1, slot3, raw, 0, nowMs: 500));
+        Assert.Null(hub.TraceBindingLocked("K", slot3, slot1, raw, 0, nowMs: 1000));
+        Assert.Null(hub.TraceBindingLocked("K", slot1, slot1, raw, 0, nowMs: Interval - 1));
+
+        var settled = hub.TraceBindingLocked("K", slot1, slot1, raw, 0, nowMs: Interval);
+        Assert.Contains("now at master AABBCCDDEEFF slot 1 ch 8", settled);
+        Assert.Contains("after 2 unlogged change(s)", settled);
+        Assert.Null(hub.TraceBindingLocked("K", slot1, slot1, raw, 0, nowMs: 2 * Interval));
+        Assert.NotNull(hub.TraceBindingLocked("K", slot1, slot3, raw, 0, nowMs: 2 * Interval));
+    }
+
+    private static Slv3DeviceRecord Record(byte[] masterMac, byte rxType, byte channel, int fanCount = 3) =>
+        new(FanMac, masterMac, channel, rxType, DevType: 0, fanCount, RightAttach: false,
+            new byte[4], new byte[4], new int[4], new int[4], CmdSeq: 0);
+
     // Bind/PWM frames on the wire: a chunkSeq-0 USB frame carrying RF_Bind.
     // First USB chunk of every RF payload with this command; payload byte k sits at frame [4 + k].
     private static List<byte[]> RfFrames(FakeTxTransport tx, byte rfCmd) =>
@@ -2530,12 +2667,214 @@ public class Slv3HubTests
         return count;
     }
 
-    private static (Slv3Hub Hub, FakeSlv3Network Net, FakeTxTransport Tx, FakeRxTransport Rx) CreateConnectedHub(Func<long>? nowMs = null)
+    // ---- Sleep when locked (HydroShift II wireless screen) ----------------
+
+    private static (Slv3Hub Hub, FakeTxTransport Tx, Nexus.Service.Lighting.LcdLockState Lock, ManualClock Clock) LockedAioHub(bool sleepWhenLocked = true, bool nexusWidgets = true, bool usbConnected = false)
+    {
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        var clock = new ManualClock();
+        var (hub, net, tx, _) = CreateConnectedHub(clock.NowMs, state);
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1, DevType = 10, FanCount = 0 });
+        hub.AioSensors = () => new Slv3AioSensors(55f, 12f, null, null);
+        var sleep = sleepWhenLocked;
+        hub.AioScreens = () => new Dictionary<string, Slv3AioScreen>
+        {
+            [Convert.ToHexString(FanMac)] = Slv3Protocol.AioScreenFrom(30, 4, "#FF0000", "#00FF00", "#0000FF", true, true, true, true, false, sleepWhenLocked: sleep, nexusWidgets: nexusWidgets),
+        };
+        if (usbConnected)
+        {
+            hub.UsbAioMac = () => Convert.ToHexString(FanMac);
+        }
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
+        // The screen has been seen once before any lock, as it is on a running service.
+        Assert.True(hub.DriveTick());
+        return (hub, tx, state, clock);
+    }
+
+    private static int LastAioBrightness(FakeTxTransport tx) => RfFrames(tx, Slv3Protocol.RfAioParams)[^1][47];
+
+    // The first tick after a lock starts the ramp (still the user's level); a later one past its
+    // end shows the settled state.
+    private static void LockAndSettle(Slv3Hub hub, Nexus.Service.Lighting.LcdLockState state, ManualClock clock)
+    {
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+        clock.AdvanceMs(5000);
+        Assert.True(hub.DriveTick());
+    }
+
+    private static void UnlockAndSettle(Slv3Hub hub, Nexus.Service.Lighting.LcdLockState state, ManualClock clock)
+    {
+        state.Set(false);
+        Assert.True(hub.DriveTick());
+        clock.AdvanceMs(5000);
+        Assert.True(hub.DriveTick());
+    }
+
+    [Fact]
+    public void Lock_fades_the_brightness_byte_to_zero_and_unlock_restores_the_saved_one()
+    {
+        var (hub, tx, state, clock) = LockedAioHub();
+        Assert.True(hub.DriveTick());
+        Assert.Equal(30, LastAioBrightness(tx));
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(30, LastAioBrightness(tx));
+        clock.AdvanceMs(750);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+        clock.AdvanceMs(2000);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(0, LastAioBrightness(tx));
+
+        state.Set(false);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(0, LastAioBrightness(tx));
+        clock.AdvanceMs(450);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+        clock.AdvanceMs(2000);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void An_unlock_mid_fade_down_reverses_to_the_saved_level_not_the_step_it_caught()
+    {
+        var (hub, tx, state, clock) = LockedAioHub();
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+        clock.AdvanceMs(750);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+
+        UnlockAndSettle(hub, state, clock);
+
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void A_lock_mid_fade_up_reverses_down_and_the_next_unlock_still_restores_the_saved_level()
+    {
+        var (hub, tx, state, clock) = LockedAioHub();
+        LockAndSettle(hub, state, clock);
+        state.Set(false);
+        Assert.True(hub.DriveTick());
+        clock.AdvanceMs(450);
+        Assert.True(hub.DriveTick());
+        Assert.InRange(LastAioBrightness(tx), 1, 29);
+
+        LockAndSettle(hub, state, clock);
+        Assert.Equal(0, LastAioBrightness(tx));
+
+        UnlockAndSettle(hub, state, clock);
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void The_fade_adds_no_frames_and_leaves_every_other_block_byte_alone()
+    {
+        var (hub, tx, state, clock) = LockedAioHub();
+        Assert.True(hub.DriveTick());
+        var lit = RfFrames(tx, Slv3Protocol.RfAioParams)[^1].ToArray();
+
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+        var before = RfFrames(tx, Slv3Protocol.RfAioParams).Count;
+        clock.AdvanceMs(5000);
+        Assert.True(hub.DriveTick());
+
+        var frames = RfFrames(tx, Slv3Protocol.RfAioParams);
+        Assert.Equal(before + 1, frames.Count);
+        var dark = frames[^1].ToArray();
+        Assert.Equal(0, dark[47]);
+        dark[47] = lit[47];
+        Assert.Equal(lit, dark);
+    }
+
+    [Fact]
+    public void A_screen_with_the_setting_off_stays_lit()
+    {
+        var (hub, tx, state, clock) = LockedAioHub(sleepWhenLocked: false);
+
+        LockAndSettle(hub, state, clock);
+
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void A_usb_connected_aio_with_nexus_widgets_keeps_its_brightness_byte_on_lock()
+    {
+        var (hub, tx, state, clock) = LockedAioHub(usbConnected: true, nexusWidgets: true);
+
+        LockAndSettle(hub, state, clock);
+
+        Assert.Equal(30, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void A_usb_connected_aio_showing_its_own_screen_still_goes_dark_on_lock()
+    {
+        var (hub, tx, state, clock) = LockedAioHub(usbConnected: true, nexusWidgets: false);
+
+        LockAndSettle(hub, state, clock);
+
+        Assert.Equal(0, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void An_aio_with_no_usb_cable_goes_dark_even_with_nexus_widgets_on()
+    {
+        var (hub, tx, state, clock) = LockedAioHub(usbConnected: false, nexusWidgets: true);
+
+        LockAndSettle(hub, state, clock);
+
+        Assert.Equal(0, LastAioBrightness(tx));
+    }
+
+    [Fact]
+    public void A_screen_that_comes_back_mid_lock_goes_dark_at_once_instead_of_fading_from_the_saved_level()
+    {
+        var state = new Nexus.Service.Lighting.LcdLockState();
+        var clock = new ManualClock();
+        var (hub, net, tx, _) = CreateConnectedHub(clock.NowMs, state);
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1, DevType = 10, FanCount = 0 };
+        net.Fans.Add(fan);
+        hub.AioSensors = () => new Slv3AioSensors(55f, 12f, null, null);
+        hub.AioScreens = () => new Dictionary<string, Slv3AioScreen>
+        {
+            [Convert.ToHexString(FanMac)] = Slv3Protocol.AioScreenFrom(30, 4, "#FF0000", "#00FF00", "#0000FF", true, true, true, true, false),
+        };
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
+        Assert.True(hub.DriveTick());
+        Assert.Equal(30, LastAioBrightness(tx));
+
+        // The AIO drops off the controller's list long enough to expire, and the PC locks while it is gone.
+        net.Fans.Clear();
+        clock.AdvanceMs(40_000);
+        Assert.True(hub.DriveTick());
+        Assert.Empty(hub.State.Fans);
+        state.Set(true);
+        Assert.True(hub.DriveTick());
+
+        // It returns mid-lock: a first sight, so it goes straight to dark.
+        net.Fans.Add(fan);
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.SetPumpDuty(Convert.ToHexString(FanMac), 50));
+        Assert.True(hub.DriveTick());
+
+        Assert.Equal(0, LastAioBrightness(tx));
+    }
+
+    private static (Slv3Hub Hub, FakeSlv3Network Net, FakeTxTransport Tx, FakeRxTransport Rx) CreateConnectedHub(Func<long>? nowMs = null, Nexus.Service.Lighting.LcdLockState? lockState = null)
     {
         var net = new FakeSlv3Network();
         var tx = new FakeTxTransport(net);
         var rx = new FakeRxTransport(net);
-        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? tx : rx, nowMs) { ConfirmNewChains = false };
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? tx : rx, nowMs, lockState) { ConfirmNewChains = false };
         Assert.True(hub.EnsureConnected());
         return (hub, net, tx, rx);
     }

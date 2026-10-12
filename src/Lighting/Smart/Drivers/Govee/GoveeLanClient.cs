@@ -40,6 +40,9 @@ public sealed class GoveeLanClient : IDisposable
     // later registrant displacing the earlier one. Guarded by _lock.
     private readonly Dictionary<string, List<TaskCompletionSource<GoveeReplyData>>> _statusWaiters = new();
     private readonly Dictionary<string, List<TaskCompletionSource<GoveeDeviceInfo>>> _probeWaiters = new();
+    // Every per-device send loop plus scans and probes share one socket; sends
+    // are serialized so no two overlapped sends are ever in flight on it.
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
     private Socket? _socket;
     private CancellationTokenSource? _cts;
     private bool _disposed;
@@ -327,7 +330,15 @@ public sealed class GoveeLanClient : IDisposable
     {
         var sock = EnsureSocket();
         var bytes = Encoding.UTF8.GetBytes(json);
-        await sock.SendToAsync(bytes, SocketFlags.None, target, ct).ConfigureAwait(false);
+        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await sock.SendToAsync(bytes, SocketFlags.None, target, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
     }
 
     public void Dispose()

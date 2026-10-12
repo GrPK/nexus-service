@@ -163,12 +163,36 @@ public static class GalleryRoutes
                 }
             }
 
+            // A OneDrive/iCloud placeholder hydrates on first read, which the cloud
+            // filter can deny the service; probing one byte makes that a 404.
+            FileStream file;
+            try
+            {
+                file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.NotFound();
+            }
+            try
+            {
+                await file.ReadAtLeastAsync(new byte[1], 1, throwOnEndOfStream: false, ctx.RequestAborted);
+                file.Position = 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                await file.DisposeAsync();
+                return Results.NotFound();
+            }
+            catch
+            {
+                await file.DisposeAsync();
+                throw;
+            }
             // Without ranges the Chromium <video> on the panel has to land the
             // whole clip in one uninterrupted response and cannot seek or loop
             // without refetching it.
-            return isVideo
-                ? Results.File(path, ContentTypeFor(path), enableRangeProcessing: true)
-                : Results.File(path, ContentTypeFor(path));
+            return Results.File(file, ContentTypeFor(path), lastModified: File.GetLastWriteTimeUtc(path), enableRangeProcessing: isVideo);
         }).AllowPanel();
 
         // Hide a folder item / clear a source's exclusion list. References

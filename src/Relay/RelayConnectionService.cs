@@ -1271,7 +1271,9 @@ public sealed class RelayConnectionService : BackgroundService
                 if (_socket.State == WebSocketState.Open)
                 {
                     // Best-effort orderly close; don't block teardown on it.
-                    _ = _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "host-link-end", CancellationToken.None);
+                    // The dispose below races the close handshake, which then faults.
+                    _ = _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "host-link-end", CancellationToken.None)
+                        .ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
                 }
             }
             catch { /* ignored */ }

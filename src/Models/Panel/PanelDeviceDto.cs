@@ -131,6 +131,13 @@ public sealed class PanelDeviceRecord : IPanelPersonalization
     /// <summary>Backlight percent 0-100 for a cooler LCD whose panel takes a brightness
     /// command. Null = the panel's default. Ignored by surfaces that cannot dim.</summary>
     public int? LcdBrightness { get; set; }
+    /// <summary>Put a dimmable cooler LCD dark while the PC is locked and restore it on unlock. Null = on.
+    /// Only panels whose capabilities carry SupportsBrightness read it.</summary>
+    public bool? SleepWhenLocked { get; set; }
+    /// <summary>Service-internal. The backlight a panel with no <see cref="LcdBrightness"/> returns to after a lock
+    /// darkened it. Written when the lock starts and cleared once restored, so a restart mid-lock still brings the
+    /// glass back. Never the user's setting.</summary>
+    public int? LockRestoreBrightness { get; set; }
     /// <summary>Windows drives this glass as a secondary monitor instead of Nexus content.
     /// Pushed-frame panels whose capabilities carry SupportsSecondaryMonitor; null = off.</summary>
     public bool? SecondaryMonitor { get; set; }
@@ -420,6 +427,9 @@ public sealed class PanelDevicePatch
     /// <summary>Backlight percent 0-100 for a cooler LCD whose panel takes a brightness
     /// command. Null = the panel's default. Ignored by surfaces that cannot dim.</summary>
     public int? LcdBrightness { get; set; }
+    /// <summary>Put a dimmable cooler LCD dark while the PC is locked and restore it on unlock. Null = on.
+    /// Only panels whose capabilities carry SupportsBrightness read it.</summary>
+    public bool? SleepWhenLocked { get; set; }
     /// <summary>Windows drives this glass as a secondary monitor instead of Nexus content.
     /// Pushed-frame panels whose capabilities carry SupportsSecondaryMonitor; null = off.</summary>
     public bool? SecondaryMonitor { get; set; }

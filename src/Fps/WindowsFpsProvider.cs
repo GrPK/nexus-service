@@ -285,8 +285,14 @@ public sealed class WindowsFpsProvider : IFpsProvider
         {
             if (session is not null)
             {
-                if (onEvent is not null)
-                    session.Source.Dynamic.All -= onEvent;
+                // Source re-throws the start failure (access denied when not elevated),
+                // which would fault this task after HandleTraceFailure dropped it.
+                try
+                {
+                    if (onEvent is not null)
+                        session.Source.Dynamic.All -= onEvent;
+                }
+                catch { }
 
                 StopSession(session);
                 lock (_gate)
@@ -346,7 +352,9 @@ public sealed class WindowsFpsProvider : IFpsProvider
             _focusTask = null;
             _traceTask = null;
             _session = null;
-            _nextStartAllowedUtc = DateTime.UtcNow.AddSeconds(10);
+            _nextStartAllowedUtc = ex is UnauthorizedAccessException
+                ? DateTime.MaxValue
+                : DateTime.UtcNow.AddSeconds(10);
             ResetTargetLocked();
         }
 

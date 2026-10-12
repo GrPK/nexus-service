@@ -37,7 +37,7 @@ internal static class OverlayHostBootstrap
                 var snapshot = store.Load();
 #if WINDOWS
                 if (helperRegistry is not null)
-                    _ = LifecycleCommands.NotifyOverlayPrefsChangedAsync(helperRegistry);
+                    LifecycleCommands.NotifyOverlayPrefsChangedAsync(helperRegistry).ObserveFaults();
 #endif
                 bool showPanelChanged, assignmentsChanged;
                 var assignments = AssignmentsSignature(snapshot);

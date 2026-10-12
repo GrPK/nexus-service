@@ -38,13 +38,18 @@ public sealed class GitHubReleaseProvider : IUpdateSource
     public const string DefaultOwnerRepo = "hello-nexus/nexus";
 
     private readonly IHttpClientFactory _http;
-    private readonly string _ownerRepo;
+    private readonly string _apiBase;
 
-    public GitHubReleaseProvider(IHttpClientFactory http, string ownerRepo = DefaultOwnerRepo)
+    /// <param name="apiBase">Releases API root without a trailing slash. Null uses the
+    /// build-time <c>NexusUpdateApiBase</c> when set, else the public GitHub repo.</param>
+    public GitHubReleaseProvider(IHttpClientFactory http, string ownerRepo = DefaultOwnerRepo, string? apiBase = null)
     {
         _http = http;
-        _ownerRepo = ownerRepo;
+        _apiBase = (string.IsNullOrEmpty(apiBase) ? DefaultApiBase(ownerRepo) : apiBase).TrimEnd('/');
     }
+
+    private static string DefaultApiBase(string ownerRepo) =>
+        BuildInfo.UpdateApiBase.Length > 0 ? BuildInfo.UpdateApiBase : $"https://api.github.com/repos/{ownerRepo}";
 
     public async Task<UpdateManifest?> GetLatestAsync(string channel, CancellationToken ct)
     {
@@ -75,7 +80,7 @@ public sealed class GitHubReleaseProvider : IUpdateSource
 
     private async Task<GitHubRelease?> GetLatestProductionAsync(HttpClient client, CancellationToken ct)
     {
-        var url = $"https://api.github.com/repos/{_ownerRepo}/releases/latest";
+        var url = $"{_apiBase}/releases/latest";
         using var resp = await client.GetAsync(url, ct);
         // 404: the repo has no stable release yet.
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
@@ -86,7 +91,7 @@ public sealed class GitHubReleaseProvider : IUpdateSource
 
     private async Task<GitHubRelease?> GetNewestBetaAsync(HttpClient client, CancellationToken ct)
     {
-        var url = $"https://api.github.com/repos/{_ownerRepo}/releases?per_page=100";
+        var url = $"{_apiBase}/releases?per_page=100";
         using var resp = await client.GetAsync(url, ct);
         resp.EnsureSuccessStatusCode();
         var releases = await resp.Content.ReadFromJsonAsync(AppJsonContext.Default.ListGitHubRelease, ct);

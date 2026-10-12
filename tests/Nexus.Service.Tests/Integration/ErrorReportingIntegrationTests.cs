@@ -143,6 +143,27 @@ public sealed class ErrorReportingIntegrationTests : IClassFixture<NexusAppFacto
     }
 
     [Fact]
+    public async Task Client_fault_exceptions_are_not_reported()
+    {
+        var reporter = _factory.Services.GetRequiredService<ErrorReporter>();
+        foreach (var fault in new Exception[]
+        {
+            new Microsoft.AspNetCore.Connections.ConnectionResetException("reset"),
+            new BadHttpRequestException("Request body too large.", StatusCodes.Status413PayloadTooLarge),
+        })
+        {
+            var app = new ApplicationBuilder(_factory.Services);
+            app.UseErrorCapture(reporter);
+            app.Run(_ => throw fault);
+            var pipeline = app.Build();
+
+            var before = reporter.PendingCount;
+            await Assert.ThrowsAsync(fault.GetType(), () => pipeline(new DefaultHttpContext()));
+            Assert.Equal(before, reporter.PendingCount);
+        }
+    }
+
+    [Fact]
     public void Relay_allows_only_the_client_errors_telemetry_route()
     {
         Assert.True(Nexus.Service.Relay.RelayHttpAllowlist.IsAllowed("POST", "/telemetry/client-errors"));

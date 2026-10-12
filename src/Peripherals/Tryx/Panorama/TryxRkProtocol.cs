@@ -395,6 +395,70 @@ public static class TryxRkProtocol
         return WrapFrame(payload);
     }
 
+    // Cooler: the small fan on the pump head. cooler.proto in Kanali's UDB.exe descriptor:
+    // CoolerConfigPb { fan_config = 1, pump_config = 2 }; FunConfigPb { mode = 1 (SmartMode 0,
+    // FixMode 1), fun_power_level = 2 (repeated { temperature = 1, power = 2 }), fix_power = 3 };
+    // CoolerStatusPb { fans_speed = 1, pump_speed = 2 }, both rpm. Kanali only ever writes
+    // fan_config: its "Fixed Mode" sends FixMode + fix_power, and its "Smart Mode" runs the curve
+    // on the host and sends the same FixMode frame whenever the percent changes. Kanali's FAQ
+    // says the pump is not software-controllable.
+
+    /// <summary>RspPackagePb field of the get_cooler_config reply (a CoolerConfigPb).</summary>
+    public const int CoolerConfigReplyField = 506;
+
+    /// <summary>RspPackagePb field of the get_cooler_status reply (a CoolerStatusPb).</summary>
+    public const int CoolerStatusReplyField = 507;
+
+    /// <summary>Kanali drops small-fan readings above this many rpm as glitches and keeps the previous one.</summary>
+    public const int CoolerFanRpmCeiling = 3700;
+
+    /// <summary>Runs the small fan at a fixed power: cooler_config (ReqPackagePb field 202)
+    /// { fan_config = 1 { mode = 1 (FixMode), fix_power = 3 } }, the body Kanali sends for both of
+    /// its fan modes (CMD_Set_CoolerConfig). Empty header, like the other config writes.</summary>
+    public static byte[] BuildCoolerFixedPower(int percent)
+    {
+        var fanConfig = new List<byte>();
+        WriteVarintField(fanConfig, fieldNumber: 1, 1);
+        WriteVarintField(fanConfig, fieldNumber: 3, (ulong)Math.Clamp(percent, 0, 100));
+        return BuildCoolerConfig(fanConfig.ToArray());
+    }
+
+    /// <summary>cooler_config carrying <paramref name="fanConfig"/> (a FunConfigPb body) verbatim, so the
+    /// hub can hand the fan back exactly the config it read from the panel before driving it.</summary>
+    public static byte[] BuildCoolerConfig(ReadOnlySpan<byte> fanConfig)
+    {
+        var coolerConfig = new List<byte>();
+        WriteLengthDelimited(coolerConfig, fieldNumber: 1, fanConfig.ToArray());
+
+        var payload = new List<byte>();
+        WriteLengthDelimited(payload, fieldNumber: 1, Array.Empty<byte>());
+        WriteLengthDelimited(payload, fieldNumber: 202, coolerConfig.ToArray());
+        return WrapFrame(payload);
+    }
+
+    /// <summary>Requests the cooler config (CMD_Get_CoolerConfig): the empty get_cooler_config body
+    /// (ReqPackagePb field 106), answered by <see cref="CoolerConfigReplyField"/>. Header cmd + sn like
+    /// <see cref="BuildGetFileList"/>, since Kanali sends the panel serial with it.</summary>
+    public static byte[] BuildGetCoolerConfig(string serialNumber)
+        => BuildSerialQuery("CMD_Get_CoolerConfig", serialNumber, bodyField: 106);
+
+    /// <summary>Requests the fan and pump speeds (CMD_Get_CoolerStatus): the empty get_cooler_status body
+    /// (ReqPackagePb field 107), answered by <see cref="CoolerStatusReplyField"/>.</summary>
+    public static byte[] BuildGetCoolerStatus(string serialNumber)
+        => BuildSerialQuery("CMD_Get_CoolerStatus", serialNumber, bodyField: 107);
+
+    private static byte[] BuildSerialQuery(string cmd, string serialNumber, int bodyField)
+    {
+        var header = new List<byte>();
+        WriteLengthDelimited(header, fieldNumber: 1, Encoding.ASCII.GetBytes(cmd));
+        WriteLengthDelimited(header, fieldNumber: 3, Encoding.ASCII.GetBytes(serialNumber ?? string.Empty));
+
+        var payload = new List<byte>();
+        WriteLengthDelimited(payload, fieldNumber: 1, header.ToArray());
+        WriteLengthDelimited(payload, fieldNumber: bodyField, Array.Empty<byte>());
+        return WrapFrame(payload);
+    }
+
     /// <summary>Requests one chunk of a stored file: file_pull_request (ReqPackagePb field 406)
     /// { file_name = 1, session_id = 2, file_offset = 3 }. The panel answers with a
     /// file_pull_response (field 805) of up to 64 KiB, masked (see <see cref="UnmaskPulledData"/>).

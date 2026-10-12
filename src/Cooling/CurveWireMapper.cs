@@ -19,7 +19,7 @@ internal static class CurveWireMapper
         Name = d.Name,
         Type = d.Type,
         Input = new CurveInput { Id = d.Input.Id, Type = d.Input.Type, Device = d.Input.Device },
-        Outputs = d.Outputs.ConvertAll(o => new CurveOutput { Id = o.Id, Type = o.Type }),
+        Outputs = (d.Outputs ?? new()).ConvertAll(o => new CurveOutput { Id = o.Id, Type = o.Type }),
         Flat = d.Flat is null ? null : new FlatCurve { Speed = d.Flat.Speed },
         Linear = d.Linear is null ? null : new LinearCurve
         {
