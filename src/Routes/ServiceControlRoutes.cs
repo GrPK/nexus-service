@@ -51,11 +51,14 @@ internal static class ServiceControlRoutes
             var ok = WriteAutoStart(body.AutoStart, startupProvider);
 #if WINDOWS
             const string failureDetail = "sc.exe config failed";
+            const int failureStatus = 500;
 #else
+            // No boot unit this process can toggle (not root, or no systemd/launchd install): an install limit, not a fault.
             const string failureDetail = "the startup provider rejected the change";
+            const int failureStatus = 409;
 #endif
             return ok ? Results.Ok(new StartupModeDto { AutoStart = ReadAutoStart(startupProvider) })
-                      : Results.Problem(failureDetail, statusCode: 500);
+                      : Results.Problem(failureDetail, statusCode: failureStatus);
         }).LocalhostOnly();
 
         app.MapPost("/service/stop", (IHostApplicationLifetime lifetime,
