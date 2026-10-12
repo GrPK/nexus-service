@@ -115,8 +115,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
         _engine.OnFrame += frame => _ = _hub.BroadcastBinaryAsync(frame);
         _engine.OnEffectChanged += ReconcileAudioCapture;
-        _engine.OnEffectChanged += OnStudioEffectChanged;
-        _store.OnChanged += OnStudioStoreChanged;
         // Any settings write can move a pinned effect's look, the pin set, or the mirrored screen.
         _store.OnChanged += RefreshPinnedLooks;
         RefreshPinnedLooks();
@@ -125,7 +123,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         // restored meanwhile is running the rainbow stand-in until this rebuilds it.
         customEffects?.Recovered += () =>
         {
-            if (_engine.CurrentEffect is ShaderEffect running && ShaderLibrary.IsCustomKey(running.Name) && running.Name != StudioLiveKey)
+            if (_engine.CurrentEffect is ShaderEffect running && ShaderLibrary.IsCustomKey(running.Name))
             {
                 ReloadCustomEffect(running.Name);
             }
@@ -150,27 +148,17 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     // classify on.
     public string GetSync()
     {
-        // A live Shader Studio session is a preview: clients keep seeing what ran before it.
-        if (_studio is { } studio)
-        {
-            return studio.ReportedSync;
-        }
-        // The preview, with its session already ended and the replacing start still to land, is never a user's mode.
-        if (_engine.CurrentEffectName is "none" or StudioLiveKey)
+        // The idle effect a studio session runs while the mode is Off is not a mode.
+        if (_engine.CurrentEffectName is "none" || ReferenceEquals(_engine.CurrentEffect, _studioIdle))
         {
             return _store.Load().Lighting.Sync;
         }
         return _engine.Frozen ? "static" : _engine.CurrentEffectName;
     }
 
-    public void SetSync(string sync)
-    {
-        // Starts no effect, so nothing else will replace a live preview.
-        EndStudioLiveBeforeSyncChange(restore: true);
-        _store.Update(s => s.Lighting.Sync = sync);
-    }
+    public void SetSync(string sync) => _store.Update(s => s.Lighting.Sync = sync);
 
-    public bool IsPaused => _studio?.PrevPaused ?? (_engine.Paused || _engine.PausePending);
+    public bool IsPaused => _engine.Paused;
 
     public void SetPaused(bool paused) => _engine.SetPaused(paused);
 
@@ -337,11 +325,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             return;
         }
         var name = (body.Effect ?? "rainbow").ToLowerInvariant();
-        // Reserved for the live preview; saving it would persist a key no later boot can resolve.
-        if (name == StudioLiveKey)
-        {
-            return;
-        }
         EnsureRgbActive();
         // The static catalog lives in Static mode now. Callers that predate it -
         // restored settings written before the split, Stream Deck rgbEffect
@@ -787,12 +770,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     public void ReloadCustomEffect(string key)
     {
-        // The preview's own key is not a stored effect; reloading it would orphan the running preview.
-        if (key == StudioLiveKey)
-        {
-            return;
-        }
-        RefreshStudioSnapshot(key);
         ClearThumbnails(key);
         // A lost swap means another thread changed the effect after we read it (often a
         // concurrent PUT of the same id). Re-read until our swap lands or the running effect
@@ -828,7 +805,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     public void DropCustomEffect(string key)
     {
-        EndStudioForCustomEdit(key);
         ClearThumbnails(key);
         var running = _engine.CurrentEffect is ShaderEffect cur && cur.Name == key;
         _store.Update(s =>
@@ -1542,7 +1518,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         }
         // No audio capture impl yet. Persist intent so the SPA can reflect it,
         // but the engine doesn't render anything.
-        EndStudioLiveBeforeSyncChange(restore: true);
         _store.Update(s =>
         {
             s.Lighting.Sync = "music";

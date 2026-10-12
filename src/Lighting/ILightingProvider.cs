@@ -110,30 +110,14 @@ public interface ILightingProvider
     void DropCustomEffect(string key) { }
 
     /// <summary>
-    /// Shader Studio live preview: run <paramref name="body"/>'s fragment on every device the
-    /// current mode drives, until <see cref="StopStudioLive"/> or the lease (LightingProvider.StudioLeaseMs)
-    /// lapses, touching no saved setting. The caller has already validated and compile-checked the fragment.
+    /// Shader Studio live preview: paint <paramref name="body"/>'s fragment over every device until
+    /// <see cref="StopStudioLive"/> or the lease (LightingProvider.StudioLeaseMs) lapses. It is an engine overlay
+    /// and touches no setting. The caller has already validated and compile-checked the fragment.
     /// </summary>
     StudioLiveResult StartStudioLive(StudioLiveBody body) => new(StudioLiveOutcome.Failed, "studio live is not supported", "");
 
-    /// <summary>Ends a live session and restores the lighting it replaced. A <paramref name="sessionId"/> that is not the running session is a no-op. True when a session was ended.</summary>
+    /// <summary>Ends a live session. A <paramref name="sessionId"/> that is not the running session is a no-op. True when a session was ended.</summary>
     bool StopStudioLive(string? sessionId = null) => false;
-
-    /// <summary>
-    /// A caller is about to change the saved mode. Ends a live session first: with <paramref name="restore"/> the
-    /// replaced lighting goes back (the change starts no effect of its own), without it nothing is touched (the
-    /// caller's own effect start replaces the preview). True when a session was ended.
-    /// </summary>
-    bool EndStudioLiveBeforeSyncChange(bool restore) => false;
-
-    /// <summary>
-    /// A caller is about to change the saved mode and start the mode's own effect (preset activation, profile switch).
-    /// Ends a live session but leaves the preview running and keeps the snapshot, until <see cref="FinishStudioLiveHandoff"/>.
-    /// </summary>
-    void DetachStudioLive() { }
-
-    /// <summary>Completes <see cref="DetachStudioLive"/>: restores the replaced lighting if the engine still runs the preview, otherwise releases it.</summary>
-    void FinishStudioLiveHandoff() { }
 
     /// <summary>True while a live session runs.</summary>
     bool StudioLiveActive => false;
@@ -142,9 +126,9 @@ public interface ILightingProvider
 public enum StudioLiveOutcome
 {
     Ok,
-    /// <summary>Refused: lighting off, held dark, or a fragment the shader could not be built from.</summary>
+    /// <summary>Refused: lighting off, or a fragment the shader could not be built from.</summary>
     Failed,
-    /// <summary>The session the caller names is over (conflict, lease lapse, another tab).</summary>
+    /// <summary>The session the caller names is over (lease lapse, another tab).</summary>
     Ended,
 }
 

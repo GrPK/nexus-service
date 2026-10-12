@@ -179,10 +179,6 @@ internal static class AppBootstrap
         // profile-switch callback resolves it lazily; once warm it's a
         // dictionary lookup against the DI cache.
         var sp = app.Services;
-        // The incoming profile replaces the effect, so a live Shader Studio preview is handed off before its settings
-        // load and settled when the profile call returns, success or not.
-        profileManager.ProfileLoading += lightingProvider.DetachStudioLive;
-        profileManager.ProfileLoadSettled += lightingProvider.FinishStudioLiveHandoff;
         profileManager.OnProfileSwitched += () =>
             ReapplyAfterProfileSwitch(sp, curveEngine, lightingEngine, lightingProvider, configStore);
     }

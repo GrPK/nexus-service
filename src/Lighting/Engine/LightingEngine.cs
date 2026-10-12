@@ -62,16 +62,6 @@ public sealed class LightingEngine : IDisposable
     // marks the frame current if no invalidate landed mid-render.
     private int _frozenEpoch;
     private int _frozenRenderedEpoch = -1;
-    // Counts finished loop ticks; a caller waits on _tickGate until a swapped-in effect has been painted.
-    private int _tickCount;
-    private readonly object _tickGate = new();
-    // Longest a restore waits for the restored effect to paint before it pauses anyway.
-    private const int PauseRenderWaitMs = 500;
-    // A pause that has to wait out a blackout hold. Applied on the first tick painted after the hold ends.
-    private volatile bool _pausePending;
-
-    /// <summary>True while a requested pause is waiting for a blackout hold to end.</summary>
-    public bool PausePending => _pausePending;
     private byte[] _frameBuffer = Array.Empty<byte>();
 
     /// <summary>Logical canvas size that device frames and the 3D scene camera are laid out in.</summary>
@@ -106,6 +96,17 @@ public sealed class LightingEngine : IDisposable
     /// <see cref="FullFrameSampling"/>; wide enough to reject single-pixel
     /// noise, narrow enough to keep a band's edge.</summary>
     private const float FullFrameStripBreadth = 0.08f;
+
+    // Shader Studio live preview: painted over every device, above pins and the running effect, below the
+    // LED mapper's highlight and test pattern and a blackout hold. Memory only.
+    private volatile IEffect? _studioOverlay;
+    private CanvasBuffer? _studioCanvas;
+
+    /// <summary>True while a studio overlay is set.</summary>
+    public bool StudioOverlayActive => _studioOverlay is not null;
+
+    /// <summary>Sets (or with null clears) the studio overlay and returns the previous one, which the caller disposes.</summary>
+    public IEffect? SetStudioOverlay(IEffect? overlay) => Interlocked.Exchange(ref _studioOverlay, overlay);
 
     public event Action<ReadOnlyMemory<byte>>? OnFrame;
     public event Action? OnEffectChanged;
@@ -246,7 +247,6 @@ public sealed class LightingEngine : IDisposable
                 return;
             }
             _paused = paused;
-            _pausePending = false;
         }
     }
 
@@ -588,32 +588,21 @@ public sealed class LightingEngine : IDisposable
 
     public void InvalidateFrozenFrame() => Interlocked.Increment(ref _frozenEpoch);
 
-    public void SetEffect(IEffect effect) => SetEffect(effect, disposePrevious: true);
-
-    /// <summary>
-    /// Replace the running effect. With <paramref name="disposePrevious"/> false the outgoing
-    /// effect is handed back alive, so a caller can put the very same instance back later.
-    /// </summary>
-    public IEffect? SetEffect(IEffect effect, bool disposePrevious)
+    public void SetEffect(IEffect effect)
     {
-        IEffect? old;
         lock (_lock)
         {
-            old = _currentEffect;
+            var old = _currentEffect;
             _currentEffect = effect;
             _paused = false;
-            _pausePending = false;
             _frozen = false;
             // The user picking a mode is the escape hatch if a resume event
             // never lands: it always ends in a lit device, never a dark one.
             ReleaseBlackoutState();
             Interlocked.Increment(ref _frozenEpoch);
-            if (disposePrevious)
-            {
-                try
-                { old?.Dispose(); }
-                catch { }
-            }
+            try
+            { old?.Dispose(); }
+            catch { }
             if (_loopTask is null || _loopTask.IsCompleted)
             {
                 _cts?.Dispose();
@@ -626,7 +615,6 @@ public sealed class LightingEngine : IDisposable
         }
         // Handler may start/stop an audio-capture subprocess; must not run under the engine lock.
         OnEffectChanged?.Invoke();
-        return old;
     }
 
     /// <summary>
@@ -657,66 +645,6 @@ public sealed class LightingEngine : IDisposable
     /// <summary>Stop only if <paramref name="expected"/> is still the running effect. False (nothing touched) otherwise.</summary>
     public bool StopIfCurrent(IEffect expected) => StopCore(expected);
 
-    /// <summary>
-    /// Put <paramref name="replacement"/> back in place of <paramref name="expected"/> only if
-    /// that is still the running effect. Unlike <see cref="SetEffect(IEffect)"/> it leaves a
-    /// blackout hold in place, so a restore during sleep or lock does not light the devices.
-    /// With <paramref name="paused"/> it first lets the loop paint the replacement, so the
-    /// frozen frame is the restored effect's, not the one it replaced.
-    /// </summary>
-    public bool RestoreEffectIfCurrent(IEffect expected, IEffect replacement, bool frozen, bool paused, Action? prepare = null)
-    {
-        lock (_lock)
-        {
-            if (!ReferenceEquals(_currentEffect, expected))
-            {
-                return false;
-            }
-            // Under the same lock as the swap, so the first tick of the restored effect already samples with its own settings.
-            prepare?.Invoke();
-            _currentEffect = replacement;
-            _paused = false;
-            _pausePending = false;
-            _frozen = frozen;
-            Interlocked.Increment(ref _frozenEpoch);
-            try
-            { expected.Dispose(); }
-            catch { }
-            if (paused && _blackout)
-            {
-                // Nothing paints during the hold; the loop pauses after the first frame painted once it ends.
-                _pausePending = true;
-            }
-        }
-        OnEffectChanged?.Invoke();
-        if (paused && !_pausePending)
-        {
-            // Two ticks: the one in flight may have picked up the old effect.
-            int target;
-            lock (_tickGate)
-            {
-                target = _tickCount + 2;
-                var deadline = Environment.TickCount64 + PauseRenderWaitMs;
-                while (_tickCount < target)
-                {
-                    var left = deadline - Environment.TickCount64;
-                    if (left <= 0 || !Monitor.Wait(_tickGate, (int)left))
-                    {
-                        break;
-                    }
-                }
-            }
-            lock (_lock)
-            {
-                if (ReferenceEquals(_currentEffect, replacement))
-                {
-                    _paused = true;
-                }
-            }
-        }
-        return true;
-    }
-
     private bool StopCore(IEffect? expected)
     {
         lock (_lock)
@@ -728,7 +656,6 @@ public sealed class LightingEngine : IDisposable
             var old = _currentEffect;
             _currentEffect = null;
             _paused = false;
-            _pausePending = false;
             _frozen = false;
             ReleaseBlackoutState();
             Interlocked.Increment(ref _frozenEpoch);
@@ -841,19 +768,17 @@ public sealed class LightingEngine : IDisposable
                         {
                             CompleteReleaseIfDone();
                         }
-                        if (_pausePending && !_blackout)
-                        {
-                            // The hold has ended and this tick painted the restored effect: hold it.
-                            lock (_lock)
-                            {
-                                if (_pausePending && ReferenceEquals(_currentEffect, effect))
-                                {
-                                    _paused = true;
-                                }
-                                _pausePending = false;
-                            }
-                        }
                         aheadDevices = devices;
+                    }
+                    else if (_studioOverlay is not null && wakeMs <= 0)
+                    {
+                        // Paused: the effect holds, the studio overlay keeps animating over it.
+                        var devices = _devices;
+                        ApplyTestOverlays(devices);
+                        foreach (var dev in devices)
+                        {
+                            dev.Publish();
+                        }
                     }
                     else if (wakeMs > 0)
                     {
@@ -878,7 +803,6 @@ public sealed class LightingEngine : IDisposable
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"[lighting-engine] {effect.Name} threw: {ex.Message}"); }
 
-                PulseTick();
                 var nextPeriodMs = Math.Max(1, FrameIntervalMs);
                 if (nextPeriodMs != periodMs)
                 {
@@ -911,17 +835,6 @@ public sealed class LightingEngine : IDisposable
             {
                 dev.Clear();
             }
-            // Wakes a restore waiting on a tick that will not come.
-            PulseTick();
-        }
-    }
-
-    private void PulseTick()
-    {
-        lock (_tickGate)
-        {
-            _tickCount++;
-            Monitor.PulseAll(_tickGate);
         }
     }
 
@@ -1176,7 +1089,7 @@ public sealed class LightingEngine : IDisposable
     /// </summary>
     public bool CanRenderAhead(IReadOnlyList<string> deviceIds)
     {
-        if (_currentEffect is not Gpu.ShaderEffect shader || shader.ReadsAudio)
+        if (_currentEffect is not Gpu.ShaderEffect shader || shader.ReadsAudio || _studioOverlay is not null)
         {
             return false;
         }
@@ -1698,6 +1611,7 @@ public sealed class LightingEngine : IDisposable
         foreach (var dev in devices)
         {
             if (dev.TestPattern is not null) continue;
+            if (_studioOverlay is not null && dev.HighlightLeds is not { Count: > 0 }) continue;
             var highlights = dev.HighlightLeds is { Count: > 0 } h ? h : null;
             var count = dev.PreviewLedCount is { } pc ? Math.Min(pc, dev.LedCount) : dev.LedCount;
             tracker.PaintLocks(dev, count, highlights);
@@ -1715,6 +1629,14 @@ public sealed class LightingEngine : IDisposable
         if (_overlaid.Length < devices.Length) _overlaid = new bool[devices.Length];
         var owned = _overlaid;
         Array.Clear(owned, 0, devices.Length);
+        var studio = _studioOverlay;
+        if (studio is not null)
+        {
+            _studioCanvas ??= new CanvasBuffer(_canvas.Width, _canvas.Height);
+            try
+            { studio.RenderFrame(_studioCanvas, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); }
+            catch (Exception ex) { Console.Error.WriteLine($"[lighting-engine] studio overlay threw: {ex.Message}"); }
+        }
         for (var di = 0; di < devices.Length; di++)
         {
             var dev = devices[di];
@@ -1734,6 +1656,14 @@ public sealed class LightingEngine : IDisposable
                         dev.SetLed(i, 0, 0, 0);
                     }
                 }
+                owned[di] = true;
+                continue;
+            }
+
+            // The studio overlay shows the whole effect on every device; only the mapper's own highlight and test pattern sit above it.
+            if (studio is not null && dev.TestPattern is null && _studioCanvas is not null)
+            {
+                PaintStudioOverlay(dev, previewCount, _studioCanvas);
                 owned[di] = true;
                 continue;
             }
@@ -1821,6 +1751,59 @@ public sealed class LightingEngine : IDisposable
             }
         }
         return owned;
+    }
+
+    // Each LED reads the overlay at its own normalized UV (editor draft layout first, then the saved one);
+    // a device without UVs spreads its LEDs along the canvas middle in index order.
+    private static void PaintStudioOverlay(DeviceFrame dev, int count, CanvasBuffer canvas)
+    {
+        float[]? ledU = dev.LedU;
+        float[]? ledV = dev.LedV;
+        bool[]? disabled = dev.LedDisabled;
+        var previewLayout = dev.PreviewLayout;
+        if (previewLayout is not null && previewLayout.Length > 0)
+        {
+            ledU = new float[count];
+            ledV = new float[count];
+            disabled = null;
+            foreach (var pos in previewLayout)
+            {
+                if (pos.Index < 0 || pos.Index >= count)
+                {
+                    continue;
+                }
+                ledU[pos.Index] = pos.U;
+                ledV[pos.Index] = pos.V;
+                if (pos.Disabled)
+                {
+                    disabled ??= new bool[count];
+                    disabled[pos.Index] = true;
+                }
+            }
+        }
+        var w = canvas.Width;
+        var h = canvas.Height;
+        for (var i = 0; i < count; i++)
+        {
+            if (disabled is not null && i < disabled.Length && disabled[i])
+            {
+                dev.SetLed(i, 0, 0, 0);
+                continue;
+            }
+            float u, v;
+            if (ledU is not null && ledV is not null && i < ledU.Length && i < ledV.Length)
+            {
+                u = ledU[i];
+                v = ledV[i];
+            }
+            else
+            {
+                u = count > 1 ? i / (float)(count - 1) : 0.5f;
+                v = 0.5f;
+            }
+            var (r, g, b) = canvas.GetPixel((int)MathF.Round(Math.Clamp(u, 0f, 1f) * (w - 1)), (int)MathF.Round(Math.Clamp(v, 0f, 1f) * (h - 1)));
+            dev.SetLed(i, r, g, b);
+        }
     }
 
     private void SerializeAndBroadcast()
