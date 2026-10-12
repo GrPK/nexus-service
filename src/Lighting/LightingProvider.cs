@@ -127,6 +127,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             {
                 ReloadCustomEffect(running.Name);
             }
+            RefreshPinnedLooks();
         };
     }
 
@@ -821,6 +822,22 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
                     s.Lighting.DevicePins.Remove(deviceId);
                 }
             }
+            // A layout preset that captured such a pin would write it back on activation.
+            foreach (var preset in s.Lighting.LayoutPresets)
+            {
+                if (preset.DevicePins is null)
+                {
+                    continue;
+                }
+                foreach (var (deviceId, pin) in preset.DevicePins.ToArray())
+                {
+                    if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate
+                        && string.Equals(pin.Effect, key, System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        preset.DevicePins.Remove(deviceId);
+                    }
+                }
+            }
             // Not running (static mode, stopped): the next animate start must not run rainbow under the dead name.
             if (string.Equals(s.Lighting.Animate.Effect, key, System.StringComparison.OrdinalIgnoreCase))
             {
@@ -897,6 +914,8 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     private IScreenFrameSource? ScreenSource() => _sharedSource is null ? _frameSource : _sharedSource.CreateHandle();
 
+    internal string? PinTagForTest(string key) => PinTag(key);
+
     private string? PinTag(string key) =>
         key == LightingEngine.MirrorPinKey
             ? _mirrorSel.Tag
@@ -936,6 +955,11 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             {
                 var key = pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate ? pin.Effect : null;
                 if (string.IsNullOrEmpty(key) || next.ContainsKey(key))
+                {
+                    continue;
+                }
+                // A deleted (or not yet loaded) custom effect has nothing to build.
+                if (ShaderLibrary.IsCustomKey(key) && !ShaderLibrary.IsKnownKey(key))
                 {
                     continue;
                 }
@@ -1102,8 +1126,11 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         var extras = look.Params is { Count: > 0 }
             ? new System.Collections.Generic.Dictionary<string, float>(look.Params)
             : null;
-        // A custom effect is rebuilt on any change: its source may be what changed.
-        if (existing is ShaderEffect cur && cur.Name == effect && !ShaderLibrary.IsCustomKey(effect))
+        // A custom effect updates in place unless its source changed since the instance was built.
+        var custom = ShaderLibrary.IsCustomKey(effect);
+        var sourceTag = custom ? ShaderLibrary.SourceTag(effect) : null;
+        if (existing is ShaderEffect cur && cur.Name == effect
+            && (!custom || (_pinBuiltSource.TryGetValue(effect, out var builtFrom) && builtFrom == sourceTag)))
         {
             cur.Speed = effect == "pulse" ? speed * 0.5f : speed;
             cur.Intensity = intensity;
@@ -1114,8 +1141,15 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             cur.ExtraParams = extras;
             return cur;
         }
+        if (custom)
+        {
+            _pinBuiltSource[effect] = sourceTag!;
+        }
         return BuildAnimateEffect(effect, speed, intensity, look.Hue, look.Colorize, look.Saturation, look.Contrast, extras);
     }
+
+    // Source tag each pinned custom instance was compiled from; only the engine thread writes it.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _pinBuiltSource = new(System.StringComparer.Ordinal);
 
     private string? _builtMirrorTag;
     private string? _builtMediaTag;

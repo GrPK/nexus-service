@@ -138,4 +138,87 @@ public sealed class CustomEffectPinTests : IDisposable
         _config.Update(s => s.Lighting.DevicePins.Remove("dev"));
         Assert.False(_beats.Running);
     }
+
+    [Fact]
+    public void A_look_change_updates_the_pinned_shader_in_place_and_only_a_source_change_rebuilds()
+    {
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag(0.2f));
+        _config.Update(s => s.Lighting.DevicePins["dev"] = Animate(Key));
+        var first = _engine.PinEffectFactory!(Key, null);
+
+        _config.Update(s => s.Lighting.Animate.Templates[Key] = new AnimateEffectTemplates
+        {
+            Selected = 0,
+            Slots = [new AnimateEffectState { Speed = 100 }, new(), new(), new()],
+        });
+        var afterLook = _engine.PinEffectFactory!(Key, first);
+        Assert.Same(first, afterLook);
+        Assert.Equal(2f, ((ShaderEffect)afterLook!).Speed);
+
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag(0.9f));
+        _provider.ReloadCustomEffect(Key);
+        Assert.NotSame(first, _engine.PinEffectFactory!(Key, first));
+    }
+
+    [Fact]
+    public void Deleting_the_effect_also_strips_it_from_layout_presets()
+    {
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag());
+        _config.Update(s => s.Lighting.LayoutPresets.Add(new LayoutPreset
+        {
+            Id = "p",
+            DevicePins = new() { ["a"] = Animate(Key), ["b"] = Animate("rainbow") },
+        }));
+
+        _provider.DropCustomEffect(Key);
+
+        var pins = _config.Load().Lighting.LayoutPresets[0].DevicePins!;
+        Assert.False(pins.ContainsKey("a"));
+        Assert.True(pins.ContainsKey("b"));
+    }
+
+    [Fact]
+    public void A_pin_on_a_custom_key_the_library_does_not_know_builds_nothing()
+    {
+        _config.Update(s => s.Lighting.DevicePins["dev"] = Animate(Key));
+
+        Assert.Null(_engine.PinLookTag!(Key));
+        Assert.Null(_engine.PinEffectFactory!(Key, null));
+    }
+
+    [Fact]
+    public void The_recovered_event_refreshes_pinned_looks_resolved_while_the_store_was_unreadable()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        var dir2 = Path.Combine(_dir, "store");
+        Directory.CreateDirectory(dir2);
+        new Nexus.Service.Lighting.CustomEffects.CustomEffectStore(dir2).Put(_id, "keep", "", CustomFrags.Frag());
+        ShaderLibrary.UnregisterCustom(_id);
+        var path = Path.Combine(dir2, "custom-effects.json");
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var store = new Nexus.Service.Lighting.CustomEffects.CustomEffectStore(dir2);
+            using var provider = new LightingProvider(_config, new LightingEngine(), new LightingOutputHub(), _gpu, new MediaLibrary(),
+                new Nexus.Service.Platform.DefaultMonitorEnumerator(), customEffects: store);
+            _config.Update(s => s.Lighting.DevicePins["dev"] = Animate(Key));
+            Assert.False(store.EnsureAvailable());
+            Assert.Null(PinTag(provider));
+
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            Assert.True(store.EnsureAvailable());
+
+            Assert.NotNull(PinTag(provider));
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    // The pin look tag a provider's engine would use; engines are private to each provider, so read it through the factory seam.
+    private string? PinTag(LightingProvider provider) => provider.PinTagForTest(Key);
 }
