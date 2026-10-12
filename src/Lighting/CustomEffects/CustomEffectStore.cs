@@ -140,6 +140,11 @@ public sealed class CustomEffectStore
     /// <summary>The first problem with the optional marketplace link fields, or null. Mirrors the cloud's username rule (length and charset; reserved words are the cloud's call).</summary>
     public static string? ValidateMarketLink(string? marketId, string? marketAuthor)
     {
+        // An empty marketId clears the link; the other link fields are ignored then.
+        if (marketId is "")
+        {
+            return null;
+        }
         if (marketId is not null && !(marketId.Length == 36 && Guid.TryParseExact(marketId, "D", out _)))
         {
             return "marketId must be a GUID";
@@ -509,6 +514,7 @@ public sealed class CustomEffectStore
             {
                 return (null, $"at most {MaxEntries} custom effects");
             }
+            var clearLink = marketId is "";
             saved = new CustomEffectEntry
             {
                 Id = id,
@@ -516,9 +522,9 @@ public sealed class CustomEffectStore
                 Recipe = recipe ?? "",
                 Frag = frag,
                 UpdatedAt = Math.Max(_clock(), next.Count == 0 ? 0 : next.Max(x => x.UpdatedAt) + 1),
-                MarketId = marketId ?? (idx < 0 ? null : next[idx].MarketId),
-                MarketAuthor = marketAuthor ?? (idx < 0 ? null : next[idx].MarketAuthor),
-                Downloaded = downloaded ?? (idx < 0 ? null : next[idx].Downloaded),
+                MarketId = clearLink ? null : marketId ?? (idx < 0 ? null : next[idx].MarketId),
+                MarketAuthor = clearLink ? null : marketAuthor ?? (idx < 0 ? null : next[idx].MarketAuthor),
+                Downloaded = clearLink ? null : downloaded ?? (idx < 0 ? null : next[idx].Downloaded),
             };
             if (idx < 0)
             {

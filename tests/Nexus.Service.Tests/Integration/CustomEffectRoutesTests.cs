@@ -431,4 +431,25 @@ public sealed class CustomEffectRoutesTests : IClassFixture<CustomEffectAppFacto
         var cleared = await Read(await http.PutAsync(Url(id), DownloadedBody(false)));
         Assert.False(cleared.GetProperty("downloaded").GetBoolean());
     }
+
+    [Fact]
+    public async Task An_empty_market_id_clears_the_link_and_a_later_put_without_it_keeps_it_cleared()
+    {
+        var http = Desktop();
+        var id = CustomFrags.NewId();
+        await http.PutAsync(Url(id), new StringContent(JsonSerializer.Serialize(
+            new { name = "L", recipe = "", frag = CustomFrags.Frag(), marketId = MarketGuid, marketAuthor = "Maker_1", downloaded = true }), Encoding.UTF8, "application/json"));
+
+        var cleared = await Read(await http.PutAsync(Url(id), new StringContent(JsonSerializer.Serialize(
+            new { name = "L", recipe = "", frag = CustomFrags.Frag(), marketId = "", marketAuthor = "ignored!", downloaded = true }), Encoding.UTF8, "application/json")));
+        Assert.False(cleared.TryGetProperty("marketId", out var a) && a.ValueKind != JsonValueKind.Null);
+        Assert.False(cleared.TryGetProperty("marketAuthor", out var b) && b.ValueKind != JsonValueKind.Null);
+        Assert.False(cleared.TryGetProperty("downloaded", out var c) && c.ValueKind != JsonValueKind.Null);
+
+        await http.PutAsync(Url(id), Body("L2", "", CustomFrags.Frag()));
+        var list = await Read(await http.GetAsync("/lighting/custom-effects"));
+        var entry = list.EnumerateArray().First(e => e.GetProperty("id").GetString() == id);
+        Assert.False(entry.TryGetProperty("marketId", out var d) && d.ValueKind != JsonValueKind.Null);
+        Assert.False(entry.TryGetProperty("downloaded", out var e2) && e2.ValueKind != JsonValueKind.Null);
+    }
 }
