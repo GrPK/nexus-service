@@ -563,9 +563,8 @@ public sealed class MultiplexHub
 
         public void Dispose()
         {
-            // SemaphoreSlim.Dispose leaves pending async waiters hanging, and cancelling
-            // WaitAsync(token) did not release them in a test; the Task.WaitAsync on the
-            // send path is what completes them.
+            // Pending async waiters on a disposed SemaphoreSlim never complete, so SendAsync
+            // bounds its wait with this token via Task.WaitAsync.
             _disposeCts.Cancel();
             _writeLock.Dispose();
         }
