@@ -28,6 +28,9 @@ public static class EffectMarketRoutes
     {
         app.MapGet("/lighting/effect-market", (HttpRequest req, ICloudApiClient api, CancellationToken ct) =>
             Anonymous(api, "/effects" + ListQuery(req), ct));
+        // The signed-in account's downloads; a literal segment, so it never reaches the {id} route.
+        app.MapGet("/lighting/effect-market/downloads", (ICloudApiClient api, CloudAccountService accounts, CancellationToken ct) =>
+            Account(api, accounts, HttpMethod.Get, "/effects/downloads", null, ct));
         app.MapGet("/lighting/effect-market/{id}", (string id, ICloudApiClient api, CancellationToken ct) =>
             WithId(id, guid => Anonymous(api, $"/effects/{guid}", ct)));
         app.MapPost("/lighting/effect-market", async (HttpRequest req, ICloudApiClient api, CloudAccountService accounts, CancellationToken ct) =>

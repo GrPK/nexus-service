@@ -216,6 +216,43 @@ public sealed class EffectMarketRoutesTests : IClassFixture<EffectMarketAppFacto
     }
 
     [Fact]
+    public async Task Downloads_use_the_account_token_and_never_reach_the_id_route()
+    {
+        string? token = null;
+        HttpMethod? method = null;
+        string? path = null;
+        _factory.Api.OnSendRaw = (m, p, _, t) =>
+        {
+            method = m;
+            path = p;
+            token = t;
+            return CloudApiResult<CloudRawResponse>.Ok(new CloudRawResponse { Body = "{\"items\":[]}" }, 200);
+        };
+        SignIn("acct-3", "tok-3");
+
+        var res = await Desktop().GetAsync("/lighting/effect-market/downloads");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("{\"items\":[]}", await res.Content.ReadAsStringAsync());
+        Assert.Equal(HttpMethod.Get, method);
+        Assert.Equal("/effects/downloads", path);
+        Assert.Equal("tok-3", token);
+    }
+
+    [Fact]
+    public async Task Downloads_without_a_linked_account_are_403_sign_in_required()
+    {
+        SignOut();
+        var calls = _factory.Api.SendRawCalls;
+
+        var res = await Desktop().GetAsync("/lighting/effect-market/downloads");
+
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal("sign_in_required", (await Read(res)).GetProperty("msg").GetString());
+        Assert.Equal(calls, _factory.Api.SendRawCalls);
+    }
+
+    [Fact]
     public async Task Writes_without_a_linked_account_are_403_sign_in_required_and_not_forwarded()
     {
         SignOut();
