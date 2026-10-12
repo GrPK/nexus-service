@@ -45,7 +45,9 @@ public class FanLcdPanelTests
             foreach (var (serial, content) in screens)
             {
                 fake.Attached.Add(serial);
-                s.Devices.TlLcdScreens[serial] = new LianLiWirelessScreenSettings { ContentType = content };
+                s.Devices.TlLcdScreens[serial] = content == "panel"
+                    ? new LianLiWirelessScreenSettings { NexusPanel = true, ContentType = "clock" }
+                    : new LianLiWirelessScreenSettings { ContentType = content };
             }
         });
         return (fake, store);
@@ -68,6 +70,45 @@ public class FanLcdPanelTests
             Assert.Equal(12, p.Profile.Fps);
         });
         Assert.Equal("Fake a", panels[0].Profile.DisplayName);
+    }
+
+    [Fact]
+    public void A_stored_legacy_panel_content_reads_as_the_switch_on_with_content_off()
+    {
+        var legacy = new LianLiWirelessScreenSettings { ContentType = "panel" };
+
+        Assert.True(FanLcdContent.IsPanel(legacy));
+        Assert.Equal("off", FanLcdContent.ContentOf(legacy));
+        Assert.Equal(FanLcdContent.Panel, FanLcdContent.ModeOf(legacy));
+    }
+
+    [Fact]
+    public void Switching_the_panel_off_brings_back_the_content_behind_it()
+    {
+        var screen = new LianLiWirelessScreenSettings { NexusPanel = true, ContentType = "clock" };
+        Assert.Equal(FanLcdContent.Panel, FanLcdContent.ModeOf(screen));
+
+        Nexus.Service.Routes.Slv3LcdRoutes.ApplyNexusPanel(screen, false);
+
+        Assert.Equal("clock", FanLcdContent.ModeOf(screen));
+    }
+
+    [Fact]
+    public void Turning_a_legacy_panel_off_leaves_the_screen_on_stock_firmware()
+    {
+        var screen = new LianLiWirelessScreenSettings { ContentType = "panel" };
+
+        Nexus.Service.Routes.Slv3LcdRoutes.ApplyNexusPanel(screen, false);
+
+        Assert.False(screen.NexusPanel);
+        Assert.Equal("off", FanLcdContent.ModeOf(screen));
+    }
+
+    [Fact]
+    public void Panel_is_no_longer_a_content_type()
+    {
+        Assert.Equal("invalid contentType", Nexus.Service.Routes.Slv3LcdRoutes.ValidateContent(
+            new Nexus.Service.Routes.Slv3LcdContentRequest { Serial = "a", ContentType = "panel" }));
     }
 
     [Fact]

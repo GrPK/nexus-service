@@ -1778,9 +1778,11 @@ public sealed class RecentApp
     public long LastFocusedUtcMs { get; set; }
 }
 
-/// <summary>One SL-LCD Wireless fan screen's persisted content selection and display settings.</summary>
+/// <summary>One Lian Li fan screen's persisted content selection and display settings (SL wireless and Uni Fan TL).</summary>
 public sealed class LianLiWirelessScreenSettings
 {
+    /// <summary>The screen is a streamed Nexus panel; <see cref="ContentType"/> is what it shows when this is off.</summary>
+    public bool NexusPanel { get; set; }
     /// <summary>"off" | "image" | "gif" | "video" | "sensor" | "clock" | "animation".</summary>
     public string ContentType { get; set; } = "off";
     public string? MediaId { get; set; }

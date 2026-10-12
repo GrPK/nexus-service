@@ -7,9 +7,8 @@ using Nexus.Service.Persistence;
 namespace Nexus.Service.Panel.Streams;
 
 /// <summary>
-/// Presents each attached fan screen whose content is <see cref="FanLcdContent.Panel"/> as its own
-/// streamed panel; every other screen stays off the panel list, the way a display is a panel
-/// only while promoted.
+/// Presents each attached fan screen with its Nexus panel switch on as its own streamed panel;
+/// every other screen stays off the panel list, the way a display is a panel only while promoted.
 /// </summary>
 public sealed class FanLcdPanelDiscovery : IStreamedPanelDiscovery
 {
@@ -33,7 +32,7 @@ public sealed class FanLcdPanelDiscovery : IStreamedPanelDiscovery
         var panels = new List<StreamedPanelDeviceInfo>();
         foreach (var serial in _screens.AttachedSerials())
         {
-            if (!settings.TryGetValue(serial, out var screen) || screen.ContentType != FanLcdContent.Panel)
+            if (!settings.TryGetValue(serial, out var screen) || !FanLcdContent.IsPanel(screen))
             {
                 continue;
             }

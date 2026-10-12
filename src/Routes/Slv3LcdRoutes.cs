@@ -23,6 +23,8 @@ public sealed class Slv3LcdScreenDto
     public byte Brightness { get; set; }
     public bool SleepWhenLocked { get; set; } = true;
     public byte Rotation { get; set; }
+    /// <summary>The screen is a streamed Nexus panel; <see cref="ContentType"/> is what it shows when this is off.</summary>
+    public bool NexusPanel { get; set; }
     public string ContentType { get; set; } = "off";
     public string? MediaId { get; set; }
     /// <summary>"cpuLoad" | "cpuTemp" | "gpuLoad" | "gpuTemp" | "memoryUsage" | "vramUsage" | "fanRpm". Set when contentType is "sensor".</summary>
@@ -41,7 +43,7 @@ public sealed class Slv3LcdScreenDto
     public string? TempUnit { get; set; }
     /// <summary>User-chosen list position (0-based); -1 when not set. The list is already sorted by it.</summary>
     public int Order { get; set; } = -1;
-    /// <summary>The screen's panel record while its content is "panel" and the record exists; null otherwise.</summary>
+    /// <summary>The screen's panel record while <see cref="NexusPanel"/> is on and the record exists; null otherwise.</summary>
     public string? PanelDeviceId { get; set; }
     /// <summary>Where the screen sits, e.g. "#1.2" (port 1, fan 2) on a Uni Fan TL; null when the family has no such label.</summary>
     public string? Label { get; set; }
@@ -58,6 +60,7 @@ public sealed class Slv3LcdSettingsRequest
     public byte? Brightness { get; set; }
     public byte? Rotation { get; set; }
     public bool? SleepWhenLocked { get; set; }
+    public bool? NexusPanel { get; set; }
 }
 
 public sealed class Slv3LcdOrderRequest
@@ -69,7 +72,7 @@ public sealed class Slv3LcdOrderRequest
 public sealed class Slv3LcdContentRequest
 {
     public string Serial { get; set; } = "";
-    /// <summary>"off" | "image" | "gif" | "video" | "sensor" | "clock" | "animation" | "panel".</summary>
+    /// <summary>"off" | "image" | "gif" | "video" | "sensor" | "clock" | "animation".</summary>
     public string ContentType { get; set; } = "";
     public string? MediaId { get; set; }
     /// <summary>"cpuLoad" | "cpuTemp" | "gpuLoad" | "gpuTemp" | "memoryUsage" | "vramUsage" | "fanRpm". Used when contentType is "sensor".</summary>
@@ -117,7 +120,7 @@ public sealed class Slv3LcdImportResponse
 /// </summary>
 public static class Slv3LcdRoutes
 {
-    private static readonly string[] ValidContentTypes = { "off", "image", "gif", "video", "sensor", "clock", "animation", FanLcdContent.Panel };
+    private static readonly string[] ValidContentTypes = { "off", "image", "gif", "video", "sensor", "clock", "animation" };
     private static readonly string[] ValidSensorSources = { "cpuLoad", "cpuTemp", "gpuLoad", "gpuTemp", "memoryUsage", "vramUsage", "fanRpm" };
     private static readonly string[] ValidSensorStyles = { "ring", "bar" };
     private static readonly string[] ValidClockFaces = { "digital", "digitalMinimal", "analogClassic", "analogMinimal" };
@@ -166,7 +169,8 @@ public static class Slv3LcdRoutes
                     Brightness = settings.Brightness,
                     SleepWhenLocked = settings.SleepWhenLocked,
                     Rotation = settings.Rotation,
-                    ContentType = settings.ContentType,
+                    NexusPanel = FanLcdContent.IsPanel(settings),
+                    ContentType = FanLcdContent.ContentOf(settings),
                     MediaId = settings.MediaId,
                     SensorSource = settings.SensorSource,
                     SensorStyle = settings.SensorStyle,
@@ -175,7 +179,7 @@ public static class Slv3LcdRoutes
                     ColorA = settings.ColorA,
                     ColorB = settings.ColorB,
                     TempUnit = settings.TempUnit,
-                    PanelDeviceId = PanelDeviceIdFor(panelRecords, screens, screen.Serial, settings.ContentType),
+                    PanelDeviceId = PanelDeviceIdFor(panelRecords, screens, screen.Serial, settings),
                 });
             }
             return Results.Json(response, AppJsonContext.Default.Slv3LcdScreensResponse);
@@ -213,6 +217,7 @@ public static class Slv3LcdRoutes
                 if (body.Brightness.HasValue) screen.Brightness = body.Brightness.Value;
                 if (body.Rotation.HasValue) screen.Rotation = body.Rotation.Value;
                 if (body.SleepWhenLocked.HasValue) screen.SleepWhenLocked = body.SleepWhenLocked.Value;
+                if (body.NexusPanel is { } nexusPanel) ApplyNexusPanel(screen, nexusPanel);
                 s.Devices.LianLiWireless.Screens[body.Serial] = screen;
             });
 
@@ -414,6 +419,11 @@ public static class Slv3LcdRoutes
 
     internal static void ApplyContent(LianLiWirelessScreenSettings screen, Slv3LcdContentRequest body)
     {
+        // A legacy stored panel content keeps its panel on while the content behind it changes.
+        if (screen.ContentType == FanLcdContent.Panel)
+        {
+            screen.NexusPanel = true;
+        }
         screen.ContentType = body.ContentType;
         screen.MediaId = body.ContentType == "off" ? null : body.MediaId;
         screen.SensorSource = body.SensorSource ?? screen.SensorSource;
@@ -423,6 +433,15 @@ public static class Slv3LcdRoutes
         screen.ColorA = body.ColorA ?? screen.ColorA;
         screen.ColorB = body.ColorB ?? screen.ColorB;
         screen.TempUnit = body.TempUnit ?? screen.TempUnit;
+    }
+
+    internal static void ApplyNexusPanel(LianLiWirelessScreenSettings screen, bool on)
+    {
+        screen.NexusPanel = on;
+        if (screen.ContentType == FanLcdContent.Panel)
+        {
+            screen.ContentType = "off";
+        }
     }
 
     /// <summary>The problem with a screen-order request, or null when it is valid.</summary>
@@ -443,10 +462,10 @@ public static class Slv3LcdRoutes
         return null;
     }
 
-    /// <summary>The panel record of a screen in panel mode, once its session has minted one.</summary>
+    /// <summary>The panel record of a screen with its panel on, once its session has minted one.</summary>
     internal static string? PanelDeviceIdFor(
-        IReadOnlyDictionary<string, StreamedPanelRecord> panelRecords, IFanLcdScreens screens, string serial, string contentType) =>
-        contentType == FanLcdContent.Panel
+        IReadOnlyDictionary<string, StreamedPanelRecord> panelRecords, IFanLcdScreens screens, string serial, LianLiWirelessScreenSettings settings) =>
+        FanLcdContent.IsPanel(settings)
         && panelRecords.TryGetValue(FanLcdPanelDiscovery.PanelSerial(screens, serial), out var record)
         && !string.IsNullOrEmpty(record.PanelDeviceId)
             ? record.PanelDeviceId

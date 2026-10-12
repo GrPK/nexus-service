@@ -63,7 +63,8 @@ public static class TlLcdRoutes
                     Brightness = 0,
                     SleepWhenLocked = false,
                     Rotation = settings.Rotation,
-                    ContentType = settings.ContentType,
+                    NexusPanel = FanLcdContent.IsPanel(settings),
+                    ContentType = FanLcdContent.ContentOf(settings),
                     MediaId = settings.MediaId,
                     SensorSource = settings.SensorSource,
                     SensorStyle = settings.SensorStyle,
@@ -72,13 +73,13 @@ public static class TlLcdRoutes
                     ColorA = settings.ColorA,
                     ColorB = settings.ColorB,
                     TempUnit = settings.TempUnit,
-                    PanelDeviceId = Slv3LcdRoutes.PanelDeviceIdFor(panelRecords, screens, screen.Key, settings.ContentType),
+                    PanelDeviceId = Slv3LcdRoutes.PanelDeviceIdFor(panelRecords, screens, screen.Key, settings),
                 });
             }
             return Results.Json(response, AppJsonContext.Default.Slv3LcdScreensResponse);
         });
 
-        // Rotation only, stored: the content worker sends it with the screen's next Nexus frame.
+        // Rotation (sent with the screen's next Nexus frame) and the Nexus panel switch.
         app.MapPost("/devices/lianli-tl/screen/settings", (Slv3LcdSettingsRequest body, IConfigStore store) =>
         {
             if (string.IsNullOrWhiteSpace(body.Serial))
@@ -93,10 +94,18 @@ public static class TlLcdRoutes
             {
                 return Results.Json(ApiResponse.Fail("rotation must be 0-3"), AppJsonContext.Default.ApiResponse);
             }
-            if (body.Rotation is { } rotation)
+            store.Update(s =>
             {
-                store.Update(s => ScreenOf(s.Devices, body.Serial).Rotation = rotation);
-            }
+                var screen = ScreenOf(s.Devices, body.Serial);
+                if (body.Rotation is { } rotation)
+                {
+                    screen.Rotation = rotation;
+                }
+                if (body.NexusPanel is { } nexusPanel)
+                {
+                    Slv3LcdRoutes.ApplyNexusPanel(screen, nexusPanel);
+                }
+            });
             return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
         });
 

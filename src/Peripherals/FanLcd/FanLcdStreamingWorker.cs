@@ -181,21 +181,22 @@ public sealed class FanLcdStreamingWorker : BackgroundService
                         loadedImage = loadedMediaId is null ? null : _library.LoadFrames(loadedMediaId);
                         pushedStatic = false;
                     }
-                    if (settings.ContentType != appliedContentType)
+                    var mode = FanLcdContent.ModeOf(settings);
+                    if (mode != appliedContentType)
                     {
-                        appliedContentType = settings.ContentType;
+                        appliedContentType = mode;
                         pushedStatic = false;
                         animationStartUtc = DateTime.UtcNow;
                         // Taken back before this loop draws or releases, so a lingering panel
                         // session's frame cannot land after the switch.
-                        _screens.SetPanelOwned(serial, settings.ContentType == FanLcdContent.Panel);
-                        if (settings.ContentType == "off")
+                        _screens.SetPanelOwned(serial, mode == FanLcdContent.Panel);
+                        if (mode == "off")
                         {
                             _screens.Release(serial);
                         }
                     }
 
-                    switch (settings.ContentType)
+                    switch (mode)
                     {
                         case "image":
                         case "gif":
