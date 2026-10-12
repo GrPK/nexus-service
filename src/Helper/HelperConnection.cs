@@ -144,14 +144,22 @@ public sealed class HelperConnection : IAsyncDisposable
     /// telemetry server-side broadcasts back to the helper, or fire-and-
     /// forget commands where the caller does not need a result.
     /// </summary>
-    public Task SendAsync<TPayload>(string type, TPayload payload, JsonTypeInfo<TPayload> payloadType, CancellationToken ct = default)
+    public async Task SendAsync<TPayload>(string type, TPayload payload, JsonTypeInfo<TPayload> payloadType, CancellationToken ct = default)
     {
         var env = new HelperEnvelope
         {
             Type = type,
             Payload = JsonSerializer.SerializeToElement(payload, payloadType),
         };
-        return WriteEnvelopeAsync(env, ct);
+        try
+        {
+            await WriteEnvelopeAsync(env, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Callers discard this task; a helper that died mid-write is
+            // re-synced by its reconnect, so a dead pipe is not an error here.
+        }
     }
 
     /// <summary>
