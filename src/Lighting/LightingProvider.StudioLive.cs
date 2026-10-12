@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Nexus.Service.Lighting.Engine;
+using Nexus.Service.Lighting.Engine.Effects;
 using Nexus.Service.Lighting.Engine.Gpu;
 using Nexus.Service.Models.Lighting;
 using Nexus.Service.Sockets;
@@ -27,6 +28,8 @@ public sealed partial class LightingProvider
     private Timer? _studioTimer;
     // Runs the engine loop while the mode is Off; the loop only ticks with an effect.
     private volatile IEffect? _studioIdle;
+    // The overlay's fragment reads audio uniforms, which counts as audio demand for capture.
+    private volatile bool _studioAudio;
 
     /// <summary>Clock for the lease; tests replace it.</summary>
     internal Func<long> StudioClockMs { get; set; } = () => Environment.TickCount64;
@@ -34,13 +37,6 @@ public sealed partial class LightingProvider
     public bool StudioLiveActive => _studio is not null;
 
     internal ShaderEffect? StudioLiveEffect => _studio?.Live;
-
-    private sealed class StudioIdleEffect : IEffect
-    {
-        public string Name => "studio-idle";
-        public void RenderFrame(CanvasBuffer canvas, double tickMs) => canvas.Clear();
-        public void Dispose() { }
-    }
 
     private sealed class StudioSession
     {
@@ -90,6 +86,11 @@ public sealed partial class LightingProvider
         }
         else
         {
+            // From Off the loop has to be started, which would end a sleep or lock hold; refuse while it holds.
+            if (_engine.CurrentEffect is null && _engine.Blackout)
+            {
+                return Fail("lighting is held dark for sleep or lock");
+            }
             ShaderEffect live;
             try
             {
@@ -102,6 +103,7 @@ public sealed partial class LightingProvider
             session = new StudioSession { Id = NewSessionId(), Live = live, Frag = frag };
             _studio = session;
             _engine.SetStudioOverlay(live);
+            SetStudioAudio(frag);
             _studioTimer ??= new Timer(_ => CheckStudioLease(), null, 1000, 1000);
         }
         EnsureEngineLoop(session);
@@ -141,6 +143,7 @@ public sealed partial class LightingProvider
         session.Live = fresh;
         session.Frag = frag;
         old?.Dispose();
+        SetStudioAudio(frag);
         return true;
     }
 
@@ -148,7 +151,8 @@ public sealed partial class LightingProvider
     // for the session; a mode started later by anyone replaces it and the overlay carries on over that.
     private void EnsureEngineLoop(StudioSession session)
     {
-        if (_engine.CurrentEffect is not null)
+        // Installing the placeholder would end a sleep or lock hold; the renewal after the hold lifts puts it in.
+        if (_engine.CurrentEffect is not null || _engine.Blackout)
         {
             return;
         }
@@ -157,6 +161,12 @@ public sealed partial class LightingProvider
         var idle = new StudioIdleEffect();
         _studioIdle = idle;
         _engine.SetEffect(idle);
+    }
+
+    private void SetStudioAudio(string? frag)
+    {
+        _studioAudio = frag is not null && ShaderLibrary.ReadsAudio(frag);
+        ReconcileAudioCapture();
     }
 
     private static StudioLiveResult Fail(string message) => new(StudioLiveOutcome.Failed, message, "");
@@ -187,16 +197,15 @@ public sealed partial class LightingProvider
         _studioTimer?.Dispose();
         _studioTimer = null;
         _engine.SetStudioOverlay(null)?.Dispose();
+        SetStudioAudio(null);
         var idle = _studioIdle;
         _studioIdle = null;
-        // Only while the placeholder is still the running effect: a mode someone started meanwhile is theirs.
-        if (idle is not null && ReferenceEquals(_engine.CurrentEffect, idle))
+        // Only while the placeholder is still the running effect: a mode someone started meanwhile is theirs,
+        // and both the hold and the stop are conditional on it atomically with a concurrent SetEffect.
+        if (idle is not null)
         {
-            if (!_engine.Blackout)
-            {
-                BlackoutBeforeRelinquish();
-            }
-            if (_engine.StopIfCurrent(idle) && !s.RgbWasActive)
+            var held = _engine.Blackout ? ReferenceEquals(_engine.CurrentEffect, idle) : BlackoutBeforeRelinquish(idle);
+            if (held && _engine.StopIfCurrent(idle) && !s.RgbWasActive)
             {
                 _rgb?.Deactivate();
                 _rgb?.AwaitShutdown();

@@ -430,4 +430,136 @@ public sealed class StudioLiveTests : IDisposable
 
         Assert.False(provider.StartStudioLive(Body()).Ok);
     }
+
+    private sealed class FakeBeats : Nexus.Service.Activity.IBeatsProvider
+    {
+        public bool Running;
+        public event Action? OnBeat { add { } remove { } }
+        public void Start() => Running = true;
+        public void Stop() => Running = false;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void Clearing_the_overlay_on_a_paused_effect_puts_the_held_canvas_back_on_the_devices()
+    {
+        var dev = Device("d", 1);
+        _engine.UpdateDevices([dev]);
+        var global = new FakeEffect("global", r: 200);
+        _engine.SetEffect(global);
+        WaitFor(() => global.Renders > 0);
+        _engine.SetPaused(true);
+        _engine.SetStudioOverlay(new FakeEffect("studio", g: 90));
+        WaitForLed(dev, 0, 0, 90, 0);
+
+        _engine.SetStudioOverlay(null);
+
+        WaitForLed(dev, 0, 200, 0, 0);
+        Assert.Equal(200, dev.LedBytes[0]);
+        Assert.True(_engine.Paused);
+    }
+
+    [Fact]
+    public void A_start_from_off_during_a_blackout_hold_is_refused_and_leaves_the_hold()
+    {
+        _engine.SetBlackout(true);
+
+        var result = _provider.StartStudioLive(Body());
+
+        Assert.False(result.Ok);
+        Assert.True(_engine.Blackout);
+        Assert.Null(_engine.CurrentEffect);
+        Assert.False(_engine.StudioOverlayActive);
+    }
+
+    [Fact]
+    public void A_renewal_during_a_blackout_hold_keeps_the_hold_and_the_loop_comes_back_when_it_lifts()
+    {
+        var open = _provider.StartStudioLive(Body());
+        _engine.Stop();
+        _engine.SetBlackout(true);
+
+        Assert.True(_provider.StartStudioLive(Body(sessionId: open.SessionId)).Ok);
+        Assert.True(_engine.Blackout);
+        Assert.Null(_engine.CurrentEffect);
+
+        _engine.SetBlackout(false);
+        Assert.True(_provider.StartStudioLive(Body(sessionId: open.SessionId)).Ok);
+        Assert.NotNull(_engine.CurrentEffect);
+        Assert.False(_engine.Blackout);
+    }
+
+    [Fact]
+    public void The_hold_only_latches_while_the_expected_effect_still_runs()
+    {
+        var first = new FakeEffect("first");
+        _engine.SetEffect(first);
+        _engine.SetEffect(new FakeEffect("second"));
+
+        Assert.False(_engine.SetBlackoutIfCurrent(first));
+
+        Assert.False(_engine.Blackout);
+    }
+
+    [Fact]
+    public void Ending_over_a_mode_another_client_started_latches_no_hold()
+    {
+        _provider.StartStudioLive(Body());
+        _provider.StartAnimate(Animate("plasma"));
+
+        _provider.StopStudioLive();
+
+        Assert.False(_engine.Blackout);
+        Assert.Equal("plasma", _engine.CurrentEffectName);
+    }
+
+    [Fact]
+    public void A_studio_fragment_that_reads_audio_holds_audio_capture_until_the_session_ends()
+    {
+        var beats = new FakeBeats();
+        using var provider = new LightingProvider(_config, new LightingEngine(), new LightingOutputHub(), _gpu, new MediaLibrary(),
+            new Nexus.Service.Platform.DefaultMonitorEnumerator(), beats: beats);
+
+        var open = provider.StartStudioLive(Body(CustomFrags.Frag(audio: true)));
+        Assert.True(beats.Running);
+
+        provider.StartStudioLive(Body(CustomFrags.Frag(), sessionId: open.SessionId));
+        Assert.False(beats.Running);
+
+        provider.StartStudioLive(Body(CustomFrags.Frag(audio: true), sessionId: open.SessionId));
+        Assert.True(beats.Running);
+        provider.StopStudioLive();
+        Assert.False(beats.Running);
+    }
+
+    [Fact]
+    public void The_idle_effect_reads_as_none_in_status_reporting()
+    {
+        _provider.StartStudioLive(Body());
+
+        Assert.Equal("none", _engine.ReportedEffectName);
+        Assert.NotEqual("none", _engine.CurrentEffectName);
+        _provider.StartAnimate(Animate("plasma"));
+        Assert.Equal("plasma", _engine.ReportedEffectName);
+    }
+
+    [Fact]
+    public void An_overlay_covering_every_device_stops_the_effect_rendering_until_a_test_pattern_needs_it()
+    {
+        var dev = Device("d", 1);
+        _engine.UpdateDevices([dev]);
+        var global = new FakeEffect("global", r: 200);
+        _engine.SetEffect(global);
+        _engine.SetStudioOverlay(new FakeEffect("studio", g: 90));
+        WaitForLed(dev, 0, 0, 90, 0);
+        Thread.Sleep(50);
+        var held = global.Renders;
+        Thread.Sleep(100);
+        Assert.Equal(held, global.Renders);
+
+        dev.TestPattern = "none";
+        WaitFor(() => global.Renders > held);
+
+        Assert.True(global.Renders > held);
+    }
 }

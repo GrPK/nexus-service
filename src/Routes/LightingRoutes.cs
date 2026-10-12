@@ -183,15 +183,15 @@ public static class LightingRoutes
             var rescanning = bridge?.IsRescanning ?? false;
             return new Nexus.Service.Models.Cooling.LightingStatusResponse
             {
-                Effect = engine.CurrentEffectName,
-                Running = engine.CurrentEffectName != "none",
+                Effect = engine.ReportedEffectName,
+                Running = engine.ReportedEffectName != "none",
                 // Scanning covers both first-connect and subprocess bounces so the
                 // UI spinner tracks every phase where the device list is in flux.
                 // Gated on the daemon actually running: with no live subprocess
                 // (never started, launch-failed, or between backoff respawns)
                 // nothing is being scanned and the spinner would never resolve -
                 // the perpetual-scanning symptom on daemon-less machines.
-                Scanning = rescanning || (engine.CurrentEffectName != "none" && pm?.IsRunning == true && !devices.IsConnected),
+                Scanning = rescanning || (engine.ReportedEffectName != "none" && pm?.IsRunning == true && !devices.IsConnected),
                 RgbRunning = pm?.IsRunning ?? false,
                 GpuAvailable = gpu?.Available ?? false,
                 // Only a thrown init is "unavailable". Before the deferred

@@ -106,7 +106,19 @@ public sealed class LightingEngine : IDisposable
     public bool StudioOverlayActive => _studioOverlay is not null;
 
     /// <summary>Sets (or with null clears) the studio overlay and returns the previous one, which the caller disposes.</summary>
-    public IEffect? SetStudioOverlay(IEffect? overlay) => Interlocked.Exchange(ref _studioOverlay, overlay);
+    public IEffect? SetStudioOverlay(IEffect? overlay)
+    {
+        var old = Interlocked.Exchange(ref _studioOverlay, overlay);
+        if (overlay is null && old is not null)
+        {
+            // A paused effect publishes nothing on its own: the devices still hold the overlay's last frame.
+            _resampleOnce = true;
+        }
+        return old;
+    }
+
+    // Set when the overlay clears; a paused tick then samples the held canvas back onto the devices once.
+    private volatile bool _resampleOnce;
 
     public event Action<ReadOnlyMemory<byte>>? OnFrame;
     public event Action? OnEffectChanged;
@@ -114,6 +126,9 @@ public sealed class LightingEngine : IDisposable
     /// <summary>Raised on the engine thread once per tick, after every device frame is published; handlers must not block.</summary>
     public event Action? FramePublished;
     public string CurrentEffectName => _currentEffect?.Name ?? "none";
+
+    /// <summary>The running effect as a user sees it: the idle effect that keeps the loop alive for a studio session in Off reads as none.</summary>
+    public string ReportedEffectName => _currentEffect is Effects.StudioIdleEffect ? "none" : CurrentEffectName;
     public IEffect? CurrentEffect => _currentEffect;
     public DeviceFrame[] Devices => _devices;
     public bool Paused => _paused;
@@ -261,22 +276,31 @@ public sealed class LightingEngine : IDisposable
     /// Nothing here is persisted, so a crash or power loss while blacked out
     /// comes back lit rather than stranding the user in the dark.
     /// </summary>
-    public void SetBlackout(bool blackout)
+    public void SetBlackout(bool blackout) => SetBlackoutCore(blackout, null);
+
+    /// <summary>Engages the hold only if <paramref name="expected"/> is still the running effect, atomically with a concurrent SetEffect. False (nothing latched) otherwise.</summary>
+    public bool SetBlackoutIfCurrent(IEffect expected) => SetBlackoutCore(true, expected);
+
+    private bool SetBlackoutCore(bool blackout, IEffect? onlyIf)
     {
         var applyInline = false;
         lock (_lock)
         {
+            if (onlyIf is not null && !ReferenceEquals(_currentEffect, onlyIf))
+            {
+                return false;
+            }
             if (!blackout)
             {
                 if (!_blackout)
                 {
-                    return;
+                    return true;
                 }
                 ReleaseBlackoutState();
                 // A frozen effect renders once per epoch; without this it would
                 // hold the blacked-out canvas after release instead of repainting.
                 Interlocked.Increment(ref _frozenEpoch);
-                return;
+                return true;
             }
 
             if (!_blackout)
@@ -301,6 +325,7 @@ public sealed class LightingEngine : IDisposable
         {
             ApplyBlackout();
         }
+        return true;
     }
 
     /// <summary>
@@ -718,8 +743,11 @@ public sealed class LightingEngine : IDisposable
                         // A frozen effect paints the same canvas every tick, so
                         // the shader render and its readback run once; sampling
                         // still runs so device changes reach hardware.
+                        _resampleOnce = false;
+                        // A studio overlay that covers every device leaves nothing for the effect or the pins to show.
+                        var overlayCoversAll = _studioOverlay is not null && !AnyEditingOverlay(_devices);
                         var epoch = Volatile.Read(ref _frozenEpoch);
-                        if (!_frozen || Volatile.Read(ref _frozenRenderedEpoch) != epoch)
+                        if (!overlayCoversAll && (!_frozen || Volatile.Read(ref _frozenRenderedEpoch) != epoch))
                         {
                             effect.RenderFrame(_canvas, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                             TrackAheadParams(effect);
@@ -729,7 +757,10 @@ public sealed class LightingEngine : IDisposable
                         // publish: UpdateDevices swaps the array lock-free,
                         // and the skip mask below is indexed against it.
                         var devices = _devices;
-                        RenderPins(effect, devices);
+                        if (!overlayCoversAll)
+                        {
+                            RenderPins(effect, devices);
+                        }
                         SampleDevicesFromCanvas(devices);
                         ApplyLedColorLocks(devices);
                         if (effect is GameSyncEffect gs)
@@ -770,11 +801,20 @@ public sealed class LightingEngine : IDisposable
                         }
                         aheadDevices = devices;
                     }
-                    else if (_studioOverlay is not null && wakeMs <= 0)
+                    else if ((_studioOverlay is not null || _resampleOnce) && wakeMs <= 0)
                     {
-                        // Paused: the effect holds, the studio overlay keeps animating over it.
+                        // Paused: the effect holds, the studio overlay keeps animating over it, and once it clears the held canvas goes back onto the devices.
                         var devices = _devices;
-                        ApplyTestOverlays(devices);
+                        if (_studioOverlay is not null)
+                        {
+                            ApplyTestOverlays(devices);
+                        }
+                        else
+                        {
+                            _resampleOnce = false;
+                            SampleDevicesFromCanvas(devices);
+                            ApplyLedColorLocks(devices);
+                        }
                         foreach (var dev in devices)
                         {
                             dev.Publish();
@@ -1804,6 +1844,18 @@ public sealed class LightingEngine : IDisposable
             var (r, g, b) = canvas.GetPixel((int)MathF.Round(Math.Clamp(u, 0f, 1f) * (w - 1)), (int)MathF.Round(Math.Clamp(v, 0f, 1f) * (h - 1)));
             dev.SetLed(i, r, g, b);
         }
+    }
+
+    private static bool AnyEditingOverlay(DeviceFrame[] devices)
+    {
+        foreach (var d in devices)
+        {
+            if (d.TestPattern is not null || d.HighlightLeds is { Count: > 0 })
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void SerializeAndBroadcast()

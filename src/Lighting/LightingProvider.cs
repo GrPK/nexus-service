@@ -149,7 +149,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     public string GetSync()
     {
         // The idle effect a studio session runs while the mode is Off is not a mode.
-        if (_engine.CurrentEffectName is "none" || ReferenceEquals(_engine.CurrentEffect, _studioIdle))
+        if (_engine.ReportedEffectName == "none")
         {
             return _store.Load().Lighting.Sync;
         }
@@ -178,7 +178,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         {
             var music = _store.Load().Lighting.MusicReactive;
             var forLeds = music && (ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName) || _pinnedAudio);
-            if (forLeds || Volatile.Read(ref _audioCaptureDemand) > 0)
+            if (forLeds || Volatile.Read(ref _audioCaptureDemand) > 0 || _studioAudio)
             {
                 _beats.Start();
             }
@@ -233,12 +233,20 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     /// DRAM over SMBus: publishing through the loop is what makes the black
     /// stick - the same push issued after <c>Stop</c> does not.
     /// </summary>
-    private void BlackoutBeforeRelinquish()
+    private bool BlackoutBeforeRelinquish(IEffect? onlyIf = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         // Not gated on the bridge: the loop-published frame is what blanks the
         // NP50 / Lian Li / Keeb / AW5 writers, which exist without OpenRGB.
-        _engine.SetBlackout(true);
+        // With onlyIf the hold only latches while that effect still runs, so a mode started meanwhile is never held dark.
+        if (onlyIf is null)
+        {
+            _engine.SetBlackout(true);
+        }
+        else if (!_engine.SetBlackoutIfCurrent(onlyIf))
+        {
+            return false;
+        }
         var published = _engine.WaitForBlackout(EnginePublishBudget);
         var publishedMs = sw.ElapsedMilliseconds;
 
@@ -267,6 +275,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         ServiceLog.Info(
             $"[lighting-stop] blackout engine={(published ? "published" : "timeout")}/{publishedMs}ms " +
             $"openrgb={pushed}/{pushedMs}ms settle={(int)settle.TotalMilliseconds}ms total={sw.ElapsedMilliseconds}ms");
+        return true;
     }
 
     /// <summary>
