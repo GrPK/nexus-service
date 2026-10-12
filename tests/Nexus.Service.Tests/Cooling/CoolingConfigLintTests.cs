@@ -67,6 +67,17 @@ public class CoolingConfigLintTests
         AppJsonContext.Default.SetCurvesBody);
 
     [Fact]
+    public void Analyze_CurveWithNullOutputs_DoesNotThrow()
+    {
+        var curves = T1Curves();
+        curves.Add(new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Outputs = null! });
+
+        var hazards = CoolingConfigLint.Analyze(Input(curves));
+
+        Assert.NotNull(hazards);
+    }
+
+    [Fact]
     public void T1Config_SyncChainRootedAtGpuFan_FlagsEveryMotherboardFan()
     {
         var hazards = CoolingConfigLint.Analyze(Input(T1Curves()));

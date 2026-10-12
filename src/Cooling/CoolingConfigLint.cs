@@ -89,7 +89,7 @@ public static class CoolingConfigLint
             {
                 continue;
             }
-            var curve = input.Curves.FirstOrDefault(c => c.Outputs.Any(o => o.Id == ch.Id));
+            var curve = input.Curves.FirstOrDefault(c => Drives(c, ch.Id));
             if (curve is null)
             {
                 var minManual = input.Scope == LintScope.AfterTrip ? AfterTripMinManualPercent : StopPercent;
@@ -107,6 +107,10 @@ public static class CoolingConfigLint
         }
         return result;
     }
+
+    // A persisted curve can carry a null outputs list.
+    private static bool Drives(CurveDocument curve, string channelId) =>
+        curve.Outputs?.Any(o => o.Id == channelId) == true;
 
     private readonly record struct Found(string Kind, string RootId, string RootName);
 
@@ -143,7 +147,7 @@ public static class CoolingConfigLint
         {
             return stoppable;
         }
-        var driver = input.Curves.FirstOrDefault(c => c.Outputs.Any(o => o.Id == sourceId));
+        var driver = input.Curves.FirstOrDefault(c => Drives(c, sourceId));
         if (driver is null)
         {
             return stoppable;
