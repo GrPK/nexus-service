@@ -21,7 +21,9 @@ using Nexus.Service.Models;
 using Nexus.Service.Monitoring.History;
 using Nexus.Service.Platform;
 using Nexus.Service.Sensors;
+#if WINDOWS
 using Nexus.Service.Helper;
+#endif
 
 namespace Nexus.Service.Routes;
 

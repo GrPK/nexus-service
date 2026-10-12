@@ -7,7 +7,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Nexus.Service.Auth;
 using Nexus.Service.Models;
 using Nexus.Service.Platform;
+#if WINDOWS
 using Nexus.Service.Helper;
+#endif
 
 namespace Nexus.Service.Routes;
 

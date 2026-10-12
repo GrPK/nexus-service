@@ -5,6 +5,9 @@ using Nexus.Service.Cooling;
 using Nexus.Service.Devices;
 using Nexus.Service.Discord;
 using Nexus.Service.Fps;
+#if WINDOWS
+using Nexus.Service.Helper;
+#endif
 using Nexus.Service.Lifecycle;
 using Nexus.Service.Lighting;
 using Nexus.Service.Lighting.Engine;
@@ -2291,7 +2294,7 @@ public static class NexusServiceCollectionExtensions
             {
                 notifyOverlay = () =>
                 {
-                    try { _ = Nexus.Service.Helper.Domains.LifecycleCommands.NotifyOverlayPrefsChangedAsync(helperRegistry); }
+                    try { Nexus.Service.Helper.Domains.LifecycleCommands.NotifyOverlayPrefsChangedAsync(helperRegistry).ObserveFaults(); }
                     catch { }
                 };
             }

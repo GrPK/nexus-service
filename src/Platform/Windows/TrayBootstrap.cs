@@ -209,12 +209,12 @@ internal static class TrayBootstrap
         var pairing = app.Services.GetRequiredService<PanelPhonePairingService>();
         pairing.PairRequestNeedsAttention += notice =>
         {
-            try { _ = TrayCommands.PairNoticeAsync(helperRegistry, true, notice.DeviceLabel); }
+            try { TrayCommands.PairNoticeAsync(helperRegistry, true, notice.DeviceLabel).ObserveFaults(); }
             catch (Exception ex) { Console.Error.WriteLine($"[pair-notify] show failed: {ex.Message}"); }
         };
         pairing.PairRequestResolved += () =>
         {
-            try { _ = TrayCommands.PairNoticeAsync(helperRegistry, false, ""); }
+            try { TrayCommands.PairNoticeAsync(helperRegistry, false, "").ObserveFaults(); }
             catch (Exception ex) { Console.Error.WriteLine($"[pair-notify] dismiss failed: {ex.Message}"); }
         };
 
@@ -223,7 +223,7 @@ internal static class TrayBootstrap
         var inbox = app.Services.GetRequiredService<Nexus.Service.Transfer.TransferInbox>();
         inbox.TransferNeedsAttention += notice =>
         {
-            try { _ = TrayCommands.NoticeAsync(helperRegistry, notice.Title, notice.Text, notice.FolderPath); }
+            try { TrayCommands.NoticeAsync(helperRegistry, notice.Title, notice.Text, notice.FolderPath).ObserveFaults(); }
             catch (Exception ex) { Console.Error.WriteLine($"[transfer-notify] show failed: {ex.Message}"); }
         };
 
@@ -231,7 +231,7 @@ internal static class TrayBootstrap
         var diagAlerts = app.Services.GetRequiredService<Nexus.Service.Diagnostics.DiagnosticsAlertService>();
         diagAlerts.AlertNeedsAttention += notice =>
         {
-            try { _ = TrayCommands.NoticeAsync(helperRegistry, notice.Title, notice.Text, null, Nexus.Service.Diagnostics.DiagnosticsAlertService.AlertPath(notice.Kind)); }
+            try { TrayCommands.NoticeAsync(helperRegistry, notice.Title, notice.Text, null, Nexus.Service.Diagnostics.DiagnosticsAlertService.AlertPath(notice.Kind)).ObserveFaults(); }
             catch (Exception ex) { Console.Error.WriteLine($"[diagnostics-notify] show failed: {ex.Message}"); }
         };
 
@@ -260,9 +260,9 @@ internal static class TrayBootstrap
             }
             try
             {
-                _ = TrayCommands.NoticeAsync(
+                TrayCommands.NoticeAsync(
                     helperRegistry, ConflictNoticeTitle, text, null,
-                    windowPath: ConflictSettingsPath, buttonLabel: ConflictNoticeButton);
+                    windowPath: ConflictSettingsPath, buttonLabel: ConflictNoticeButton).ObserveFaults();
             }
             catch (Exception ex) { Console.Error.WriteLine($"[conflict-notify] show failed: {ex.Message}"); }
         }
@@ -315,14 +315,14 @@ internal static class TrayBootstrap
                     if (!detector.IsAppRunning(launched.Id)) continue;
                     try
                     {
-                        _ = ConflictNoticeCommands.LaunchNoticeAsync(helperRegistry, new ConflictLaunchNoticePayload
+                        ConflictNoticeCommands.LaunchNoticeAsync(helperRegistry, new ConflictLaunchNoticePayload
                         {
                             AppId = launched.Id,
                             Title = survived ? ConflictSurvivorTitle(launched) : ConflictLaunchTitle(launched),
                             Text = ConflictLaunchText(launched),
                             EndLabel = ConflictLaunchEndButton,
                             WindowPath = ConflictSettingsPath,
-                        });
+                        }).ObserveFaults();
                     }
                     catch (Exception ex) { Console.Error.WriteLine($"[conflict-notify] launch notice failed: {ex.Message}"); }
                 }
