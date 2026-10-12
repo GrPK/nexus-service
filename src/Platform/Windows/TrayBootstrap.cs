@@ -197,7 +197,7 @@ internal static class TrayBootstrap
         void PushProfiles()
         {
             var m = pm.GetManifest();
-            _ = ProfileCommands.PushListAsync(helperRegistry, m.Profiles, m.ActiveProfileId);
+            ProfileCommands.PushListAsync(helperRegistry, m.Profiles, m.ActiveProfileId).ObserveFaults();
         }
 
         // Surface a native tray balloon when a phone pair request arrives and
@@ -280,7 +280,7 @@ internal static class TrayBootstrap
             try
             {
                 var current = trayStore.Load().Monitoring.ShowWindowsTrayIcon;
-                _ = TrayCommands.SetVisibleAsync(helperRegistry, current);
+                TrayCommands.SetVisibleAsync(helperRegistry, current).ObserveFaults();
             }
             catch (Exception ex) { Console.Error.WriteLine($"[helper-sync] initial state failed: {ex.Message}"); }
 
@@ -439,7 +439,7 @@ internal static class TrayBootstrap
                 var nowVisible = trayStore.Load().Monitoring.ShowWindowsTrayIcon;
                 if (nowVisible == lastVisible) return;
                 lastVisible = nowVisible;
-                _ = TrayCommands.SetVisibleAsync(helperRegistry, nowVisible);
+                TrayCommands.SetVisibleAsync(helperRegistry, nowVisible).ObserveFaults();
             }
             catch (Exception ex) { Console.Error.WriteLine($"[helper-sync] {ex.Message}"); }
         };
@@ -475,7 +475,7 @@ internal static class TrayBootstrap
         {
             var demand = new Nexus.Service.Lighting.LockInputWatchDemand(armed =>
             {
-                _ = Nexus.Service.Helper.Domains.LockLightingCommands.SetLockInputWatchAsync(helperRegistry, armed);
+                Nexus.Service.Helper.Domains.LockLightingCommands.SetLockInputWatchAsync(helperRegistry, armed).ObserveFaults();
             });
             lockBlackout?.LockInputWatch = demand.Consumer(Nexus.Service.Lighting.LockInputWatchConsumer.Blackout);
             deckWorker?.LockInputWatch = demand.Consumer(Nexus.Service.Lighting.LockInputWatchConsumer.StreamDeck);
@@ -497,7 +497,7 @@ internal static class TrayBootstrap
             // orientation state above.
             helperRegistry.Connected += conn =>
             {
-                _ = Nexus.Service.Helper.Domains.LockLightingCommands.SetLockInputWatchAsync(helperRegistry, demand.Armed);
+                Nexus.Service.Helper.Domains.LockLightingCommands.SetLockInputWatchAsync(helperRegistry, demand.Armed).ObserveFaults();
             };
             helperRegistry.InboundEnvelope += (_, env) =>
             {
@@ -572,11 +572,11 @@ internal static class TrayBootstrap
             // delivery can never leave the helper in a superseded one.
             keyReactive.ArmedChanged += armed =>
             {
-                _ = Nexus.Service.Helper.Domains.KeyReactiveCommands.SetKeyWatchAsync(helperRegistry, keyReactive.Armed);
+                Nexus.Service.Helper.Domains.KeyReactiveCommands.SetKeyWatchAsync(helperRegistry, keyReactive.Armed).ObserveFaults();
             };
             helperRegistry.Connected += conn =>
             {
-                _ = Nexus.Service.Helper.Domains.KeyReactiveCommands.SetKeyWatchAsync(helperRegistry, keyReactive.Armed);
+                Nexus.Service.Helper.Domains.KeyReactiveCommands.SetKeyWatchAsync(helperRegistry, keyReactive.Armed).ObserveFaults();
             };
             helperRegistry.InboundEnvelope += (_, env) =>
             {
