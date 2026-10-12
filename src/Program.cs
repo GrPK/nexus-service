@@ -143,22 +143,42 @@ Nexus.Service.Lifecycle.BootTimer.Mark("after URL resolve");
 // Single-instance guard - if another nexus-service is already running,
 // open or focus the dashboard window instead of spawning a second service.
 // When relaunching elevated, retry for up to 10s while the parent shuts down.
-// Skipped under SCM: the service controller already enforces single-instance.
+// The --service instance (Windows SCM, macOS launchd agent) holds it too, so a
+// user-mode launch while it runs hands off instead of starting a second service
+// that fails binding the port or opening the stores the first one holds.
 System.Threading.Mutex? singleInstance = null;
-if (!serviceMode && !testHost)
+if (serviceMode && !testHost && (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()))
+{
+    singleInstance = new System.Threading.Mutex(true, "Global\\NexusServiceMutex", out var ownsMutex);
+    if (!ownsMutex)
+    {
+        singleInstance.Dispose();
+        singleInstance = null;
+    }
+}
+else if (!serviceMode && !testHost)
 {
     bool isFirst;
     var deadline = DateTime.UtcNow.AddSeconds(isRelaunchElevated ? 10 : 0);
     while (true)
     {
-        singleInstance = new System.Threading.Mutex(true, "Global\\NexusServiceMutex", out isFirst);
+        try
+        {
+            singleInstance = new System.Threading.Mutex(true, "Global\\NexusServiceMutex", out isFirst);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The LocalSystem service created it; its default DACL denies a standard user.
+            isFirst = false;
+        }
         if (isFirst) break;
-        singleInstance.Dispose();
+        singleInstance?.Dispose();
         singleInstance = null;
         if (!isRelaunchElevated || DateTime.UtcNow >= deadline)
         {
             Console.WriteLine("[nexus-service] already running, opening dashboard window");
-            OpenExistingServiceWindow(servicePort);
+            if (!suppressStartupWindow)
+                OpenExistingServiceWindow(servicePort);
             return 0;
         }
         System.Threading.Thread.Sleep(150);
