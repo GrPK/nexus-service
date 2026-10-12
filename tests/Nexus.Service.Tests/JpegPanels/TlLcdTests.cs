@@ -216,6 +216,32 @@ public class TlLcdTests
         Assert.False(panels.AnyAttached);
     }
 
+    [Theory]
+    [InlineData(20, true)]
+    [InlineData(0, false)]
+    public void A_quiet_renderer_gets_its_last_frame_resent_only_when_the_model_asks(int keepaliveMs, bool resent)
+    {
+        var device = new ScriptedTlLcd();
+        var hub = new JpegPanelHub(JpegPanelModel.TlLcd with { Handshake = new TlLcdHandshake(), KeepaliveMs = keepaliveMs });
+        Assert.True(hub.Attach(device));
+        using var transport = new Nexus.Service.Panel.Streams.JpegPanelStreamTransport(hub, "screen");
+        transport.Open();
+
+        transport.Write(new byte[400 * 400 * 4]);
+        int afterFirstFrame = device.Writes.Count;
+
+        // Generous for the resend (a thread-pool timer on a busy box), short for the absence.
+        bool more = System.Threading.SpinWait.SpinUntil(() => device.Writes.Count > afterFirstFrame, resent ? 5000 : 300);
+        // Detach waits out an in-flight resend under the hub lock, so the list is stable after it.
+        transport.Dispose();
+        hub.Detach();
+        Assert.Equal(resent, more);
+        if (resent)
+        {
+            Assert.All(device.Writes.Skip(afterFirstFrame), w => Assert.Equal(TlLcdHandshake.CmdSyncJpeg, w[1]));
+        }
+    }
+
     private static byte[] SerialPayload(string serial, int port, int index)
     {
         var data = new byte[34];

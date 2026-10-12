@@ -22,7 +22,7 @@ public sealed class TlLcdPanelDiscovery : IStreamedPanelDiscovery
             .Select(s => new StreamedPanelDeviceInfo
             {
                 Serial = s.Key,
-                Profile = JpegPanelDiscovery.ProfileFor(s.Hub.Model, s.DisplayName),
+                Profile = JpegPanelDiscovery.ProfileFor(s.Hub.Model, s.DisplayName) with { MultiInstance = true },
             })
             .ToArray();
 

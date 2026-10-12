@@ -237,6 +237,73 @@ public sealed class StreamedPanelCoordinatorTests : IDisposable
         Assert.Null(_registry.Get(Assert.Single(coordinator.GetAssignments().Assignments).PanelDeviceId)!.Layout);
     }
 
+    private static StreamedPanelDeviceInfo FanScreen(string serial, bool multiInstance = true) => new()
+    {
+        Serial = serial,
+        Profile = new StreamedPanelProfile
+        {
+            Kind = "fan-lcd", DisplayName = serial, Surface = PanelSurfaces.LcdRound, CssWidth = 400, CssHeight = 400,
+            MultiInstance = multiInstance,
+        },
+    };
+
+    [Fact]
+    public void Screens_of_one_multi_screen_device_each_get_their_own_record()
+    {
+        _discovery.Devices.AddRange(new[] { FanScreen("a"), FanScreen("b"), FanScreen("c") });
+        var coordinator = Coordinator();
+
+        coordinator.TickOnce();
+
+        var ids = coordinator.GetAssignments().Assignments.Select(a => a.PanelDeviceId).ToArray();
+        Assert.Equal(3, ids.Distinct().Count());
+    }
+
+    [Fact]
+    public void Screens_left_sharing_one_stored_record_are_split_with_the_first_keeping_it()
+    {
+        var shared = _registry.Allocate("shared", new PanelDeviceCapabilities { Surface = PanelSurfaces.LcdRound });
+        _store.Save(new Dictionary<string, StreamedPanelRecord>(StringComparer.Ordinal)
+        {
+            ["a"] = new() { PanelDeviceId = shared.Id },
+            ["b"] = new() { PanelDeviceId = shared.Id },
+        });
+        _discovery.Devices.AddRange(new[] { FanScreen("a"), FanScreen("b") });
+        var coordinator = Coordinator();
+
+        coordinator.TickOnce();
+
+        var records = _store.Load();
+        Assert.Equal(shared.Id, records["a"].PanelDeviceId);
+        Assert.NotEqual(shared.Id, records["b"].PanelDeviceId);
+    }
+
+    [Fact]
+    public void Another_cooler_on_the_same_surface_never_takes_a_multi_screen_record()
+    {
+        _discovery.Devices.Add(FanScreen("a"));
+        var coordinator = Coordinator();
+        coordinator.TickOnce();
+        var screen = Assert.Single(coordinator.GetAssignments().Assignments).PanelDeviceId;
+
+        _discovery.Devices.Add(FanScreen("cooler", multiInstance: false));
+        coordinator.TickOnce();
+
+        Assert.NotEqual(screen, _store.Load()["cooler"].PanelDeviceId);
+        Assert.True(_store.Load()["a"].MultiInstance);
+    }
+
+    [Fact]
+    public void Single_screen_cooler_lcds_still_share_the_surface_record()
+    {
+        _discovery.Devices.AddRange(new[] { FanScreen("a", multiInstance: false), FanScreen("b", multiInstance: false) });
+        var coordinator = Coordinator();
+
+        coordinator.TickOnce();
+
+        Assert.Single(coordinator.GetAssignments().Assignments.Select(a => a.PanelDeviceId).Distinct());
+    }
+
     [Fact]
     public void Attach_mints_session_and_publishes_assignment()
     {

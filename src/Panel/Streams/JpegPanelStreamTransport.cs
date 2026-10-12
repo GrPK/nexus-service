@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using Nexus.Service.Peripherals.JpegPanels;
 using Nexus.Service.Peripherals.PixelFormats;
 using Nexus.Service.Platform;
@@ -38,6 +39,13 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
     private readonly object _brightnessLock = new();
 
     private readonly byte[] _turned;
+
+    // Held across every send, so a keepalive never interleaves with a fresh frame.
+    private readonly object _sendLock = new();
+    private byte[] _lastJpeg = Array.Empty<byte>();
+    private int _lastJpegLength;
+    private long _lastSentMs;
+    private Timer? _keepalive;
 
     public JpegPanelStreamTransport(JpegPanelHub hub, string serial)
     {
@@ -132,6 +140,11 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
             throw new IOException($"{_hub.Model.Name} not connected");
         }
         _filled = 0;
+        int keepaliveMs = _hub.Model.KeepaliveMs;
+        if (keepaliveMs > 0 && _keepalive is null)
+        {
+            _keepalive = new Timer(_ => Keepalive(keepaliveMs), null, keepaliveMs, keepaliveMs);
+        }
     }
 
     /// <summary>The panel has no player to start; the first pushed frame is the start.</summary>
@@ -187,7 +200,22 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
             return;
         }
 
-        if (_hub.SendFrame(jpeg))
+        bool sent;
+        lock (_sendLock)
+        {
+            if (_hub.Model.KeepaliveMs > 0)
+            {
+                if (_lastJpeg.Length < jpeg.Length)
+                {
+                    _lastJpeg = new byte[jpeg.Length];
+                }
+                jpeg.CopyTo(_lastJpeg);
+                _lastJpegLength = jpeg.Length;
+            }
+            sent = _hub.SendFrame(jpeg);
+            _lastSentMs = Environment.TickCount64;
+        }
+        if (sent)
         {
             _dropLogged = false;
         }
@@ -198,6 +226,28 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
         }
     }
 
+    /// <summary>Re-sends the last frame while the renderer is quiet; skips a tick a send already holds.</summary>
+    private void Keepalive(int keepaliveMs)
+    {
+        if (_disposed || !Monitor.TryEnter(_sendLock))
+        {
+            return;
+        }
+        try
+        {
+            if (_lastJpegLength == 0 || Environment.TickCount64 - _lastSentMs < keepaliveMs)
+            {
+                return;
+            }
+            _hub.SendFrame(_lastJpeg.AsSpan(0, _lastJpegLength));
+            _lastSentMs = Environment.TickCount64;
+        }
+        finally
+        {
+            Monitor.Exit(_sendLock);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -205,6 +255,8 @@ public sealed class JpegPanelStreamTransport : IStreamedPanelTransport, IOrienta
             return;
         }
         _disposed = true;
+        _keepalive?.Dispose();
+        _keepalive = null;
         _encoder.Dispose();
     }
 }
