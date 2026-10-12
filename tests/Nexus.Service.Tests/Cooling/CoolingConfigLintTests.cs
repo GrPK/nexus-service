@@ -67,10 +67,11 @@ public class CoolingConfigLintTests
         AppJsonContext.Default.SetCurvesBody);
 
     [Fact]
-    public void Analyze_CurveWithNullOutputs_DoesNotThrow()
+    public void Analyze_NullCurveEntryAndNullOutputs_DoesNotThrow()
     {
         var curves = T1Curves();
-        curves.Add(new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Outputs = null! });
+        curves.Insert(0, new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Outputs = null! });
+        curves.Insert(0, null!);
 
         var hazards = CoolingConfigLint.Analyze(Input(curves));
 

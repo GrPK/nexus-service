@@ -108,9 +108,9 @@ public static class CoolingConfigLint
         return result;
     }
 
-    // A persisted curve can carry a null outputs list.
-    private static bool Drives(CurveDocument curve, string channelId) =>
-        curve.Outputs?.Any(o => o.Id == channelId) == true;
+    // A persisted curves list can hold a null entry, and a curve a null outputs list.
+    private static bool Drives(CurveDocument? curve, string channelId) =>
+        curve?.Outputs?.Any(o => o?.Id == channelId) == true;
 
     private readonly record struct Found(string Kind, string RootId, string RootName);
 
