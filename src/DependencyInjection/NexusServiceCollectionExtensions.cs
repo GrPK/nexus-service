@@ -938,13 +938,19 @@ public static class NexusServiceCollectionExtensions
             // App icons come from the user-session helper; keys painted and
             // Deck widget icons fetched before it connects carry the generic
             // fallback until this repaint and the "icons" refetch.
+            // Connected raises before the pipe's read loop starts, so the
+            // repaint's blocking icon round trips run on the pool.
             var helperRegistry = sp.GetService<Nexus.Service.Helper.HelperRegistry>();
             var deckHub = sp.GetRequiredService<Nexus.Service.Sockets.MultiplexHub>();
-            helperRegistry?.Connected += _ =>
+            helperRegistry?.Connected += conn => _ = Task.Run(() =>
             {
-                worker.OnHelperConnected();
-                Nexus.Service.Sockets.PanelTopics.BroadcastDeck(deckHub, new Nexus.Service.Models.Deck.DeckChangedFrame { Kind = "icons" });
-            };
+                try
+                {
+                    worker.OnHelperConnected();
+                    Nexus.Service.Sockets.PanelTopics.BroadcastDeck(deckHub, new Nexus.Service.Models.Deck.DeckChangedFrame { Kind = "icons" });
+                }
+                catch (Exception ex) { ServiceLog.Warn($"[streamdeck] helper-connect repaint failed: {ex.Message}"); }
+            });
 #endif
             return worker;
         });
