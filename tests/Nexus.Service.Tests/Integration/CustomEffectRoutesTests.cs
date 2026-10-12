@@ -407,4 +407,28 @@ public sealed class CustomEffectRoutesTests : IClassFixture<CustomEffectAppFacto
         Assert.True((await Read(res)).GetProperty("error").GetBoolean());
         Assert.Equal(HttpStatusCode.NotFound, (await Desktop().GetAsync("/lighting/shaders/custom:" + id)).StatusCode);
     }
+
+    private static StringContent DownloadedBody(bool? downloaded) =>
+        new(JsonSerializer.Serialize(new { name = "Dl", recipe = "", frag = CustomFrags.Frag(), downloaded }), Encoding.UTF8, "application/json");
+
+    [Fact]
+    public async Task Downloaded_flag_sets_persists_across_a_put_without_it_and_clears_on_false()
+    {
+        var http = Desktop();
+        var id = CustomFrags.NewId();
+
+        var fresh = await Read(await http.PutAsync(Url(id), Body("Plain", "", CustomFrags.Frag())));
+        Assert.False(fresh.TryGetProperty("downloaded", out var unset) && unset.ValueKind != JsonValueKind.Null);
+
+        var set = await Read(await http.PutAsync(Url(id), DownloadedBody(true)));
+        Assert.True(set.GetProperty("downloaded").GetBoolean());
+
+        await http.PutAsync(Url(id), Body("Resaved", "", CustomFrags.Frag()));
+        var list = await Read(await http.GetAsync("/lighting/custom-effects"));
+        var kept = list.EnumerateArray().First(e => e.GetProperty("id").GetString() == id);
+        Assert.True(kept.GetProperty("downloaded").GetBoolean());
+
+        var cleared = await Read(await http.PutAsync(Url(id), DownloadedBody(false)));
+        Assert.False(cleared.GetProperty("downloaded").GetBoolean());
+    }
 }

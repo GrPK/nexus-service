@@ -24,6 +24,9 @@ public sealed class CustomEffectEntry
 
     /// <summary>Account username of that listing's author.</summary>
     public string? MarketAuthor { get; set; }
+
+    /// <summary>True when this effect came from a Marketplace download; null on rows saved before the flag existed.</summary>
+    public bool? Downloaded { get; set; }
 }
 
 public sealed class CustomEffectsDoc
@@ -489,7 +492,7 @@ public sealed class CustomEffectStore
 
     /// <summary>Insert or replace. Returns the saved entry, or an error message when the entry cap rejects a new id.</summary>
     /// <remarks>A null <paramref name="marketId"/> or <paramref name="marketAuthor"/> keeps the stored value, so a Studio re-save does not drop the link.</remarks>
-    public (CustomEffectEntry? Entry, string? Error) Put(string id, string name, string recipe, string frag, string? marketId = null, string? marketAuthor = null)
+    public (CustomEffectEntry? Entry, string? Error) Put(string id, string name, string recipe, string frag, string? marketId = null, string? marketAuthor = null, bool? downloaded = null)
     {
         CustomEffectEntry saved;
         // Outside the lock, so a Recovered handler never runs under it.
@@ -515,6 +518,7 @@ public sealed class CustomEffectStore
                 UpdatedAt = Math.Max(_clock(), next.Count == 0 ? 0 : next.Max(x => x.UpdatedAt) + 1),
                 MarketId = marketId ?? (idx < 0 ? null : next[idx].MarketId),
                 MarketAuthor = marketAuthor ?? (idx < 0 ? null : next[idx].MarketAuthor),
+                Downloaded = downloaded ?? (idx < 0 ? null : next[idx].Downloaded),
             };
             if (idx < 0)
             {
@@ -644,5 +648,6 @@ public sealed class CustomEffectStore
         UpdatedAt = e.UpdatedAt,
         MarketId = e.MarketId,
         MarketAuthor = e.MarketAuthor,
+        Downloaded = e.Downloaded,
     };
 }

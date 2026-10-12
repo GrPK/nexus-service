@@ -421,6 +421,7 @@ public static class LightingRoutes
         Audio = ShaderLibrary.ReadsAudio(e.Frag),
         MarketId = e.MarketId,
         MarketAuthor = e.MarketAuthor,
+        Downloaded = e.Downloaded,
     };
 
     private static IResult CustomEffectError(string message) =>
@@ -458,7 +459,7 @@ public static class LightingRoutes
             {
                 return CustomEffectError(compileError);
             }
-            var (entry, error) = custom.Put(id, body.Name!, body.Recipe ?? "", body.Frag!, body.MarketId, body.MarketAuthor);
+            var (entry, error) = custom.Put(id, body.Name!, body.Recipe ?? "", body.Frag!, body.MarketId, body.MarketAuthor, body.Downloaded);
             if (entry is null)
             {
                 return CustomEffectError(error ?? "rejected");

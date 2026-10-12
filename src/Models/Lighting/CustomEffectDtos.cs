@@ -10,6 +10,7 @@ public sealed class CustomEffectResponse
     public bool Audio { get; set; }
     public string? MarketId { get; set; }
     public string? MarketAuthor { get; set; }
+    public bool? Downloaded { get; set; }
 }
 
 /// <summary>PUT body for /lighting/custom-effects/{id}.</summary>
@@ -20,4 +21,5 @@ public sealed class CustomEffectPutBody
     public string? Frag { get; set; }
     public string? MarketId { get; set; }
     public string? MarketAuthor { get; set; }
+    public bool? Downloaded { get; set; }
 }
