@@ -7,6 +7,7 @@ uniform float u_bSpan;  // hint_range(0.0, 1.0, 0.01) = 0.0  share of the wheel 
 uniform float u_bSat;   // hint_range(0.0, 1.0, 0.01) = 1.0
 uniform float u_bVal;   // hint_range(0.0, 1.0, 0.01) = 0.0
 uniform float u_softness; // hint_range(0.0, 0.5, 0.01) = 0.12  width of the fill's leading edge
+uniform float u_arms;     // hint_range(1.0, 6.0, 1.0) = 1.0  hands sweeping at once, evenly spaced
 
 // Hue of a color's nth turn: even steps through its range, both ends
 // included, wrapping back to the start. The full wheel steps on from the hue.
@@ -30,22 +31,22 @@ vec3 passColor(float n) {
         : hsv2rgb(vec3(turnHue(u_bHue, u_bSpan, m), u_bSat, u_bVal));
 }
 
-// A fill grows from the center outward: each pass paints the next color over
-// the last. A negative speed runs time backwards, so the fill shrinks inward.
+// A fill sweeps around like a clock hand from 12 o'clock: each pass paints the next
+// color over the last. A negative speed runs time backwards, so the fill unwinds.
 void main() {
     float ar = u_resolution.x / u_resolution.y;
     vec2 p = uv01() - 0.5;
     p.x *= ar;
-    // Radius as a share of the distance to the frame's corner, so a pass
-    // reaches every corner of any aspect ratio at the same moment.
-    float x = length(p) / length(vec2(ar, 1.0) * 0.5);
+    // Clockwise turn from 12 o'clock, 0..1 (uv01 grows downward), repeated once per hand.
+    float arms = max(1.0, floor(u_arms + 0.5));
+    float x = fract(fract(atan(p.x, -p.y) / 6.2831853 + 1.0) * arms);
     // The half-pass offset puts speed 0 mid-fill, so a frozen frame (Static
     // mode) shows both colors.
     float ph = u_time * u_speed * 0.25 + 0.5;
     float n = floor(ph);
     // A zero-width edge would make smoothstep undefined (edge0 == edge1).
     float w = max(u_softness, 0.001);
-    // The edge runs past the corner (x = 1) by its own width, so a pass has
+    // The edge runs past a full turn (x = 1) by its own width, so a pass has
     // fully covered the frame before the next color takes over.
     float e = fract(ph) * (1.0 + w);
     float s = 1.0 - smoothstep(e - w, e, x);
