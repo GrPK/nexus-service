@@ -1186,6 +1186,22 @@ public static class NexusServiceCollectionExtensions
             }
         }
 
+        // The wired TL LCD puts one HID device per fan screen on the bus, so one worker holds
+        // a hub per screen and one discovery reports them all.
+        var tlLcdPanels = new Nexus.Service.Peripherals.JpegPanels.TlLcdPanels();
+        services.AddSingleton(tlLcdPanels);
+        services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(sp =>
+            new Nexus.Service.Peripherals.JpegPanels.TlLcdConnectionWorker(
+                sp.GetRequiredService<Nexus.Service.Peripherals.Hid.IHidEnumerator>(),
+                tlLcdPanels,
+                sp.GetRequiredService<Nexus.Service.Devices.DeviceControlGate>(),
+                sp.GetRequiredService<Nexus.Service.Devices.Detection.HardwarePresence>()));
+        services.AddSingleton<Nexus.Service.Panel.Streams.IStreamedPanelDiscovery>(
+            _ => new Nexus.Service.Panel.Streams.TlLcdPanelDiscovery(tlLcdPanels));
+        services.AddSingleton<IDeviceHandler>(
+            _ => new Nexus.Service.Devices.Handlers.JpegPanelHandler(
+                Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.TlLcd, () => tlLcdPanels.AnyAttached));
+
         // Bulk-pipe cooler LCDs (ASUS Ryujin, Thermalright, Lian Li Universal Screen 8.8, ZMatrices,
         // Lian Li HydroShift II). Their pixels ride a USB bulk endpoint rather than HID, so they
         // are reachable only where Windows has bound WinUSB; off Windows the factory is a null

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Nexus.Service.Peripherals.JpegPanels;
@@ -14,18 +15,26 @@ namespace Nexus.Service.Devices.Handlers;
 /// </summary>
 public sealed class JpegPanelHandler : IDeviceHandler
 {
-    private readonly JpegPanelHub _hub;
+    private readonly JpegPanelModel _model;
+    private readonly Func<bool> _attached;
 
     public JpegPanelHandler(JpegPanelHub hub)
+        : this(hub.Model, () => hub.IsConnected)
     {
-        _hub = hub;
-        Identifiers = hub.Model.ProductIds
-            .Select(pid => new UsbId(hub.Model.VendorId, pid))
+    }
+
+    /// <summary>One row for a model whose screens attach as several hubs, connected while any is.</summary>
+    public JpegPanelHandler(JpegPanelModel model, Func<bool> attached)
+    {
+        _model = model;
+        _attached = attached;
+        Identifiers = model.ProductIds
+            .Select(pid => new UsbId(model.VendorId, pid))
             .ToArray();
     }
 
-    public string Id => _hub.Model.HandlerId;
-    public string Name => _hub.Model.Name;
+    public string Id => _model.HandlerId;
+    public string Name => _model.Name;
     public string Category => "cooler";
     public bool HasPage => false;
 
@@ -33,11 +42,11 @@ public sealed class JpegPanelHandler : IDeviceHandler
 
     public bool IsConnected(IReadOnlyList<UsbDeviceEntry> detectedDevices)
     {
-        if (_hub.IsConnected)
+        if (_attached())
         {
             return true;
         }
-        var model = _hub.Model;
+        var model = _model;
         return detectedDevices.Any(d =>
             d.VendorId == model.VendorId && model.ProductIds.Contains(d.ProductId));
     }

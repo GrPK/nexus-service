@@ -108,11 +108,11 @@ public class NexusServiceCollectionExtensionsTests
         // NP50, SmartHub, LianLi (one per hub slot), LianLiWireless, LianLiTl, Galahad2, CorsairLink,
         // CorsairLinkLcd, Strimer, Nollie, Tryx, StreamDeck, Kraken, SmbusDram (the chipset
         // bus as a device), plus one JpegPanelHandler per JpegPanelModel (Galahad II LCD,
-        // Corsair XC7, Corsair Elite Capellix, ID-Cooling FX-LCD).
+        // Corsair XC7, Corsair Elite Capellix, ID-Cooling FX-LCD), one for the wired TL LCD model,
         // ... plus one BulkPanelHandler per bulk-pipe driver (Thermalright, Ryujin, Screen 8.8,
         // ZMatrices, HydroShift II, HydroShift II OLED Curved).
         Assert.Equal(
-            21 + Nexus.Service.Peripherals.LianLi.LianLiHubSet.Capacity + Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.All.Length + 6,
+            22 + Nexus.Service.Peripherals.LianLi.LianLiHubSet.Capacity + Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.All.Length + 6,
             handlers.Length);
     }
 
