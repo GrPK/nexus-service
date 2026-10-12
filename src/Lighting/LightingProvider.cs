@@ -770,6 +770,8 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     public void ReloadCustomEffect(string key)
     {
         ClearThumbnails(key);
+        // Devices pinned to it rebuild from the new source.
+        RefreshPinnedLooks();
         // A lost swap means another thread changed the effect after we read it (often a
         // concurrent PUT of the same id). Re-read until our swap lands or the running effect
         // is no longer this key, so the engine never keeps older source than the store.
@@ -810,6 +812,15 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         {
             s.Lighting.Animate.States.Remove(key);
             s.Lighting.Animate.Templates.Remove(key);
+            // Devices pinned to the deleted effect are unpinned rather than left on a look that cannot render.
+            foreach (var (deviceId, pin) in s.Lighting.DevicePins.ToArray())
+            {
+                if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate
+                    && string.Equals(pin.Effect, key, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    s.Lighting.DevicePins.Remove(deviceId);
+                }
+            }
             // Not running (static mode, stopped): the next animate start must not run rainbow under the dead name.
             if (string.Equals(s.Lighting.Animate.Effect, key, System.StringComparison.OrdinalIgnoreCase))
             {
@@ -937,6 +948,14 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
                         ? persisted
                         : new Nexus.Service.Persistence.AnimateEffectState();
                 }
+                if (slot is null && ShaderLibrary.IsCustomKey(key))
+                {
+                    // A custom effect with no saved preset runs as a fresh start of it does: its last
+                    // activation state, else the install defaults.
+                    slot = s.Lighting.Animate.States.TryGetValue(key, out var customState) && customState is not null
+                        ? customState
+                        : new Nexus.Service.Persistence.AnimateEffectState();
+                }
                 if (slot is null)
                 {
                     continue;
@@ -953,7 +972,13 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
                         ? new()
                         : new System.Collections.Generic.Dictionary<string, float>(slot.Params),
                 };
-                next[key] = new PinnedLook(copy, HashSlot(copy));
+                // A custom effect's source can change under the same look, so the tag carries it.
+                var tag = HashSlot(copy);
+                if (ShaderLibrary.IsCustomKey(key) && ShaderLibrary.IsKnownKey(key))
+                {
+                    tag += "|" + ShaderLibrary.SourceTag(key);
+                }
+                next[key] = new PinnedLook(copy, tag);
             }
         });
         var audio = false;
@@ -1077,7 +1102,8 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         var extras = look.Params is { Count: > 0 }
             ? new System.Collections.Generic.Dictionary<string, float>(look.Params)
             : null;
-        if (existing is ShaderEffect cur && cur.Name == effect)
+        // A custom effect is rebuilt on any change: its source may be what changed.
+        if (existing is ShaderEffect cur && cur.Name == effect && !ShaderLibrary.IsCustomKey(effect))
         {
             cur.Speed = effect == "pulse" ? speed * 0.5f : speed;
             cur.Intensity = intensity;
