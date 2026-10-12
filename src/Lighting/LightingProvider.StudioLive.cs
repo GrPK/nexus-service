@@ -57,10 +57,10 @@ public sealed partial class LightingProvider
         public required ShaderEffect Live { get; set; }
         public required string Frag { get; set; }
         public IEffect? PrevEffect { get; set; }
-        public required bool PrevPaused { get; init; }
-        public required bool PrevFrozen { get; init; }
-        public required bool PrevFullFrame { get; init; }
-        public required bool PrevStaticEnabled { get; init; }
+        public required bool PrevPaused { get; set; }
+        public required bool PrevFrozen { get; set; }
+        public required bool PrevFullFrame { get; set; }
+        public required bool PrevStaticEnabled { get; set; }
         public required bool RgbWasActive { get; init; }
         public required string ReportedSync { get; init; }
         public required string PersistedSync { get; init; }
@@ -182,12 +182,15 @@ public sealed partial class LightingProvider
         };
         // Published before the engine changes, so a change another client lands right after ours is seen as a conflict.
         _studio = started;
+        StudioSession? adoptedAway = null;
+        BeforeStudioStartSwap?.Invoke();
         t_studioChanging = true;
         try
         {
             EnsureRgbActive();
             _engine.FullFrameSampling = true;
             var replaced = _engine.SetEffect(live, disposePrevious: false);
+            var replacedPending = adopt is not null && ReferenceEquals(replaced, adopt.Live);
             if (replaced is ShaderEffect { Name: StudioLiveKey })
             {
                 // The replaced preview is never the lighting to restore.
@@ -196,11 +199,31 @@ public sealed partial class LightingProvider
                 catch { }
                 replaced = null;
             }
-            started.PrevEffect = adopt is not null ? adopt.PrevEffect : replaced;
+            if (replacedPending)
+            {
+                started.PrevEffect = adopt!.PrevEffect;
+            }
+            else
+            {
+                started.PrevEffect = replaced;
+                if (adopt is not null)
+                {
+                    // Another client started an effect after the pending one was found: it wins and the pending snapshot is released.
+                    started.PrevPaused = false;
+                    started.PrevFrozen = replaced is ShaderEffect { Name: var frozenName } && StaticEffectCatalog.Contains(frozenName);
+                    started.PrevFullFrame = replaced is ShaderEffect { Name: var sweepName } && ShaderLibrary.IsSweepEffect(sweepName);
+                    started.PrevStaticEnabled = started.PrevFrozen;
+                    adoptedAway = adopt;
+                }
+            }
         }
         finally
         {
             t_studioChanging = false;
+        }
+        if (adoptedAway is not null)
+        {
+            FinishStudio(adoptedAway, StudioEnd.Abandon);
         }
         _studioTimer ??= new Timer(_ => CheckStudioLease(), null, 1000, 1000);
         return new StudioLiveResult(StudioLiveOutcome.Ok, "Ok", started.Id);
@@ -428,7 +451,8 @@ public sealed partial class LightingProvider
 
     private StudioSession? _studioHandoff;
 
-    // Test seams around the queued restore.
+    // Test seams: just before a start swaps the engine, and around the queued restore.
+    internal Action? BeforeStudioStartSwap;
     internal Action? BeforeStudioDeferredRestore;
     internal Action? StudioDeferredRestoreDone;
 

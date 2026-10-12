@@ -860,4 +860,66 @@ public sealed class StudioLiveTests : IDisposable
         _provider.StopStudioLive();
         Assert.Equal(before, SettingsJson());
     }
+
+    [Fact]
+    public void A_client_effect_that_lands_while_a_start_adopts_a_pending_snapshot_wins_and_is_not_leaked()
+    {
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
+        _provider.StartStudioLive(Body());
+        _provider.DetachStudioLive();
+        var other = new FakeEffect("other");
+        _provider.BeforeStudioStartSwap = () =>
+        {
+            // From another thread, as a real client would; its change handler waits for the lock this start holds.
+            _ = Task.Run(() => _engine.SetEffect(other));
+            WaitFor(() => ReferenceEquals(_engine.CurrentEffect, other));
+        };
+
+        Assert.True(_provider.StartStudioLive(Body(CustomFrags.Frag(0.9f))).Ok);
+        _provider.BeforeStudioStartSwap = null;
+
+        Assert.True(prior.Disposed);
+        Assert.False(other.Disposed);
+        Assert.True(_provider.StudioLiveActive);
+        _provider.StopStudioLive();
+        Assert.Same(other, _engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void A_background_load_of_an_inactive_profile_does_not_settle_someone_elses_handoff()
+    {
+        var pm = new ProfileManager(_config);
+        pm.Initialize();
+        pm.CreateProfile("Active");
+        pm.ProfileLoading += _provider.DetachStudioLive;
+        pm.ProfileLoadSettled += _provider.FinishStudioLiveHandoff;
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
+        _provider.StartStudioLive(Body());
+        _provider.DetachStudioLive();
+
+        pm.ImportProfile("Pulled", new NexusSettings());
+        pm.SwitchProfile(pm.GetManifest().ActiveProfileId);
+
+        Assert.False(prior.Disposed);
+        Assert.Equal(LightingProvider.StudioLiveKey, _engine.CurrentEffectName);
+        _provider.FinishStudioLiveHandoff();
+        Assert.Same(prior, _engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void A_throwing_settle_handler_does_not_replace_the_calls_own_exception()
+    {
+        var pm = new ProfileManager(_config);
+        pm.Initialize();
+        pm.CreateProfile("Other");
+        var first = pm.GetManifest().Profiles[0].Id;
+        pm.ProfileLoadSettled += () => throw new ApplicationException("settle failed");
+        pm.OnProfileSwitched += () => throw new InvalidOperationException("original");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => pm.SwitchProfile(first));
+
+        Assert.Equal("original", ex.Message);
+    }
 }

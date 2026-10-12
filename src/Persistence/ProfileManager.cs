@@ -211,6 +211,7 @@ public sealed partial class ProfileManager : IDisposable
 
     public void DeleteProfile(string profileId)
     {
+        EnterLoadScope();
         try
         {
             bool switched;
@@ -269,12 +270,13 @@ public sealed partial class ProfileManager : IDisposable
         }
         finally
         {
-            ProfileLoadSettled?.Invoke();
+            LeaveLoadScope();
         }
     }
 
     public void SwitchProfile(string profileId)
     {
+        EnterLoadScope();
         try
         {
             lock (_lock)
@@ -301,7 +303,7 @@ public sealed partial class ProfileManager : IDisposable
         }
         finally
         {
-            ProfileLoadSettled?.Invoke();
+            LeaveLoadScope();
         }
     }
 
@@ -399,6 +401,7 @@ public sealed partial class ProfileManager : IDisposable
     /// </summary>
     internal ProfileEntry ImportProfileWithId(string id, string name, NexusSettings data)
     {
+        EnterLoadScope();
         try
         {
             var trimmedName = string.IsNullOrWhiteSpace(name) ? "Imported" : name.Trim();
@@ -453,7 +456,7 @@ public sealed partial class ProfileManager : IDisposable
         }
         finally
         {
-            ProfileLoadSettled?.Invoke();
+            LeaveLoadScope();
         }
     }
 
@@ -502,6 +505,7 @@ public sealed partial class ProfileManager : IDisposable
     /// </summary>
     internal void ReplaceLibrary(IReadOnlyList<(string Id, string Name, NexusSettings Data)> profiles)
     {
+        EnterLoadScope();
         try
         {
             string activeAfter;
@@ -583,12 +587,13 @@ public sealed partial class ProfileManager : IDisposable
         }
         finally
         {
-            ProfileLoadSettled?.Invoke();
+            LeaveLoadScope();
         }
     }
 
     public ProfileEntry ImportProfile(string name, NexusSettings data, bool replaceExisting = false)
     {
+        EnterLoadScope();
         try
         {
             bool reactivate = false;
@@ -664,7 +669,7 @@ public sealed partial class ProfileManager : IDisposable
         }
         finally
         {
-            ProfileLoadSettled?.Invoke();
+            LeaveLoadScope();
         }
     }
 
@@ -878,8 +883,29 @@ public sealed partial class ProfileManager : IDisposable
     /// <summary>Raised, outside the profile lock, when a public call that may have loaded a profile returns or throws. Pairs with <see cref="ProfileLoading"/>.</summary>
     public event Action? ProfileLoadSettled;
 
+    // Per thread: the outermost public call that actually loaded a profile settles; calls that loaded nothing (a same-id switch, an inactive profile, a background pull) never consume someone else's handoff.
+    [ThreadStatic]
+    private static int t_loadDepth;
+    [ThreadStatic]
+    private static bool t_loadedProfile;
+
+    private static void EnterLoadScope() => t_loadDepth++;
+
+    private void LeaveLoadScope()
+    {
+        if (--t_loadDepth > 0 || !t_loadedProfile)
+        {
+            return;
+        }
+        t_loadedProfile = false;
+        try
+        { ProfileLoadSettled?.Invoke(); }
+        catch (Exception ex) { Console.Error.WriteLine($"[profiles] settled handler failed: {ex.Message}"); }
+    }
+
     private void LoadProfileIntoSettings(string profileId)
     {
+        t_loadedProfile = true;
         try
         { ProfileLoading?.Invoke(); }
         catch (Exception ex) { Console.Error.WriteLine($"[profiles] loading handler failed: {ex.Message}"); }
