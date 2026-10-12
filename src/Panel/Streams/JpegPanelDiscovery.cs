@@ -36,28 +36,26 @@ public sealed class JpegPanelDiscovery : IStreamedPanelDiscovery
             new StreamedPanelDeviceInfo
             {
                 Serial = _hub.Serial ?? model.HandlerId,
-                Profile = ProfileFor(model, model.Name),
+                Profile = new StreamedPanelProfile
+                {
+                    // Per-serial overrides key off this, so it carries the model rather than
+                    // the family: changing one model's profile must not reset another's.
+                    Kind = model.HandlerId,
+                    DisplayName = model.Name,
+                    Surface = model.Surface,
+                    // Two models share each cooler-LCD surface, so the sidebar brands from
+                    // this rather than the surface name.
+                    Family = model.HandlerId,
+                    SupportsBrightness = model.SupportsBrightness,
+                    CssWidth = model.Width,
+                    CssHeight = model.Height,
+                    Dpr = 1.0,
+                    Fps = model.Fps,
+                    Codec = StreamCodec.RawBgra,
+                },
             },
         };
     }
-
-    internal static StreamedPanelProfile ProfileFor(JpegPanelModel model, string displayName) => new()
-    {
-        // Per-serial overrides key off this, so it carries the model rather than
-        // the family: changing one model's profile must not reset another's.
-        Kind = model.HandlerId,
-        DisplayName = displayName,
-        Surface = model.Surface,
-        // Two models share each cooler-LCD surface, so the sidebar brands from
-        // this rather than the surface name.
-        Family = model.HandlerId,
-        SupportsBrightness = model.SupportsBrightness,
-        CssWidth = model.Width,
-        CssHeight = model.Height,
-        Dpr = 1.0,
-        Fps = model.Fps,
-        Codec = StreamCodec.RawBgra,
-    };
 
     public IStreamedPanelTransport CreateTransport(StreamedPanelDeviceInfo info) =>
         new JpegPanelStreamTransport(_hub, info.Serial);

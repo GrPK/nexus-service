@@ -10,7 +10,7 @@ using Nexus.Service.Platform;
 
 namespace Nexus.Service.Peripherals.JpegPanels;
 
-/// <summary>Attaches a hub per TL LCD screen while Nexus Control is on, and detaches each screen whose HID interface leaves.</summary>
+/// <summary>Attaches a hub per TL LCD screen while the Uni Fan TL's Nexus Control is on, and detaches each screen whose HID interface leaves.</summary>
 public sealed class TlLcdConnectionWorker : BackgroundService
 {
     private const int PollMs = 3000;
@@ -59,7 +59,7 @@ public sealed class TlLcdConnectionWorker : BackgroundService
     internal void Sync()
     {
         var model = JpegPanelModel.TlLcd;
-        if (!_gate.IsEnabled(model.HandlerId))
+        if (!_gate.IsEnabled(TlLcdPanels.GateHandlerId))
         {
             foreach (var screen in _panels.All)
             {
@@ -134,7 +134,7 @@ public sealed class TlLcdConnectionWorker : BackgroundService
             hub.Dispose();
             if (_failureLogged.Add(path))
             {
-                ServiceLog.Warn($"[{handlerId}] screen refused the display setting; retrying each poll: {path}");
+                ServiceLog.Warn($"[{handlerId}] screen refused its identity query; retrying each poll: {path}");
             }
             return;
         }

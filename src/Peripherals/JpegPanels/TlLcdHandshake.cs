@@ -32,7 +32,6 @@ public sealed class TlLcdHandshake : IJpegPanelHandshake
     // L-Connect's LCDControlSetting defaults: this packet matches its rotation packet byte for byte.
     private const byte SettingBrightness = 50;
     private const byte SettingVideoFps = 30;
-    private const byte Rotate0 = 0x00;
 
     /// <summary>L-Connect's read timeout for this panel.</summary>
     private const int ReplyTimeoutMs = 200;
@@ -66,8 +65,12 @@ public sealed class TlLcdHandshake : IJpegPanelHandshake
             return false;
         }
 
-        if (WriteCommand(device, report, CmdReadSerial, ReadOnlySpan<byte>.Empty)
-            && ReadReply(device, CmdReadSerial) is { } serialReply)
+        // Query commands only: nothing that changes what a stock-firmware screen shows.
+        if (!WriteCommand(device, report, CmdReadSerial, ReadOnlySpan<byte>.Empty))
+        {
+            return false;
+        }
+        if (ReadReply(device, CmdReadSerial) is { } serialReply)
         {
             Identity = ParseIdentity(serialReply);
         }
@@ -79,20 +82,22 @@ public sealed class TlLcdHandshake : IJpegPanelHandshake
             string? date = ReadReply(device, CmdProductInfo) is { } dateReply ? ReplyText(dateReply) : null;
             Firmware = string.IsNullOrEmpty(date) ? text : $"{text} ({date})";
         }
+        return true;
+    }
 
+    /// <summary>
+    /// The display setting with <paramref name="rotation"/> (0-3, quarter turns). Its ack is left
+    /// queued for the next frame's drain; L-Connect ignores a missing ack too.
+    /// </summary>
+    public static bool WriteDisplaySetting(IHidDevice device, byte[] report, byte rotation)
+    {
         Span<byte> setting = stackalloc byte[11];
         setting.Clear();
         setting[0] = ModeLcdSetting;
         setting[4] = SettingBrightness;
         setting[5] = SettingVideoFps;
-        setting[6] = Rotate0;
-        if (!WriteCommand(device, report, CmdLcdControl, setting))
-        {
-            return false;
-        }
-        // L-Connect ignores a missing ack too.
-        ReadReply(device, CmdLcdControl);
-        return true;
+        setting[6] = (byte)(rotation & 0x03);
+        return WriteCommand(device, report, CmdLcdControl, setting);
     }
 
     /// <summary>No application mode to leave; L-Connect re-applies its screens when it starts.</summary>

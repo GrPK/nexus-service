@@ -35,7 +35,7 @@ public class TlLcdTests
     }
 
     [Fact]
-    public void Attach_reads_the_identity_and_firmware_then_sets_rotation_zero()
+    public void Attach_only_reads_the_identity_and_firmware()
     {
         var device = new ScriptedTlLcd();
         device.Queue(Reply(0x3E, SerialPayload("6f1c2a90-7d3e-4b8e-9a51-0c2d4e6f", port: 1, index: 2)));
@@ -47,14 +47,22 @@ public class TlLcdTests
 
         Assert.Equal(new TlLcdIdentity(1, 2, "6f1c2a90-7d3e-4b8e-9a51-0c2d4e6f"), handshake.Identity);
         Assert.Equal("V1.2.3 (2023-05-01)", handshake.Firmware);
-        Assert.Equal(new byte[] { 0x3E, 0x3D, 0x40 }, device.Writes.Select(w => w[1]).ToArray());
+        // A screen left on its stock firmware gets no writes beyond these two reads.
+        Assert.Equal(new byte[] { 0x3E, 0x3D }, device.Writes.Select(w => w[1]).ToArray());
         Assert.All(device.Writes, w => Assert.Equal(ReportLength, w.Length));
+    }
 
-        // Byte-identical to L-Connect's rotation packet: LCDSetting, JPG index 0, its default
-        // brightness and video fps, Rotate0, no test color.
-        var control = device.Writes[2];
+    [Fact]
+    public void The_display_setting_matches_l_connects_rotation_packet()
+    {
+        var device = new ScriptedTlLcd();
+
+        Assert.True(TlLcdHandshake.WriteDisplaySetting(device, new byte[ReportLength], rotation: 2));
+
+        // LCDSetting, JPG index 0, L-Connect's default brightness and video fps, the rotation, no test color.
+        var control = Assert.Single(device.Writes);
         Assert.Equal(new byte[] { 0x02, 0x40, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x00, 0x0B }, control[..11]);
-        Assert.Equal(new byte[] { 0x05, 0x00, 0x00, 0x00, 50, 30, 0x00, 0x00, 0x00, 0x00, 0x00 }, control[11..22]);
+        Assert.Equal(new byte[] { 0x05, 0x00, 0x00, 0x00, 50, 30, 0x02, 0x00, 0x00, 0x00, 0x00 }, control[11..22]);
         Assert.All(control[22..], b => Assert.Equal(0, b));
     }
 
@@ -81,9 +89,9 @@ public class TlLcdTests
     }
 
     [Fact]
-    public void A_refused_display_setting_drops_the_handle()
+    public void A_refused_read_command_drops_the_handle()
     {
-        var device = new ScriptedTlLcd { FailWritesFrom = 2 };
+        var device = new ScriptedTlLcd { FailWritesFrom = 0 };
 
         Assert.False(new TlLcdHandshake().OnAttach(device, ReportLength));
     }
@@ -111,9 +119,9 @@ public class TlLcdTests
     {
         var panels = new TlLcdPanels();
 
-        Assert.Equal("lianli-tl-lcd:abc", panels.KeyFor(new TlLcdIdentity(0, 1, "abc"), "path-a"));
-        Assert.Equal("lianli-tl-lcd:p0i1", panels.KeyFor(new TlLcdIdentity(0, 1, null), "path-a"));
-        Assert.StartsWith("lianli-tl-lcd:", panels.KeyFor(new TlLcdIdentity(-1, -1, null), "path-a"));
+        Assert.Equal("abc", panels.KeyFor(new TlLcdIdentity(0, 1, "abc"), "path-a"));
+        Assert.Equal("p0i1", panels.KeyFor(new TlLcdIdentity(0, 1, null), "path-a"));
+        Assert.Matches("^[0-9a-f]{8}$", panels.KeyFor(new TlLcdIdentity(-1, -1, null), "path-a"));
         Assert.Equal(
             panels.KeyFor(new TlLcdIdentity(-1, -1, null), "PATH-A"),
             panels.KeyFor(new TlLcdIdentity(-1, -1, null), "path-a"));
@@ -126,7 +134,7 @@ public class TlLcdTests
         var first = new TlLcdIdentity(0, 0, "dup");
         panels.Add(new TlLcdScreen(panels.KeyFor(first, "a"), "A", "a", new JpegPanelHub(JpegPanelModel.TlLcd), new TlLcdHandshake()));
 
-        Assert.Equal("lianli-tl-lcd:p0i1", panels.KeyFor(new TlLcdIdentity(0, 1, "dup"), "b"));
+        Assert.Equal("p0i1", panels.KeyFor(new TlLcdIdentity(0, 1, "dup"), "b"));
     }
 
     [Fact]
@@ -140,7 +148,7 @@ public class TlLcdTests
     public void The_worker_attaches_every_screen_and_drops_the_one_that_leaves()
     {
         var gate = new DeviceControlGate(new InMemoryConfigStore());
-        gate.SetEnabled(JpegPanelModel.TlLcd.HandlerId, true);
+        gate.SetEnabled(TlLcdPanels.GateHandlerId, true);
         var hid = new FakeWorkerHidEnumerator();
         var screens = new List<HidDeviceInfo>();
         for (int i = 0; i < 3; i++)
@@ -158,13 +166,13 @@ public class TlLcdTests
 
         worker.Sync();
         Assert.Equal(
-            new[] { "lianli-tl-lcd:p0i0", "lianli-tl-lcd:p0i1", "lianli-tl-lcd:p0i2" },
+            new[] { "p0i0", "p0i1", "p0i2" },
             panels.Attached.Select(s => s.Key).OrderBy(k => k).ToArray());
 
         screens.RemoveAt(1);
         worker.Sync();
         Assert.Equal(
-            new[] { "lianli-tl-lcd:p0i0", "lianli-tl-lcd:p0i2" },
+            new[] { "p0i0", "p0i2" },
             panels.Attached.Select(s => s.Key).OrderBy(k => k).ToArray());
     }
 
@@ -172,7 +180,7 @@ public class TlLcdTests
     public void A_screen_whose_handle_died_is_reopened_on_the_next_poll()
     {
         var gate = new DeviceControlGate(new InMemoryConfigStore());
-        gate.SetEnabled(JpegPanelModel.TlLcd.HandlerId, true);
+        gate.SetEnabled(TlLcdPanels.GateHandlerId, true);
         var hid = new FakeWorkerHidEnumerator();
         hid.ByProductId[0x7393] = new List<HidDeviceInfo>
         {
@@ -216,30 +224,73 @@ public class TlLcdTests
         Assert.False(panels.AnyAttached);
     }
 
-    [Theory]
-    [InlineData(20, true)]
-    [InlineData(0, false)]
-    public void A_quiet_renderer_gets_its_last_frame_resent_only_when_the_model_asks(int keepaliveMs, bool resent)
+    private static (TlLcdScreens Screens, ScriptedTlLcd Device, TlLcdPanels Panels) AttachedScreen()
     {
         var device = new ScriptedTlLcd();
-        var hub = new JpegPanelHub(JpegPanelModel.TlLcd with { Handshake = new TlLcdHandshake(), KeepaliveMs = keepaliveMs });
+        var handshake = new TlLcdHandshake();
+        var hub = new JpegPanelHub(JpegPanelModel.TlLcd with { Handshake = handshake });
         Assert.True(hub.Attach(device));
-        using var transport = new Nexus.Service.Panel.Streams.JpegPanelStreamTransport(hub, "screen");
-        transport.Open();
+        var panels = new TlLcdPanels();
+        panels.Add(new TlLcdScreen("s1", "S1", "path-1", hub, handshake));
+        device.ClearWrites();
+        return (new TlLcdScreens(panels), device, panels);
+    }
 
-        transport.Write(new byte[400 * 400 * 4]);
-        int afterFirstFrame = device.Writes.Count;
+    [Fact]
+    public void The_first_nexus_frame_carries_the_rotation_and_later_frames_do_not()
+    {
+        var (screens, device, _) = AttachedScreen();
+        using var disposeScreens = screens;
+        screens.SetRotation("s1", 1);
 
-        // Generous for the resend (a thread-pool timer on a busy box), short for the absence.
-        bool more = System.Threading.SpinWait.SpinUntil(() => device.Writes.Count > afterFirstFrame, resent ? 5000 : 300);
-        // Detach waits out an in-flight resend under the hub lock, so the list is stable after it.
-        transport.Dispose();
-        hub.Detach();
-        Assert.Equal(resent, more);
-        if (resent)
-        {
-            Assert.All(device.Writes.Skip(afterFirstFrame), w => Assert.Equal(TlLcdHandshake.CmdSyncJpeg, w[1]));
-        }
+        Assert.True(screens.PushImage("s1", new byte[600]));
+        Assert.True(screens.PushImage("s1", new byte[600]));
+
+        var commands = device.WriteCommands();
+        Assert.Equal(TlLcdHandshake.CmdLcdControl, commands[0]);
+        Assert.Equal(1, commands.Count(c => c == TlLcdHandshake.CmdLcdControl));
+        Assert.All(commands.Skip(1), c => Assert.Equal(TlLcdHandshake.CmdSyncJpeg, c));
+    }
+
+    [Fact]
+    public void A_rotation_alone_writes_nothing_so_a_stock_screen_keeps_its_own()
+    {
+        var (screens, device, _) = AttachedScreen();
+        using var disposeScreens = screens;
+
+        screens.SetRotation("s1", 3);
+
+        Assert.Empty(device.WriteCommands());
+    }
+
+    [Fact]
+    public void A_quiet_screen_gets_its_last_frame_again_until_released()
+    {
+        var (screens, device, _) = AttachedScreen();
+        using var disposeScreens = screens;
+        screens.PushImage("s1", new byte[600]);
+        long sentAt = Environment.TickCount64;
+        int afterFirst = device.WriteCommands().Count;
+        System.Threading.SpinWait.SpinUntil(() => Environment.TickCount64 - sentAt > TlLcdScreens.KeepaliveMs + 20);
+
+        // The background timer may already have re-sent; either way the frame went out again.
+        screens.Keepalive();
+        Assert.True(device.WriteCommands().Count > afterFirst);
+
+        screens.Release("s1");
+        int afterRelease = device.WriteCommands().Count;
+        System.Threading.SpinWait.SpinUntil(() => Environment.TickCount64 - sentAt > (3 * TlLcdScreens.KeepaliveMs) + 20);
+        screens.Keepalive();
+        Assert.Equal(afterRelease, device.WriteCommands().Count);
+    }
+
+    [Fact]
+    public void A_push_to_a_detached_screen_is_refused()
+    {
+        var (screens, _, _) = AttachedScreen();
+        using var disposeScreens = screens;
+
+        Assert.False(screens.PushImage("gone", new byte[600]));
     }
 
     private static byte[] SerialPayload(string serial, int port, int index)
@@ -290,9 +341,29 @@ public class TlLcdTests
 
         public bool Write(ReadOnlySpan<byte> report)
         {
-            bool ok = !(FailWritesFrom is { } from && Writes.Count >= from);
-            Writes.Add(report.ToArray());
-            return ok;
+            lock (Writes)
+            {
+                bool ok = !(FailWritesFrom is { } from && Writes.Count >= from);
+                Writes.Add(report.ToArray());
+                return ok;
+            }
+        }
+
+        /// <summary>The command byte of every write so far; safe while a keepalive timer writes.</summary>
+        public List<byte> WriteCommands()
+        {
+            lock (Writes)
+            {
+                return Writes.Select(w => w[1]).ToList();
+            }
+        }
+
+        public void ClearWrites()
+        {
+            lock (Writes)
+            {
+                Writes.Clear();
+            }
         }
 
         public int Read(Span<byte> buffer, int timeoutMs)

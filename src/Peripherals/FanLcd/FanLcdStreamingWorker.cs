@@ -4,37 +4,39 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Nexus.Service.Devices;
+using Nexus.Service.Peripherals.LianLiWireless;
 using Nexus.Service.Persistence;
 using Nexus.Service.Platform;
 
-namespace Nexus.Service.Peripherals.LianLiWireless;
+namespace Nexus.Service.Peripherals.FanLcd;
 
 /// <summary>
-/// Streams each attached SL-LCD Wireless screen's configured content. Runs one
-/// independent loop per discovered serial (started on attach, cancelled on
-/// detach by <see cref="Slv3LcdConnectionWorker"/>'s discovery), since each
-/// screen's animation has its own frame cadence and a single shared loop
-/// cannot pace three screens with different GIF/video delays at once.
+/// Streams each attached fan screen's configured content, for one <see cref="IFanLcdScreens"/>
+/// family. Runs one independent loop per attached serial, since each screen's animation has
+/// its own frame cadence and a single shared loop cannot pace three screens with different
+/// GIF/video delays at once. A screen in panel mode is left to its streamed-panel session.
 /// </summary>
-public sealed class Slv3LcdStreamingWorker : BackgroundService
+public sealed class FanLcdStreamingWorker : BackgroundService
 {
     private const int DiscoveryPollMs = 2000;
     private const int IdlePollMs = 1000;
     /// <summary>~1 fps: a sensor/clock frame only needs to look live, not smooth.</summary>
     private const int SensorClockPollMs = 1000;
 
-    private readonly Slv3LcdHub _hub;
-    private readonly Slv3Hub _rfHub;
+    private readonly IFanLcdScreens _screens;
     private readonly Slv3LcdMediaLibrary _library;
     private readonly Slv3LcdSensorReader _sensorReader;
     private readonly IConfigStore _store;
     private readonly DeviceControlGate _gate;
-    private readonly Dictionary<string, CancellationTokenSource> _running = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (CancellationTokenSource Cts, Task Loop)> _running = new(StringComparer.OrdinalIgnoreCase);
 
-    public Slv3LcdStreamingWorker(Slv3LcdHub hub, Slv3Hub rfHub, Slv3LcdMediaLibrary library, Slv3LcdSensorReader sensorReader, IConfigStore store, DeviceControlGate gate)
+    // Cancelled loops still unwinding; a serial restarts only once its old loop's hand-back has
+    // run, or that hand-back would take the screen from the new loop.
+    private readonly Dictionary<string, Task> _stopping = new(StringComparer.OrdinalIgnoreCase);
+
+    public FanLcdStreamingWorker(IFanLcdScreens screens, Slv3LcdMediaLibrary library, Slv3LcdSensorReader sensorReader, IConfigStore store, DeviceControlGate gate)
     {
-        _hub = hub;
-        _rfHub = rfHub;
+        _screens = screens;
         _library = library;
         _sensorReader = sensorReader;
         _store = store;
@@ -49,7 +51,7 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
             {
                 try
                 {
-                    if (!_gate.IsEnabled("lianli-wireless"))
+                    if (!_gate.IsEnabled(_screens.HandlerId))
                     {
                         StopAll();
                     }
@@ -60,7 +62,7 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    ServiceLog.Error($"[lianli-wireless-lcd] streaming worker error: {ex.Message}");
+                    ServiceLog.Error($"[{_screens.LogTag}] streaming worker error: {ex.Message}");
                 }
 
                 await Task.Delay(DiscoveryPollMs, stoppingToken).ConfigureAwait(false);
@@ -80,21 +82,31 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
 
     private void ReconcileScreenLoops(CancellationToken stoppingToken)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var port in _hub.Discover())
+        foreach (var (serial, unwinding) in new List<KeyValuePair<string, Task>>(_stopping))
         {
-            if (string.IsNullOrWhiteSpace(port.Serial))
+            if (unwinding.IsCompleted)
+            {
+                _stopping.Remove(serial);
+            }
+        }
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var serial in _screens.AttachedSerials())
+        {
+            if (string.IsNullOrWhiteSpace(serial))
             {
                 continue;
             }
-            seen.Add(port.Serial);
-            if (_running.ContainsKey(port.Serial))
+            seen.Add(serial);
+            if (_running.ContainsKey(serial))
+            {
+                continue;
+            }
+            if (_stopping.ContainsKey(serial))
             {
                 continue;
             }
             var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-            _running[port.Serial] = cts;
-            _ = RunScreenLoopAsync(port.Serial, cts.Token);
+            _running[serial] = (cts, RunScreenLoopAsync(serial, cts.Token));
         }
 
         foreach (var serial in new List<string>(_running.Keys))
@@ -108,12 +120,13 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
 
     private void StopScreen(string serial)
     {
-        if (!_running.Remove(serial, out var cts))
+        if (!_running.Remove(serial, out var loop))
         {
             return;
         }
-        cts.Cancel();
-        cts.Dispose();
+        loop.Cts.Cancel();
+        loop.Cts.Dispose();
+        _stopping[serial] = loop.Loop;
     }
 
     private void StopAll()
@@ -143,104 +156,116 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
         // continuity across a reconnect is not required.
         var animationStartUtc = DateTime.UtcNow;
 
-        while (!ct.IsCancellationRequested)
+        try
         {
-            try
+            while (!ct.IsCancellationRequested)
             {
-                // Arm the RF TX for LCD video traffic before pushing frames
-                // (L-Connect's ensure_video_mode); idempotent per RF connection,
-                // so this also re-arms after a dongle reconnect. The screens'
-                // video RF shares the 2.4 GHz air with the fan control link.
-                _rfHub.EnsureVideoMode();
-
-                var settings = _store.Load().Devices.LianLiWireless.Screens.TryGetValue(serial, out var s)
-                    ? s
-                    : new LianLiWirelessScreenSettings();
-
-                _hub.SyncBrightness(serial, settings, ref appliedBrightness, ref lockSlept);
-                if (settings.Rotation != appliedRotation)
+                try
                 {
-                    _hub.SetRotation(serial, settings.Rotation);
-                    appliedRotation = settings.Rotation;
-                }
+                    _screens.PrepareFrames();
 
-                if (settings.MediaId != loadedMediaId)
-                {
-                    loadedMediaId = settings.MediaId;
-                    loadedImage = loadedMediaId is null ? null : _library.LoadFrames(loadedMediaId);
-                    pushedStatic = false;
-                }
-                if (settings.ContentType != appliedContentType)
-                {
-                    appliedContentType = settings.ContentType;
-                    pushedStatic = false;
-                    animationStartUtc = DateTime.UtcNow;
-                }
+                    var settings = _screens.SettingsOf(_store.Load().Devices).TryGetValue(serial, out var s)
+                        ? s
+                        : new LianLiWirelessScreenSettings();
 
-                switch (settings.ContentType)
-                {
-                    case "image":
-                    case "gif":
-                    case "video":
-                        if (loadedImage is null)
+                    _screens.SyncBrightness(serial, settings, ref appliedBrightness, ref lockSlept);
+                    if (settings.Rotation != appliedRotation)
+                    {
+                        _screens.SetRotation(serial, settings.Rotation);
+                        appliedRotation = settings.Rotation;
+                    }
+
+                    if (settings.MediaId != loadedMediaId)
+                    {
+                        loadedMediaId = settings.MediaId;
+                        loadedImage = loadedMediaId is null ? null : _library.LoadFrames(loadedMediaId);
+                        pushedStatic = false;
+                    }
+                    if (settings.ContentType != appliedContentType)
+                    {
+                        appliedContentType = settings.ContentType;
+                        pushedStatic = false;
+                        animationStartUtc = DateTime.UtcNow;
+                        // Taken back before this loop draws or releases, so a lingering panel
+                        // session's frame cannot land after the switch.
+                        _screens.SetPanelOwned(serial, settings.ContentType == FanLcdContent.Panel);
+                        if (settings.ContentType == "off")
                         {
-                            await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
-                            continue;
+                            _screens.Release(serial);
                         }
-                        if (loadedImage.Frames.Length == 1)
-                        {
-                            if (!pushedStatic)
+                    }
+
+                    switch (settings.ContentType)
+                    {
+                        case "image":
+                        case "gif":
+                        case "video":
+                            if (loadedImage is null)
                             {
-                                pushedStatic = _hub.PushImageToSerial(serial, loadedImage.Frames[0].JpegBytes);
+                                await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
+                                continue;
                             }
-                            await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
-                            continue;
+                            if (loadedImage.Frames.Length == 1)
+                            {
+                                if (!pushedStatic)
+                                {
+                                    pushedStatic = _screens.PushImage(serial, loadedImage.Frames[0].JpegBytes);
+                                }
+                                await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
+                                continue;
+                            }
+                            await StreamAnimatedAsync(serial, loadedImage, ct).ConfigureAwait(false);
+                            break;
+
+                        case "sensor":
+                        {
+                            var reading = _sensorReader.Read(settings.SensorSource, settings.TempUnit);
+                            var jpeg = Slv3LcdSensorRenderer.Render(
+                                settings.SensorStyle, reading.Value, reading.Min, reading.Max, reading.Label, reading.Unit,
+                                settings.ColorA, settings.ColorB);
+                            _screens.PushImage(serial, jpeg);
+                            await Task.Delay(SensorClockPollMs, ct).ConfigureAwait(false);
+                            break;
                         }
-                        await StreamAnimatedAsync(serial, loadedImage, ct).ConfigureAwait(false);
-                        break;
 
-                    case "sensor":
-                    {
-                        var reading = _sensorReader.Read(settings.SensorSource, settings.TempUnit);
-                        var jpeg = Slv3LcdSensorRenderer.Render(
-                            settings.SensorStyle, reading.Value, reading.Min, reading.Max, reading.Label, reading.Unit,
-                            settings.ColorA, settings.ColorB);
-                        _hub.PushImageToSerial(serial, jpeg);
-                        await Task.Delay(SensorClockPollMs, ct).ConfigureAwait(false);
-                        break;
+                        case "clock":
+                        {
+                            var jpeg = Slv3LcdClockRenderer.Render(settings.ClockFace, DateTime.Now, settings.ColorA, settings.ColorB);
+                            _screens.PushImage(serial, jpeg);
+                            await Task.Delay(SensorClockPollMs, ct).ConfigureAwait(false);
+                            break;
+                        }
+
+                        case "animation":
+                        {
+                            var elapsed = (DateTime.UtcNow - animationStartUtc).TotalSeconds;
+                            var jpeg = Slv3LcdAnimationRenderer.Render(settings.AnimationId, elapsed, settings.ColorA, settings.ColorB);
+                            _screens.PushImage(serial, jpeg);
+                            await Task.Delay(Slv3LcdAnimationRenderer.FrameIntervalMs, ct).ConfigureAwait(false);
+                            break;
+                        }
+
+                        default:
+                            await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
+                            break;
                     }
-
-                    case "clock":
-                    {
-                        var jpeg = Slv3LcdClockRenderer.Render(settings.ClockFace, DateTime.Now, settings.ColorA, settings.ColorB);
-                        _hub.PushImageToSerial(serial, jpeg);
-                        await Task.Delay(SensorClockPollMs, ct).ConfigureAwait(false);
-                        break;
-                    }
-
-                    case "animation":
-                    {
-                        var elapsed = (DateTime.UtcNow - animationStartUtc).TotalSeconds;
-                        var jpeg = Slv3LcdAnimationRenderer.Render(settings.AnimationId, elapsed, settings.ColorA, settings.ColorB);
-                        _hub.PushImageToSerial(serial, jpeg);
-                        await Task.Delay(Slv3LcdAnimationRenderer.FrameIntervalMs, ct).ConfigureAwait(false);
-                        break;
-                    }
-
-                    default:
-                        await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
-                        break;
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    ServiceLog.Error($"[{_screens.LogTag}] stream error for {serial}: {ex.Message}");
+                    await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                ServiceLog.Error($"[lianli-wireless-lcd] stream error for {serial}: {ex.Message}");
-                await Task.Delay(IdlePollMs, ct).ConfigureAwait(false);
-            }
+        }
+        finally
+        {
+            // After this loop's last push, so nothing it sends can follow the hand-back.
+            _screens.SetPanelOwned(serial, false);
+            _screens.Release(serial);
         }
     }
 
@@ -252,7 +277,7 @@ public sealed class Slv3LcdStreamingWorker : BackgroundService
             {
                 break;
             }
-            _hub.PushImageToSerial(serial, frame.JpegBytes);
+            _screens.PushImage(serial, frame.JpegBytes);
             await Task.Delay(Math.Max(10, frame.DelayMs), ct).ConfigureAwait(false);
         }
     }

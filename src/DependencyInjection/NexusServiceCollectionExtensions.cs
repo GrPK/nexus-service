@@ -1097,7 +1097,15 @@ public static class NexusServiceCollectionExtensions
         services.AddHostedService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdConnectionWorker>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdMediaLibrary>();
         services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdSensorReader>();
-        services.AddHostedService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdStreamingWorker>();
+        services.AddSingleton<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdScreens>();
+        // One content worker and one panel discovery per fan-screen family; IHostedService is
+        // registered directly because AddHostedService would collapse the two workers into one.
+        services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(sp => NewFanLcdStreamingWorker(
+            sp, sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdScreens>()));
+        services.AddSingleton<Nexus.Service.Panel.Streams.IStreamedPanelDiscovery>(sp =>
+            new Nexus.Service.Panel.Streams.FanLcdPanelDiscovery(
+                sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdScreens>(),
+                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>()));
 
         // SLV3 wireless RGB: one lighting device per bound fan chain (inner/outer
         // ring zones), streamed to the engine as a live single-frame RF_RgbSync
@@ -1186,8 +1194,9 @@ public static class NexusServiceCollectionExtensions
             }
         }
 
-        // The wired TL LCD puts one HID device per fan screen on the bus, so one worker holds
-        // a hub per screen and one discovery reports them all.
+        // The wired TL LCD puts one HID device per fan screen on the bus, so one worker holds a
+        // hub per screen. The screens belong to the Uni Fan TL device: its Screens tab picks each
+        // one's content, and only a screen set to a Nexus panel becomes a streamed panel.
         var tlLcdPanels = new Nexus.Service.Peripherals.JpegPanels.TlLcdPanels();
         services.AddSingleton(tlLcdPanels);
         services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(sp =>
@@ -1196,11 +1205,13 @@ public static class NexusServiceCollectionExtensions
                 tlLcdPanels,
                 sp.GetRequiredService<Nexus.Service.Devices.DeviceControlGate>(),
                 sp.GetRequiredService<Nexus.Service.Devices.Detection.HardwarePresence>()));
-        services.AddSingleton<Nexus.Service.Panel.Streams.IStreamedPanelDiscovery>(
-            _ => new Nexus.Service.Panel.Streams.TlLcdPanelDiscovery(tlLcdPanels));
-        services.AddSingleton<IDeviceHandler>(
-            _ => new Nexus.Service.Devices.Handlers.JpegPanelHandler(
-                Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.TlLcd, () => tlLcdPanels.AnyAttached));
+        services.AddSingleton(_ => new Nexus.Service.Peripherals.JpegPanels.TlLcdScreens(tlLcdPanels));
+        services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(sp => NewFanLcdStreamingWorker(
+            sp, sp.GetRequiredService<Nexus.Service.Peripherals.JpegPanels.TlLcdScreens>()));
+        services.AddSingleton<Nexus.Service.Panel.Streams.IStreamedPanelDiscovery>(sp =>
+            new Nexus.Service.Panel.Streams.FanLcdPanelDiscovery(
+                sp.GetRequiredService<Nexus.Service.Peripherals.JpegPanels.TlLcdScreens>(),
+                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>()));
 
         // Bulk-pipe cooler LCDs (ASUS Ryujin, Thermalright, Lian Li Universal Screen 8.8, ZMatrices,
         // Lian Li HydroShift II). Their pixels ride a USB bulk endpoint rather than HID, so they
@@ -2521,4 +2532,12 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<LocalAssistant>();
         return services;
     }
+
+    private static Nexus.Service.Peripherals.FanLcd.FanLcdStreamingWorker NewFanLcdStreamingWorker(
+        IServiceProvider sp, Nexus.Service.Peripherals.FanLcd.IFanLcdScreens screens) =>
+        new(screens,
+            sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdMediaLibrary>(),
+            sp.GetRequiredService<Nexus.Service.Peripherals.LianLiWireless.Slv3LcdSensorReader>(),
+            sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
+            sp.GetRequiredService<Nexus.Service.Devices.DeviceControlGate>());
 }

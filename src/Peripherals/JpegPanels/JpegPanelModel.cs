@@ -40,9 +40,6 @@ public sealed record JpegPanelModel(
     /// <summary>Documented frame rate for the model; the profile's ceiling.</summary>
     public int Fps { get; init; } = 30;
 
-    /// <summary>Re-sends the last frame after this long without one; 0 for a panel that holds its last frame.</summary>
-    public int KeepaliveMs { get; init; }
-
     /// <summary>
     /// Turns the frame a quarter turn counter-clockwise on its way to the glass, for a panel
     /// whose scanout is turned relative to the frames it accepts. Square panels only: turning
@@ -179,7 +176,8 @@ public sealed record JpegPanelModel(
 
     /// <summary>
     /// Wired UNI FAN TL LCD: one HID device per fan screen, so it stays out of <see cref="All"/>
-    /// and <see cref="TlLcdPanels"/> copies this row per screen with its own handshake.
+    /// and <see cref="TlLcdPanels"/> copies this row per screen with its own handshake. Its handler
+    /// id names the screens' panel family; the screens follow the Uni Fan TL's switch.
     /// </summary>
     public static readonly JpegPanelModel TlLcd = new(
         HandlerId: "lianli-tl-lcd",
@@ -193,12 +191,7 @@ public sealed record JpegPanelModel(
         HeaderStyle: JpegPanelHeaderStyle.LianLiSequenced,
         Selector: TlLcdHandshake.CmdSyncJpeg,
         Surface: Models.Panel.PanelSurfaces.LcdRound)
-    {
-        Fps = 25,
-        // The firmware falls back to its stored image when frames stop; L-Connect never stops
-        // sending, and a static Nexus layout renders nothing new for seconds.
-        KeepaliveMs = 100,
-    };
+    { Fps = 25 };
 
     public static readonly JpegPanelModel[] All =
     {

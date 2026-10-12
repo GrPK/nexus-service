@@ -10,6 +10,9 @@ public sealed record TlLcdScreen(string Key, string DisplayName, string Path, Jp
 /// <summary>The attached TL LCD screens, one <see cref="JpegPanelHub"/> each. Written by the connection worker only.</summary>
 public sealed class TlLcdPanels
 {
+    /// <summary>The screens belong to the Uni Fan TL hub's device and follow its Nexus Control switch.</summary>
+    public const string GateHandlerId = "lianli-tl";
+
     private readonly object _lock = new();
     private readonly Dictionary<string, TlLcdScreen> _byPath = new(StringComparer.OrdinalIgnoreCase);
 
@@ -52,20 +55,19 @@ public sealed class TlLcdPanels
     }
 
     /// <summary>
-    /// Panel record key: L-Connect's serial, else the screen's place, else its HID path; a key
-    /// another attached screen holds falls through, so two screens never share a record.
+    /// Screen key for its settings and panel record: L-Connect's serial, else the screen's place,
+    /// else its HID path; a key another attached screen holds falls through, so keys stay unique.
     /// </summary>
     internal string KeyFor(TlLcdIdentity identity, string path)
     {
-        const string prefix = "lianli-tl-lcd:";
         var candidates = new List<string>(3);
         if (identity.Serial is { } serial)
         {
-            candidates.Add(prefix + serial);
+            candidates.Add(serial);
         }
         if (identity.Port >= 0 && identity.Index >= 0)
         {
-            candidates.Add($"{prefix}p{identity.Port}i{identity.Index}");
+            candidates.Add($"p{identity.Port}i{identity.Index}");
         }
         lock (_lock)
         {
@@ -77,13 +79,17 @@ public sealed class TlLcdPanels
                 }
             }
         }
-        return prefix + PathHash(path);
+        return PathHash(path);
     }
 
-    /// <summary>"#port.fan", one-based like the TL fan hub's channels; no words, since the record name shows in every locale.</summary>
+    /// <summary>"#port.fan", one-based like the TL fan hub's channels; empty when the screen did not say.</summary>
+    public static string LabelFor(TlLcdIdentity identity) =>
+        identity.Port >= 0 && identity.Index >= 0 ? $"#{identity.Port + 1}.{identity.Index + 1}" : "";
+
+    /// <summary>The model name plus <see cref="LabelFor"/>; no words, since the record name shows in every locale.</summary>
     internal static string DisplayNameFor(TlLcdIdentity identity) =>
         identity.Port >= 0 && identity.Index >= 0
-            ? $"{JpegPanelModel.TlLcd.Name} #{identity.Port + 1}.{identity.Index + 1}"
+            ? $"{JpegPanelModel.TlLcd.Name} {LabelFor(identity)}"
             : JpegPanelModel.TlLcd.Name;
 
     /// <summary>FNV-1a over the lowercased path; stable across restarts on Windows only, where the path follows the USB port.</summary>
