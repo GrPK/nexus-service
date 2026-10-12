@@ -648,7 +648,12 @@ public sealed class OpenRgbController : IRgbController
             return;
         }
         session.Closed = true;
-        session.Pending?.Done.TrySetException(new IOException("OpenRGB connection closed"));
+        if (session.Pending is { } pending && pending.Done.TrySetException(new IOException("OpenRGB connection closed")))
+        {
+            // The requester may have already left (send failure, cancel); a faulted
+            // task nobody awaits surfaces as an unobserved exception.
+            _ = pending.Done.Task.Exception;
+        }
         try
         { session.ReaderCts.Cancel(); }
         catch { }
