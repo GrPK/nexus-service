@@ -79,15 +79,25 @@ public sealed class CustomEffectStore
     /// </summary>
     public bool EnsureAvailable()
     {
+        bool recovered = false, available;
         lock (_lock)
         {
             if (_unavailable)
             {
                 Load();
+                recovered = !_unavailable;
             }
-            return !_unavailable;
+            available = !_unavailable;
         }
+        if (recovered)
+        {
+            Recovered?.Invoke();
+        }
+        return available;
     }
+
+    /// <summary>Raised, outside the lock, when a load succeeds after an earlier one failed, so a running custom effect can pick up its source.</summary>
+    public event Action? Recovered;
 
     // Caller holds _lock.
     private void Load()
@@ -111,6 +121,7 @@ public sealed class CustomEffectStore
     /// <summary>Entries by UpdatedAt ascending.</summary>
     public IReadOnlyList<CustomEffectEntry> List()
     {
+        EnsureAvailable();
         lock (_lock)
         {
             return _entries.OrderBy(e => e.UpdatedAt).Select(Clone).ToList();
@@ -119,6 +130,7 @@ public sealed class CustomEffectStore
 
     public CustomEffectEntry? Get(string id)
     {
+        EnsureAvailable();
         lock (_lock)
         {
             var e = _entries.Find(x => x.Id == id);
@@ -167,15 +179,24 @@ public sealed class CustomEffectStore
     private readonly record struct LoopInfo(int Pos, int BodyStart, int BodyEnd, string Var, long Count);
 
     private static readonly Regex IdentRe = new(@"[A-Za-z_]\w*", RegexOptions.CultureInvariant);
-    private static readonly Regex FuncDef = new(
-        @"(?<![\w.])(?:void|bool|int|uint|float|[iub]?vec[234]|mat[234])\s+([A-Za-z_]\w*)\s*\([^()]*\)\s*\{",
+
+    // The only function shape the Studio emits: a plain return type and a flat parameter list.
+    private static readonly Regex FuncHeader = new(
+        @"^\s*(?:void|float|vec2|vec3|vec4|mat2|int|bool)\s+([A-Za-z_]\w*)\s*\(([^()\[\]]*)\)\s*$",
         RegexOptions.CultureInvariant);
 
+    // `type name (` with nothing between: a declaration without a body.
+    private static readonly Regex Prototype = new(
+        @"^\s*(?:[A-Za-z_]\w*\s+)+[A-Za-z_]\w*\s*\(", RegexOptions.CultureInvariant);
+
     /// <summary>
-    /// Only counted for-loops are allowed: no while or do, no preprocessor (token pasting can
-    /// rebuild a keyword), every for is `for (int v = lit; v &lt;|&lt;= lit; v++)` with v never
-    /// written in the body, nested loops multiply to at most <see cref="MaxLoopIterations"/>,
-    /// and a loop body never calls a function that itself loops.
+    /// A narrow allowlist of what the Studio emits, not a general GLSL analysis. No
+    /// preprocessor, no while or do, no inout, and only plain top-level functions without
+    /// out parameters or prototypes. Every for is `for (int v = lit; v &lt;|&lt;= lit; v++) {`
+    /// with literals in [-64, 64], a braced body that never writes v, nested loops that
+    /// multiply to at most <see cref="MaxLoopIterations"/>, and no call to a function that
+    /// itself loops. Known limit: exponential fan-out through loop-free function calls is not
+    /// bounded here.
     /// </summary>
     internal static string? ValidateLoops(string frag)
     {
@@ -184,12 +205,21 @@ public sealed class CustomEffectStore
         {
             return "preprocessor directives are not allowed";
         }
+        var structure = ScanTopLevel(code, out var funcs);
+        if (structure is not null)
+        {
+            return structure;
+        }
         var loops = new List<LoopInfo>();
         foreach (Match w in IdentRe.Matches(code))
         {
             if (w.Value is "while" or "do")
             {
                 return $"'{w.Value}' loops are not allowed; use a bounded for loop like for (int i = 0; i < 5; i++)";
+            }
+            if (w.Value == "inout")
+            {
+                return "inout parameters are not allowed";
             }
             if (w.Value != "for")
             {
@@ -201,9 +231,9 @@ public sealed class CustomEffectStore
             {
                 return "for loops must look like for (int i = 0; i < 5; i++) with integer literal bounds";
             }
-            if (!long.TryParse(m.Groups[2].Value, out var lo) || !long.TryParse(m.Groups[4].Value, out var hi))
+            if (!TryBound(m.Groups[2].Value, out var lo) || !TryBound(m.Groups[4].Value, out var hi))
             {
-                return "for loop bounds are out of range";
+                return $"for loop bounds must be integer literals from -{MaxLoopIterations} to {MaxLoopIterations}";
             }
             var count = hi - lo + (m.Groups[3].Value == "<=" ? 1 : 0);
             if (count > MaxLoopIterations)
@@ -211,7 +241,16 @@ public sealed class CustomEffectStore
                 return $"a for loop may run at most {MaxLoopIterations} iterations";
             }
             var bodyStart = m.Index + m.Length;
-            var bodyEnd = BodyEnd(code, bodyStart);
+            var brace = bodyStart;
+            while (brace < code.Length && char.IsWhiteSpace(code[brace]))
+            {
+                brace++;
+            }
+            if (brace >= code.Length || code[brace] != '{')
+            {
+                return "a for loop body must be wrapped in braces";
+            }
+            var bodyEnd = MatchBrace(code, brace);
             if (bodyEnd < 0)
             {
                 return "unbalanced braces in a for loop body";
@@ -224,7 +263,8 @@ public sealed class CustomEffectStore
             loops.Add(new LoopInfo(w.Index, bodyStart, bodyEnd, v, Math.Max(count, 1)));
         }
 
-        // Nested loops multiply: walk in source order, keeping the enclosing bodies.
+        // Nested loops multiply: walk in source order, keeping the enclosing bodies. Each count
+        // is at most the cap and the running product is checked at every level, so it cannot overflow.
         var open = new Stack<(int End, long Product)>();
         foreach (var l in loops)
         {
@@ -243,19 +283,13 @@ public sealed class CustomEffectStore
         // Functions that loop, directly or through an earlier looping function (GLSL needs
         // definition before use and forbids recursion, so one pass in order is enough).
         var loopFns = new List<string>();
-        foreach (Match f in FuncDef.Matches(code))
+        foreach (var f in funcs)
         {
-            var openBrace = f.Index + f.Length - 1;
-            var end = MatchBrace(code, openBrace);
-            if (end < 0)
-            {
-                continue;
-            }
-            var hasLoop = loops.Any(l => l.Pos > openBrace && l.Pos < end)
-                || loopFns.Any(n => CallsFunction(code.Substring(openBrace, end - openBrace), n));
+            var hasLoop = loops.Any(l => l.Pos > f.Open && l.Pos < f.End)
+                || loopFns.Any(n => CallsFunction(code.Substring(f.Open, f.End - f.Open), n));
             if (hasLoop)
             {
-                loopFns.Add(f.Groups[1].Value);
+                loopFns.Add(f.Name);
             }
         }
         foreach (var l in loops)
@@ -270,6 +304,79 @@ public sealed class CustomEffectStore
             }
         }
         return null;
+    }
+
+    private static bool TryBound(string literal, out long value)
+    {
+        value = 0;
+        // Length first: a huge literal never reaches the parser.
+        return literal.Length <= 4 && long.TryParse(literal, out value) && value is >= -MaxLoopIterations and <= MaxLoopIterations;
+    }
+
+    // Walks the top level after the version line: statements end in ';', functions have a braced body.
+    private static string? ScanTopLevel(string code, out List<(string Name, int Open, int End)> funcs)
+    {
+        funcs = new();
+        var i = Math.Min(VersionLine.Length, code.Length);
+        while (true)
+        {
+            while (i < code.Length && char.IsWhiteSpace(code[i]))
+            {
+                i++;
+            }
+            if (i >= code.Length)
+            {
+                return null;
+            }
+            var start = i;
+            var paren = 0;
+            for (; i < code.Length; i++)
+            {
+                var c = code[i];
+                if (c == '(')
+                {
+                    paren++;
+                }
+                else if (c == ')')
+                {
+                    paren--;
+                }
+                else if (paren == 0 && c is ';' or '{' or '}')
+                {
+                    break;
+                }
+            }
+            if (i >= code.Length || code[i] == '}')
+            {
+                return "unbalanced braces or a missing semicolon at the top level";
+            }
+            var header = code.Substring(start, i - start);
+            if (code[i] == ';')
+            {
+                if (Prototype.IsMatch(header))
+                {
+                    return "function prototypes are not allowed; define the function before use";
+                }
+                i++;
+                continue;
+            }
+            var m = FuncHeader.Match(header);
+            if (!m.Success)
+            {
+                return "only void, float, vec2, vec3, vec4, mat2, int and bool functions with plain parameters are allowed";
+            }
+            if (Regex.IsMatch(m.Groups[2].Value, @"\b(?:out|inout)\b", RegexOptions.CultureInvariant))
+            {
+                return "out and inout parameters are not allowed";
+            }
+            var end = MatchBrace(code, i);
+            if (end < 0)
+            {
+                return "unbalanced braces";
+            }
+            funcs.Add((m.Groups[1].Value, i, end));
+            i = end;
+        }
     }
 
     private static bool CallsFunction(string text, string name) =>
@@ -295,37 +402,6 @@ public sealed class CustomEffectStore
             else if (code[i] == '}' && --depth == 0)
             {
                 return i + 1;
-            }
-        }
-        return -1;
-    }
-
-    // End (exclusive) of the statement or block starting at the first non-space char from start, or -1.
-    private static int BodyEnd(string code, int start)
-    {
-        var i = start;
-        while (i < code.Length && char.IsWhiteSpace(code[i]))
-        {
-            i++;
-        }
-        if (i >= code.Length)
-        {
-            return -1;
-        }
-        if (code[i] == '{')
-        {
-            return MatchBrace(code, i);
-        }
-        int paren = 0, brace = 0;
-        for (; i < code.Length; i++)
-        {
-            switch (code[i])
-            {
-                case '(': paren++; break;
-                case ')': paren--; break;
-                case '{': brace++; break;
-                case '}': brace--; break;
-                case ';' when paren == 0 && brace == 0: return i + 1;
             }
         }
         return -1;
@@ -370,8 +446,7 @@ public sealed class CustomEffectStore
             }
             var next = new List<CustomEffectEntry>(_entries);
             var idx = next.FindIndex(x => x.Id == id);
-            var replacedSkipped = _skipped.Count(x => x.Id == id);
-            if (idx < 0 && next.Count + _skipped.Count - replacedSkipped >= MaxEntries)
+            if (idx < 0 && next.Count >= MaxEntries)
             {
                 return (null, $"at most {MaxEntries} custom effects");
             }

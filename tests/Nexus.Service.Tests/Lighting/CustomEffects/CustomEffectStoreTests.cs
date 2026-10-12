@@ -261,13 +261,6 @@ public sealed class CustomEffectStoreTests : IDisposable
     }
 
     [Fact]
-    public void Unbraced_nested_loops_still_multiply()
-    {
-        var frag = CustomFrags.Frag(extra: "void f() { float x = 0.0; for (int a = 0; a < 20; a++) for (int b = 0; b < 20; b++) x += 1.0; }\n");
-        Assert.Contains("nested", CustomEffectStore.Validate("abc", "n", "", frag));
-    }
-
-    [Fact]
     public void Sibling_loops_do_not_multiply()
     {
         var frag = CustomFrags.Frag(extra: "void f() { for (int a = 0; a < 60; a++) { } for (int b = 0; b < 60; b++) { } }\n");
@@ -352,6 +345,102 @@ public sealed class CustomEffectStoreTests : IDisposable
             Assert.True(store.EnsureAvailable());
             Assert.Equal(id, store.List().Single().Id);
             Assert.Equal(original, File.ReadAllText(path));
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Theory]
+    [InlineData("void f() { float c = 0.0; for (int i = 0; i < 2; i++) c += 1.0; }", "braces")]
+    [InlineData("void f() { float c = 0.0; for (int i = 0; i < 2; i++) if (c > 1e9) c += 1.0; else i--; }", "braces")]
+    [InlineData("void f() { float c = 0.0; for (int a = 0; a < 20; a++) for (int b = 0; b < 20; b++) c += 1.0; }", "braces")]
+    [InlineData("void g(inout float x) { x += 1.0; }", "inout")]
+    [InlineData("void g(out float x) { x = 1.0; }", "out")]
+    [InlineData("float g(float x);", "prototype")]
+    [InlineData("float g(float x);\nfloat h(float x) { return x; }", "prototype")]
+    [InlineData("void f() { for (int i = 0; i < 2147483647; i++) { } }", "-64 to 64")]
+    [InlineData("void f() { for (int i = -2147483647; i < 2; i++) { } }", "-64 to 64")]
+    [InlineData("void f() { for (int i = 0; i < 65; i++) { } }", "-64 to 64")]
+    [InlineData("highp float g(float x) { return x; }", "plain parameters")]
+    [InlineData("vec2[2] g(float x) { return vec2[2](vec2(x), vec2(x)); }", "plain parameters")]
+    [InlineData("mat2x2 g(float x) { return mat2x2(x); }", "plain parameters")]
+    [InlineData("struct S { float a; }; S g(float x) { return S(x); }", "plain parameters")]
+    [InlineData("float g(float x[(2)]) { return x[0]; }", "plain parameters")]
+    [InlineData("float g(float x[2]) { return x[0]; }", "plain parameters")]
+    public void The_allowlist_rejects_shapes_the_studio_never_emits(string code, string expected)
+    {
+        var msg = CustomEffectStore.Validate("abc", "n", "", CustomFrags.Frag(extra: code + "\n"));
+        Assert.NotNull(msg);
+        Assert.Contains(expected, msg);
+    }
+
+    [Theory]
+    [InlineData("block-cells.frag")]
+    [InlineData("block-clouds.frag")]
+    [InlineData("block-warp.frag")]
+    [InlineData("mods.frag")]
+    [InlineData("starter-lavaLamp.frag")]
+    [InlineData("starter-starWarp.frag")]
+    public void Studio_generated_shaders_pass(string fixture)
+    {
+        var frag = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "CustomEffects", fixture));
+        Assert.Null(CustomEffectStore.Validate("abc", "n", "", frag));
+        Assert.Null(CustomEffectStore.ValidateLoops(frag));
+    }
+
+    [Fact]
+    public void The_entry_cap_does_not_count_skipped_entries()
+    {
+        var entries = new List<string>();
+        for (var i = 0; i < 5; i++)
+        {
+            entries.Add("{\"id\":\"bad" + i + "\",\"name\":\"old\",\"recipe\":\"\",\"frag\":\"#version 330 core\\nvoid main() { while (true) { } }\",\"updatedAt\":1}");
+        }
+        File.WriteAllText(Path.Combine(_dir, "custom-effects.json"), "{\"entries\":[" + string.Join(",", entries) + "]}");
+        var store = new CustomEffectStore(_dir);
+        var ids = Enumerable.Range(0, CustomEffectStore.MaxEntries).Select(_ => CustomFrags.NewId()).ToList();
+
+        foreach (var id in ids)
+        {
+            Assert.Null(store.Put(id, "x", "", CustomFrags.Frag()).Error);
+        }
+
+        Assert.NotNull(store.Put(CustomFrags.NewId(), "over", "", CustomFrags.Frag()).Error);
+        foreach (var id in ids)
+        {
+            ShaderLibrary.UnregisterCustom(id);
+        }
+    }
+
+    [Fact]
+    public void List_and_Get_retry_an_unreadable_store_and_raise_Recovered()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        var path = Path.Combine(_dir, "custom-effects.json");
+        var id = CustomFrags.NewId();
+        new CustomEffectStore(_dir).Put(id, "keep", "", CustomFrags.Frag());
+        ShaderLibrary.UnregisterCustom(id);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var store = new CustomEffectStore(_dir);
+            var recovered = 0;
+            store.Recovered += () => recovered++;
+            Assert.Empty(store.List());
+            Assert.Null(store.Get(id));
+            Assert.Equal(0, recovered);
+
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+            Assert.Equal("keep", store.Get(id)!.Name);
+            Assert.Single(store.List());
+            Assert.Equal(1, recovered);
+            Assert.True(ShaderLibrary.IsKnownKey("custom:" + id));
         }
         finally
         {

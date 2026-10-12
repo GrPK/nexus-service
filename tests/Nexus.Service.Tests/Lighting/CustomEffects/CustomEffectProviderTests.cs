@@ -170,6 +170,71 @@ public sealed class CustomEffectProviderTests : IDisposable
     }
 
     [Fact]
+    public void A_lost_swap_is_retried_until_the_newest_source_is_running()
+    {
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag());
+        _provider.StartAnimate(Start(Key));
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag(gainDefault: 1.0f));
+        ShaderEffect? interloper = null;
+        var calls = 0;
+        _provider.BeforeCustomSwap = () =>
+        {
+            // A concurrent reload of the same id wins the first race with an older build.
+            if (calls++ == 0)
+            {
+                interloper = new ShaderEffect(Key, _gpu, CustomFrags.Frag());
+                _engine.SwapEffectIfCurrent(_engine.CurrentEffect!, interloper);
+            }
+        };
+
+        _provider.ReloadCustomEffect(Key);
+
+        Assert.Equal(2, calls);
+        Assert.NotNull(interloper);
+        Assert.NotSame(interloper, _engine.CurrentEffect);
+        Assert.Equal(Key, _engine.CurrentEffectName);
+    }
+
+    [Fact]
+    public void A_store_that_recovers_rebuilds_the_running_custom_effect()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        var store = new CustomEffectStore(_dir);
+        store.Put(_id, "Mine", "{}", CustomFrags.Frag());
+        _provider.Dispose();
+        _gpu.Dispose();
+        ShaderLibrary.UnregisterCustom(_id);
+        var path = Path.Combine(_dir, "custom-effects.json");
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var unreadable = new CustomEffectStore(_dir);
+            _engine = new LightingEngine();
+            _gpu = new GpuContext(160, 90);
+            _config = new JsonConfigStore(Path.Combine(_dir, "settings.json"));
+            _provider = new LightingProvider(_config, _engine, new LightingOutputHub(), _gpu, new MediaLibrary(),
+                new Nexus.Service.Platform.DefaultMonitorEnumerator(), customEffects: unreadable);
+            _provider.StartAnimate(Start(Key));
+            var standIn = _engine.CurrentEffect;
+            Assert.False(ShaderLibrary.IsKnownKey(Key));
+
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            Assert.NotEmpty(unreadable.List());
+
+            Assert.True(ShaderLibrary.IsKnownKey(Key));
+            Assert.NotSame(standIn, _engine.CurrentEffect);
+            Assert.Equal(Key, _engine.CurrentEffectName);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Fact]
     public void Drop_leaves_a_different_running_effect_alone()
     {
         _provider.StartAnimate(Start("plasma"));

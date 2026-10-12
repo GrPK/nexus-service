@@ -85,7 +85,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     private readonly FeatureGates _gates;
 
-    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null)
+    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null)
     {
         _gates = gates ?? FeatureGates.AllEnabled;
         _store = store;
@@ -111,6 +111,15 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _engine.OnFrame += frame => _ = _hub.BroadcastBinaryAsync(frame);
         _engine.OnEffectChanged += ReconcileAudioCapture;
         _scanner?.OnScanComplete = OnGameScanComplete;
+        // A store that was unreadable at boot registers its sources late; a custom effect
+        // restored meanwhile is running the rainbow stand-in until this rebuilds it.
+        customEffects?.Recovered += () =>
+        {
+            if (_engine.CurrentEffect is ShaderEffect running && ShaderLibrary.IsCustomKey(running.Name))
+            {
+                ReloadCustomEffect(running.Name);
+            }
+        };
     }
 
     /// <summary>
@@ -716,12 +725,16 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
+    // Test seam: runs between reading the source and swapping it in.
+    internal Action? BeforeCustomSwap;
+
     public void ReloadCustomEffect(string key)
     {
         ClearThumbnails(key);
-        // A second pass covers a concurrent PUT of the same id that swapped in an older source
-        // between our read and our swap; the engine must never keep older source than the store.
-        for (var attempt = 0; attempt < 2; attempt++)
+        // A lost swap means another thread changed the effect after we read it (often a
+        // concurrent PUT of the same id). Re-read until our swap lands or the running effect
+        // is no longer this key, so the engine never keeps older source than the store.
+        for (var attempt = 0; attempt < 32; attempt++)
         {
             if (_engine.CurrentEffect is not ShaderEffect cur || cur.Name != key || !ShaderLibrary.IsKnownKey(key))
             {
@@ -739,6 +752,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             {
                 return;
             }
+            BeforeCustomSwap?.Invoke();
             // Compare-and-swap under the engine lock: a concurrent effect switch wins, and
             // paused, frozen and blackout state survive the swap.
             if (_engine.SwapEffectIfCurrent(cur, fresh))
