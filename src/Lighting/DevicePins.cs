@@ -83,8 +83,8 @@ public sealed class DevicePinTracker
     /// not a Static fill or pattern. Keys are lower case, as StartAnimate stores them.</summary>
     public static bool IsAnimateEffect(string? key) =>
         !string.IsNullOrEmpty(key)
-        && AnimateTemplateDefaults.All.ContainsKey(key)
-        && !StaticEffectCatalog.Contains(key);
+        && ((AnimateTemplateDefaults.All.ContainsKey(key) && !StaticEffectCatalog.Contains(key))
+            || Nexus.Service.Lighting.Engine.Gpu.ShaderLibrary.IsSweepEffect(key));
 
     /// <summary>Null when the pin is acceptable, else why not.</summary>
     public static string? Validate(DevicePin? pin)

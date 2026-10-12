@@ -86,6 +86,13 @@ public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
     }
 
     [Fact]
+    public async Task A_simple_mode_sweep_is_accepted_as_an_animate_pin()
+    {
+        var res = await Pin("\"pin-f1\"", """{"kind":"animate","effect":"sweeprainbow"}""");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+    }
+
+    [Fact]
     public async Task A_static_effect_from_the_catalog_is_accepted()
     {
         var res = await Pin("\"pin-d1\"", """{"kind":"static","effect":"gradientlinear","hue":0.25,"params":{"u_angle":90}}""");

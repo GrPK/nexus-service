@@ -176,6 +176,7 @@ internal sealed class AutoRestoreOnStart : BackgroundService
                 _lighting.StartStatic(new StaticHeadlessStart
                 {
                     Effect = staticEffect,
+                    Color = s.Static.Color,
                     Intensity = look.Intensity,
                     Hue = look.Hue,
                     Colorize = look.Colorize,

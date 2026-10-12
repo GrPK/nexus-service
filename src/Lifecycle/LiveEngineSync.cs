@@ -113,6 +113,7 @@ public static class LiveEngineSync
                     lighting.StartStatic(new StaticHeadlessStart
                     {
                         Effect = key,
+                        Color = s.Static.Color,
                         Intensity = look.Intensity,
                         Hue = look.Hue,
                         Colorize = look.Colorize,

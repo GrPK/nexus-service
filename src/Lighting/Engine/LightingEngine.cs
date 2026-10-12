@@ -201,6 +201,9 @@ public sealed class LightingEngine : IDisposable
     // Device id to the canvas it samples this tick; a null canvas means the
     // main one. Absent means no animate/mirror pin (or its source failed to render).
     private readonly Dictionary<string, CanvasBuffer?> _pinnedDevices = new(StringComparer.Ordinal);
+    // Devices pinned to a Simple-mode sweep: they read the whole canvas, as every
+    // device does globally while a sweep is the active effect.
+    private readonly HashSet<string> _pinFullFrame = new(StringComparer.Ordinal);
     private long _pinTick;
     private bool[] _gameSkip = Array.Empty<bool>();
 
@@ -795,6 +798,7 @@ public sealed class LightingEngine : IDisposable
     {
         var tracker = Pins;
         _pinnedDevices.Clear();
+        _pinFullFrame.Clear();
         if (tracker is null || !tracker.Any)
         {
             if (_pinRenders.Count > 0)
@@ -831,6 +835,10 @@ public sealed class LightingEngine : IDisposable
             else
             {
                 continue;
+            }
+            if (key != MirrorPinKey && Gpu.ShaderLibrary.IsSweepEffect(key))
+            {
+                _pinFullFrame.Add(dev.Id);
             }
             // Pinned to what is already running globally: share its canvas.
             var shared = key == MirrorPinKey ? ScreenEffectName : key;
@@ -1135,7 +1143,7 @@ public sealed class LightingEngine : IDisposable
             // unturned in units, rotated about (frameCx, frameCy), and only
             // then scaled onto the pixel grid. A stack slot is cut from the
             // unturned rect and turns with the whole frame.
-            var fullFrame = FullFrameSampling;
+            var fullFrame = FullFrameSampling || (useLocks && _pinFullFrame.Contains(dev.Id));
             // A full-frame device's cell is a slice of the whole canvas, so it
             // takes the plain cell mean instead of the spot. See SampleLedBox.
             var rectX = fullFrame ? 0f : dev.X;

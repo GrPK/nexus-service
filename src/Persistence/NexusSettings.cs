@@ -829,6 +829,8 @@ public sealed class StaticSettings
 {
     /// <summary>Key of the last-selected static fill or pattern.</summary>
     public string Effect { get; set; } = Nexus.Service.Lighting.StaticEffectCatalog.DefaultEffect;
+    /// <summary>"#rrggbb" when the global Static look is one exact flat colour (an unpinned device shows it instead of <see cref="Effect"/>); null when it is the effect. Mirrored into <see cref="LightingSettings.StaticColor"/>.</summary>
+    public string? Color { get; set; }
     /// <summary>Sparse per-key look, same delta-from-resolved-slot rule as
     /// <see cref="AnimateSettings.States"/>. Speed is unused - static runs at 0.</summary>
     public Dictionary<string, AnimateEffectState> States { get; set; } = new();
@@ -951,6 +953,8 @@ public sealed class LightingPresetLook
     public string Sync { get; set; } = "";
     public string AnimateEffect { get; set; } = "";
     public string StaticEffect { get; set; } = "";
+    /// <summary>Exact flat colour of the global Static look, "#rrggbb"; null when it is <see cref="StaticEffect"/>.</summary>
+    public string? StaticColor { get; set; }
     /// <summary>Resolved look for <see cref="AnimateEffect"/>, stored dense.
     /// <see cref="AnimateSettings.States"/> is keyed by effect and shared by every
     /// preset, so a reference would collide between two presets on one effect.</summary>

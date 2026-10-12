@@ -182,6 +182,8 @@ public class ShaderParam
 public class StaticHeadlessStart
 {
     public string Effect { get; set; } = "";
+    /// <summary>"#rrggbb". When set the global static output is exactly that flat colour for every unpinned device and the fields below are inert. Empty keeps the effect look.</summary>
+    public string? Color { get; set; }
     public float Intensity { get; set; }
     public float Hue { get; set; }
     public float Colorize { get; set; }
@@ -340,6 +342,8 @@ public class ScreenSyncOptions
 {
     public string[] Effects { get; set; } = System.Array.Empty<string>();
     public List<ScreenSyncMonitor> Monitors { get; set; } = new();
+    /// <summary>The persisted screen the global Mirror and every mirror pin capture; empty is the default screen.</summary>
+    public string SelectedMonitor { get; set; } = "";
 
     /// <summary>
     /// How the user chooses which screen to mirror. "app" - the client picks a

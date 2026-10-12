@@ -305,6 +305,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     {
         Effects = new[] { "average" },
         Monitors = _monitors.Enumerate(),
+        SelectedMonitor = _mirrorMonitor,
         // On Linux the Wayland portal owns screen selection (the app can't pick a
         // monitor for the user), so the client offers a "Change screen" action
         // that re-opens the system picker rather than a monitor dropdown.
@@ -448,6 +449,11 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             return;
         }
         EnsureRgbActive();
+        if (StaticColorHex.TryParse(body.Color, out var flatR, out var flatG, out var flatB))
+        {
+            StartFlatStatic(body, flatR, flatG, flatB);
+            return;
+        }
         var name = (body.Effect ?? "").ToLowerInvariant();
         if (!StaticEffectCatalog.Contains(name))
         {
@@ -500,6 +506,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             s.Lighting.Sync = "static";
             s.Lighting.Static.Effect = name;
+            s.Lighting.Static.Color = null;
             var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, name);
             // The slot carries an animate speed and may carry intensity 0; both
             // are coerced here so an untouched look still compares equal and
@@ -522,6 +529,27 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             {
                 s.Lighting.Static.States[name] = incoming;
             }
+            LightingPresetLooks.CaptureIntoActive(s);
+        });
+    }
+
+    /// <summary>The global Static look as one exact flat colour: every unpinned device shows it.</summary>
+    private void StartFlatStatic(StaticHeadlessStart body, byte r, byte g, byte b)
+    {
+        _engine.SetEffect(new FlatColorEffect(r, g, b));
+        _engine.SetFrozen(true);
+        if (!body.Persist)
+        {
+            return;
+        }
+        var hex = $"#{r:x2}{g:x2}{b:x2}";
+        _store.Update(s =>
+        {
+            s.Lighting.Sync = "static";
+            s.Lighting.Static.Color = hex;
+            s.Lighting.StaticColor.R = r;
+            s.Lighting.StaticColor.G = g;
+            s.Lighting.StaticColor.B = b;
             LightingPresetLooks.CaptureIntoActive(s);
         });
     }
@@ -761,6 +789,14 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
                         continue;
                     }
                     var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, key);
+                    if (slot is null && ShaderLibrary.IsSweepEffect(key))
+                    {
+                        // Simple mode's sweeps have no preset bundle: use what simple
+                        // mode last persisted for them, else the plain defaults.
+                        slot = s.Lighting.Animate.States.TryGetValue(key, out var persisted) && persisted is not null
+                            ? persisted
+                            : new Nexus.Service.Persistence.AnimateEffectState();
+                    }
                     if (slot is null)
                     {
                         continue;

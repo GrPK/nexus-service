@@ -399,4 +399,97 @@ public class DevicePinEngineTests : IDisposable
         rig.Provider.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart { Monitor = "" });
         Assert.Equal("", rig.Store.Load().Lighting.ScreenMonitor);
     }
+
+    private sealed class HalfAndHalf : IEffect
+    {
+        public string Name => "sweeprainbow";
+        public void RenderFrame(CanvasBuffer canvas, double tickMs)
+        {
+            for (int y = 0; y < canvas.Height; y++)
+                for (int x = 0; x < canvas.Width; x++)
+                    canvas.SetPixel(x, y, x < canvas.Width / 2 ? (byte)255 : (byte)0, 0, x < canvas.Width / 2 ? (byte)0 : (byte)255);
+        }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task A_device_pinned_to_a_sweep_reads_the_whole_canvas()
+    {
+        Assert.True(DevicePinTracker.IsAnimateEffect("sweeprainbow"));
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "sweeprainbow" });
+        // A small strip parked in the red half of the canvas.
+        var dev = new DeviceFrame(0, "dev-a", 10, x: 20, y: 20, w: 100, h: 20);
+        using var engine = Engine(pins, dev, (_, _) => new HalfAndHalf());
+        engine.SetEffect(new Fill("green", 0, 255, 0));
+
+        var leds = await WaitFor(dev, l => l[2] > 200 || l[27] > 200);
+        Assert.Equal(255, leds[0]);        // first LED: red end
+        Assert.Equal(255, leds[9 * 3 + 2]); // last LED: blue end
+    }
+
+    // ---- global static colour, monitors list, mirror post-process outside Mirror ----
+
+    [Fact]
+    public async Task A_global_static_colour_is_exact_for_unpinned_devices_and_survives_presets_and_a_restart()
+    {
+        using var rig = new Rig(_tempDir);
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+
+        rig.Provider.StartStatic(new Nexus.Service.Models.Lighting.StaticHeadlessStart { Color = "#336699" });
+
+        var leds = await WaitFor(dev, l => l[0] == 0x33);
+        Assert.Equal(new byte[] { 0x33, 0x66, 0x99 }, leds[0..3]);
+        var lighting = rig.Store.Load().Lighting;
+        Assert.Equal("#336699", lighting.Static.Color);
+        Assert.Equal((0x33, 0x66, 0x99), (lighting.StaticColor.R, lighting.StaticColor.G, lighting.StaticColor.B));
+        Assert.Equal("static", lighting.Sync);
+
+        // A preset carries it and restores it.
+        var look = LightingPresetLooks.Capture(lighting);
+        Assert.Equal("#336699", look.StaticColor);
+        lighting.Static.Color = null;
+        LightingPresetLooks.Apply(lighting, look);
+        Assert.Equal("#336699", lighting.Static.Color);
+
+        // A pin still wins over the global colour.
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#ff0000" });
+        var pinned = await WaitFor(dev, l => l[0] == 255);
+        Assert.Equal(255, pinned[0]);
+        Assert.Equal(0, pinned[1]);
+    }
+
+    [Fact]
+    public void Picking_an_effect_after_a_colour_returns_the_global_static_look_to_the_effect()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Provider.StartStatic(new Nexus.Service.Models.Lighting.StaticHeadlessStart { Color = "#336699" });
+        rig.Provider.StartStatic(new Nexus.Service.Models.Lighting.StaticHeadlessStart { Effect = "simplered" });
+        Assert.Null(rig.Store.Load().Lighting.Static.Color);
+        Assert.Equal("simplered", rig.Store.Load().Lighting.Static.Effect);
+    }
+
+    [Fact]
+    public void The_monitor_list_reports_the_persisted_selection()
+    {
+        using var rig = new Rig(_tempDir, store => store.Update(s => s.Lighting.ScreenMonitor = "2"));
+        Assert.Equal("2", rig.Provider.GetScreenSyncOptions().SelectedMonitor);
+    }
+
+    [Fact]
+    public void Updating_the_mirror_post_process_outside_mirror_changes_no_mode()
+    {
+        using var rig = new Rig(_tempDir);
+        var running = new Fill("plasma", 0, 255, 0);
+        rig.Engine.SetEffect(running);
+        rig.Store.Update(s => s.Lighting.Sync = "plasma");
+
+        rig.Provider.UpdateScreenEffect(0.3f, 0.2f, 1f, 1f, false, false, persist: true);
+
+        Assert.Same(running, rig.Engine.CurrentEffect);
+        Assert.Equal("plasma", rig.Store.Load().Lighting.Sync);
+        Assert.Equal(0.3f, rig.Store.Load().Lighting.ScreenEffect.Hue, 3);
+        Assert.Equal(0.3f, rig.Provider.ScreenPostProcess.Hue, 3);
+    }
 }
