@@ -91,7 +91,15 @@ public sealed class CustomEffectStore
         }
         if (recovered)
         {
-            Recovered?.Invoke();
+            try
+            {
+                Recovered?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                // The load already latched as recovered; a subscriber's failure must not fail the caller.
+                Console.Error.WriteLine($"[custom-effects] recovery handler failed: {ex.GetType().Name}: {ex.Message}");
+            }
         }
         return available;
     }
@@ -183,6 +191,12 @@ public sealed class CustomEffectStore
     // The only function shape the Studio emits: a plain return type and a flat parameter list.
     private static readonly Regex FuncHeader = new(
         @"^\s*(?:void|float|vec2|vec3|vec4|mat2|int|bool)\s+([A-Za-z_]\w*)\s*\(([^()\[\]]*)\)\s*$",
+        RegexOptions.CultureInvariant);
+
+    // A declaration without a body at the start of a statement inside a function:
+    // `[qualifier] type name(` (return and else lead real statements, so they are excluded).
+    private static readonly Regex LocalPrototype = new(
+        @"(?:^|[;{}])\s*(?!(?:return|else)\b)(?:[A-Za-z_]\w*(?:\s*\[[^\]]*\])?\s+)+[A-Za-z_]\w*\s*\(",
         RegexOptions.CultureInvariant);
 
     // `type name (` with nothing between: a declaration without a body.
@@ -280,18 +294,34 @@ public sealed class CustomEffectStore
             open.Push((l.BodyEnd, product));
         }
 
-        // Functions that loop, directly or through an earlier looping function (GLSL needs
-        // definition before use and forbids recursion, so one pass in order is enough).
-        var loopFns = new List<string>();
         foreach (var f in funcs)
         {
-            var hasLoop = loops.Any(l => l.Pos > f.Open && l.Pos < f.End)
-                || loopFns.Any(n => CallsFunction(code.Substring(f.Open, f.End - f.Open), n));
-            if (hasLoop)
+            if (LocalPrototype.IsMatch(code.Substring(f.Open, f.End - f.Open)))
             {
-                loopFns.Add(f.Name);
+                return "function declarations are not allowed inside a function body";
             }
         }
+        // Functions that loop, directly or through a looping callee, to a fixed point.
+        var loopFns = new List<string>();
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var f in funcs)
+            {
+                if (loopFns.Contains(f.Name))
+                {
+                    continue;
+                }
+                var text = code.Substring(f.Open, f.End - f.Open);
+                if (loops.Any(l => l.Pos > f.Open && l.Pos < f.End) || loopFns.Any(n => CallsFunction(text, n)))
+                {
+                    loopFns.Add(f.Name);
+                    changed = true;
+                }
+            }
+        }
+        while (changed);
         foreach (var l in loops)
         {
             var body = code.Substring(l.BodyStart, l.BodyEnd - l.BodyStart);
@@ -385,8 +415,9 @@ public sealed class CustomEffectStore
     private static bool WritesVariable(string body, string v)
     {
         var id = Regex.Escape(v);
-        return Regex.IsMatch(body, @"(?<![\w.])" + id + @"(?!\w)\s*(?:\+\+|--|(?:<<|>>|[-+*/%&|^])?=(?!=))", RegexOptions.CultureInvariant)
-            || Regex.IsMatch(body, @"(?:\+\+|--)\s*" + id + @"(?!\w)", RegexOptions.CultureInvariant);
+        // Parentheses around the variable do not make it a different lvalue: (i) = 0, (i)--, --(i).
+        return Regex.IsMatch(body, @"(?<![\w.])\(*\s*" + id + @"(?!\w)(?:\s*\))*(?:\s*\.\s*\w+)?\s*(?:\+\+|--|(?:<<|>>|[-+*/%&|^])?=(?!=))", RegexOptions.CultureInvariant)
+            || Regex.IsMatch(body, @"(?:\+\+|--)(?:\s*\()*\s*" + id + @"(?!\w)", RegexOptions.CultureInvariant);
     }
 
     // Index just past the brace matching the one at openIdx, or -1.
@@ -438,9 +469,11 @@ public sealed class CustomEffectStore
     public (CustomEffectEntry? Entry, string? Error) Put(string id, string name, string recipe, string frag)
     {
         CustomEffectEntry saved;
+        // Outside the lock, so a Recovered handler never runs under it.
+        EnsureAvailable();
         lock (_lock)
         {
-            if (!EnsureAvailable())
+            if (_unavailable)
             {
                 return (null, UnavailableMessage);
             }
@@ -477,9 +510,10 @@ public sealed class CustomEffectStore
 
     public bool Delete(string id)
     {
+        EnsureAvailable();
         lock (_lock)
         {
-            if (!EnsureAvailable())
+            if (_unavailable)
             {
                 return false;
             }

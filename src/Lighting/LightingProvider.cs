@@ -728,13 +728,17 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     // Test seam: runs between reading the source and swapping it in.
     internal Action? BeforeCustomSwap;
 
+    // Each lost swap means another thread changed the effect; a bounded retry keeps a
+    // pathological stream of concurrent edits from spinning this call forever.
+    private const int MaxCustomSwapAttempts = 32;
+
     public void ReloadCustomEffect(string key)
     {
         ClearThumbnails(key);
         // A lost swap means another thread changed the effect after we read it (often a
         // concurrent PUT of the same id). Re-read until our swap lands or the running effect
         // is no longer this key, so the engine never keeps older source than the store.
-        for (var attempt = 0; attempt < 32; attempt++)
+        for (var attempt = 0; attempt < MaxCustomSwapAttempts; attempt++)
         {
             if (_engine.CurrentEffect is not ShaderEffect cur || cur.Name != key || !ShaderLibrary.IsKnownKey(key))
             {

@@ -448,6 +448,120 @@ public sealed class CustomEffectStoreTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("(i) = -1;")]
+    [InlineData("((i)) = (0);")]
+    [InlineData("--(i);")]
+    [InlineData("++ ( i );")]
+    [InlineData("(i)--;")]
+    [InlineData("(i)++;")]
+    [InlineData("(i) -= 1;")]
+    [InlineData("( ( i ) ) += 1;")]
+    [InlineData("i.x = 0;")]
+    public void Parenthesized_and_member_writes_to_the_loop_variable_are_rejected(string statement)
+    {
+        var frag = CustomFrags.Frag(extra: "void f() { for (int i = 0; i < 2; i++) { " + statement + " } }\n");
+        Assert.Contains("loop variable", CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void Parenthesized_reads_and_comparisons_of_the_loop_variable_are_fine()
+    {
+        var frag = CustomFrags.Frag(extra: "void f() { float s = 0.0; for (int i = 0; i < 4; i++) { if ((i) == 2 || (i) <= 1 || ((i)) >= 3 || (i) != 9) { s += float((i)) - (float(i)); } } }\n");
+        Assert.Null(CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Theory]
+    [InlineData("void f() { float b(float y); }")]
+    [InlineData("void f() { float s = 0.0; float b(float y); s = b(1.0); }")]
+    [InlineData("void f() { for (int i = 0; i < 2; i++) { vec3 b(float y); } }")]
+    [InlineData("void f() { const float b(float y); }")]
+    public void Function_declarations_inside_a_body_are_rejected(string code)
+    {
+        Assert.Contains("inside a function body", CustomEffectStore.Validate("abc", "n", "", CustomFrags.Frag(extra: code + "\n")));
+    }
+
+    [Fact]
+    public void A_deep_chain_through_local_prototypes_is_rejected()
+    {
+        var frag = CustomFrags.Frag(extra:
+            "float a(float x) { float b(float y); return b(x); }\n"
+            + "float b(float y) { float c(float z); return c(y); }\n"
+            + "float c(float z) { float s = 0.0; for (int i = 0; i < 64; i++) { s += z; } return s; }\n"
+            + "void f() { float t = 0.0; for (int i = 0; i < 64; i++) { t += a(1.0); } }\n");
+        Assert.NotNull(CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void A_wrapper_chain_of_defined_functions_is_flagged_through_every_level()
+    {
+        var frag = CustomFrags.Frag(extra:
+            "float c(float z) { float s = 0.0; for (int i = 0; i < 64; i++) { s += z; } return s; }\n"
+            + "float b(float y) { return c(y); }\n"
+            + "float a(float x) { return b(x); }\n"
+            + "void f() { float t = 0.0; for (int i = 0; i < 64; i++) { t += a(1.0); } }\n");
+        Assert.Contains("'a'", CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void A_throwing_Recovered_handler_does_not_fail_the_caller_and_the_recovery_stays_latched()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        var path = Path.Combine(_dir, "custom-effects.json");
+        var id = CustomFrags.NewId();
+        new CustomEffectStore(_dir).Put(id, "keep", "", CustomFrags.Frag());
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var store = new CustomEffectStore(_dir);
+            var calls = 0;
+            store.Recovered += () =>
+            {
+                calls++;
+                throw new InvalidOperationException("boom");
+            };
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+            Assert.Equal("keep", store.Get(id)!.Name);
+            Assert.Single(store.List());
+            Assert.Equal(1, calls);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Fact]
+    public void Recovered_is_raised_outside_the_store_lock_even_when_a_write_triggers_the_retry()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        var path = Path.Combine(_dir, "custom-effects.json");
+        var id = CustomFrags.NewId();
+        new CustomEffectStore(_dir).Put(id, "keep", "", CustomFrags.Frag());
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var store = new CustomEffectStore(_dir);
+            var otherThreadGotTheLock = false;
+            store.Recovered += () => otherThreadGotTheLock = Task.Run(() => store.List()).Wait(TimeSpan.FromSeconds(3));
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+            Assert.Null(store.Put(CustomFrags.NewId(), "x", "", CustomFrags.Frag()).Error);
+            Assert.True(otherThreadGotTheLock);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
     [Fact]
     public void A_rejected_loop_says_why()
     {
