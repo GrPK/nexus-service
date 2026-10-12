@@ -36,21 +36,31 @@ public delegate string? CustomFragCompiler(string frag);
 public sealed class CustomEffectStore
 {
     public const int MaxNameLength = 40;
-    public const int MaxRecipeBytes = 64 * 1024;
-    public const int MaxFragBytes = 64 * 1024;
+    public const int MaxRecipeBytes = 16 * 1024;
+    public const int MaxFragBytes = 32 * 1024;
     public const int MaxEntries = 200;
     private const string VersionLine = "#version 330 core";
 
-    private static readonly Regex IdPattern = new("^[a-z0-9]{1,32}$", RegexOptions.CultureInvariant);
+    /// <summary>Most iterations one loop may run; a compiled shader that never finishes would wedge the GL thread.</summary>
+    public const int MaxLoopIterations = 64;
+
+    // \z, not $: $ also matches before a trailing newline.
+    private static readonly Regex IdPattern = new(@"^[a-z0-9]{1,32}\z", RegexOptions.CultureInvariant);
+    private static readonly Regex ForHeader = new(
+        @"\G\s*\(\s*int\s+([A-Za-z_]\w*)\s*=\s*(-?\d+)\s*;\s*\1\s*(<=|<)\s*(-?\d+)\s*;\s*\1\s*\+\+\s*\)",
+        RegexOptions.CultureInvariant);
 
     private readonly string _path;
     private readonly object _lock = new();
+    private readonly Func<long> _clock;
     private List<CustomEffectEntry> _entries;
 
     public CustomEffectStore() : this(NexusDataPaths.NexusRoot()) { }
 
-    public CustomEffectStore(string dir)
+    /// <param name="clock">Unix milliseconds; defaults to the wall clock. UpdatedAt is strictly increasing regardless.</param>
+    public CustomEffectStore(string dir, Func<long>? clock = null)
     {
+        _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         _path = Path.Combine(dir, "custom-effects.json");
         _entries = Read();
         foreach (var e in _entries)
@@ -114,7 +124,79 @@ public sealed class CustomEffectStore
         {
             return $"frag must start with {VersionLine}";
         }
+        return ValidateLoops(frag);
+    }
+
+    /// <summary>Only counted for-loops are allowed: no while or do, and every for must be
+    /// `for (int v = lit; v &lt;|&lt;= lit; v++)` running at most <see cref="MaxLoopIterations"/> times.</summary>
+    internal static string? ValidateLoops(string frag)
+    {
+        var code = StripComments(frag);
+        var i = 0;
+        while (i < code.Length)
+        {
+            if (!(char.IsAsciiLetterOrDigit(code[i]) || code[i] == '_'))
+            {
+                i++;
+                continue;
+            }
+            var start = i;
+            while (i < code.Length && (char.IsAsciiLetterOrDigit(code[i]) || code[i] == '_'))
+            {
+                i++;
+            }
+            var word = code.AsSpan(start, i - start);
+            if (word.SequenceEqual("while") || word.SequenceEqual("do"))
+            {
+                return $"'{word}' loops are not allowed; use a bounded for loop like for (int i = 0; i < 5; i++)";
+            }
+            if (!word.SequenceEqual("for"))
+            {
+                continue;
+            }
+            var m = ForHeader.Match(code, i);
+            if (!m.Success || m.Index != i)
+            {
+                return "for loops must look like for (int i = 0; i < 5; i++) with integer literal bounds";
+            }
+            if (!long.TryParse(m.Groups[2].Value, out var lo) || !long.TryParse(m.Groups[4].Value, out var hi))
+            {
+                return "for loop bounds are out of range";
+            }
+            var count = hi - lo + (m.Groups[3].Value == "<=" ? 1 : 0);
+            if (count > MaxLoopIterations)
+            {
+                return $"a for loop may run at most {MaxLoopIterations} iterations";
+            }
+        }
         return null;
+    }
+
+    private static string StripComments(string src)
+    {
+        var sb = new System.Text.StringBuilder(src.Length);
+        var i = 0;
+        while (i < src.Length)
+        {
+            if (src[i] == '/' && i + 1 < src.Length && src[i + 1] == '/')
+            {
+                while (i < src.Length && src[i] != '\n')
+                {
+                    i++;
+                }
+            }
+            else if (src[i] == '/' && i + 1 < src.Length && src[i + 1] == '*')
+            {
+                var end = src.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = end < 0 ? src.Length : end + 2;
+                sb.Append(' ');
+            }
+            else
+            {
+                sb.Append(src[i++]);
+            }
+        }
+        return sb.ToString();
     }
 
     /// <summary>Insert or replace. Returns the saved entry, or an error message when the entry cap rejects a new id.</summary>
@@ -135,7 +217,7 @@ public sealed class CustomEffectStore
                 Name = name.Trim(),
                 Recipe = recipe ?? "",
                 Frag = frag,
-                UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                UpdatedAt = Math.Max(_clock(), next.Count == 0 ? 0 : next.Max(x => x.UpdatedAt) + 1),
             };
             if (idx < 0)
             {
@@ -188,7 +270,24 @@ public sealed class CustomEffectStore
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[custom-effects] load failed: {ex.GetType().Name}: {ex.Message}");
+            QuarantineUnreadable();
             return new();
+        }
+    }
+
+    // The next write would replace an unreadable file with an empty list; keep it aside instead.
+    private void QuarantineUnreadable()
+    {
+        try
+        {
+            if (File.Exists(_path))
+            {
+                File.Move(_path, _path + ".bad-" + _clock());
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[custom-effects] could not set the unreadable file aside: {ex.Message}");
         }
     }
 

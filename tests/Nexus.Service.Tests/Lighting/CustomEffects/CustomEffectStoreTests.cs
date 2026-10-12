@@ -46,13 +46,12 @@ public sealed class CustomEffectStoreTests : IDisposable
     [Fact]
     public void List_orders_by_UpdatedAt_ascending()
     {
-        var store = new CustomEffectStore(_dir);
+        // A frozen clock: ordering must come from the store, not from wall-clock gaps.
+        var store = new CustomEffectStore(_dir, () => 1000);
         var a = CustomFrags.NewId();
         var b = CustomFrags.NewId();
         store.Put(a, "A", "", CustomFrags.Frag());
-        Thread.Sleep(5);
         store.Put(b, "B", "", CustomFrags.Frag());
-        Thread.Sleep(5);
         store.Put(a, "A2", "", CustomFrags.Frag());
 
         Assert.Equal([b, a], store.List().Select(e => e.Id));
@@ -161,10 +160,66 @@ public sealed class CustomEffectStoreTests : IDisposable
     }
 
     [Fact]
-    public void A_corrupt_file_reads_as_empty()
+    public void A_corrupt_file_reads_as_empty_and_is_set_aside_so_the_next_write_cannot_destroy_it()
     {
-        File.WriteAllText(Path.Combine(_dir, "custom-effects.json"), "{ not json");
-        Assert.Empty(new CustomEffectStore(_dir).List());
+        var path = Path.Combine(_dir, "custom-effects.json");
+        File.WriteAllText(path, "{ not json");
+
+        var store = new CustomEffectStore(_dir, () => 4242);
+
+        Assert.Empty(store.List());
+        Assert.False(File.Exists(path));
+        Assert.Equal("{ not json", File.ReadAllText(path + ".bad-4242"));
+        var id = CustomFrags.NewId();
+        store.Put(id, "n", "", CustomFrags.Frag());
+        Assert.Equal("{ not json", File.ReadAllText(path + ".bad-4242"));
+        Assert.Equal(id, new CustomEffectStore(_dir).List().Single().Id);
+    }
+
+    [Theory]
+    [InlineData("abc\n")]
+    [InlineData("abc\r\n")]
+    public void An_id_with_a_trailing_newline_is_rejected(string id)
+    {
+        Assert.False(CustomEffectStore.IsValidId(id));
+        Assert.NotNull(CustomEffectStore.Validate(id, "n", "", CustomFrags.Frag()));
+    }
+
+    [Theory]
+    [InlineData("for (int j = -1; j <= 1; j++)", true)]
+    [InlineData("for (int i = 0; i < 5; i++)", true)]
+    [InlineData("for(int i=0;i<64;i++)", true)]
+    [InlineData("for (int i = 0; i <= 63; i++)", true)]
+    [InlineData("for (int i = 0; i < 65; i++)", false)]
+    [InlineData("for (int i = 0; i <= 64; i++)", false)]
+    [InlineData("for (int i = -40; i < 40; i++)", false)]
+    [InlineData("for (int i = 0; i < 99999999999999999999; i++)", false)]
+    [InlineData("for (;;)", false)]
+    [InlineData("for (int i = 0; i < 5; i += 1)", false)]
+    [InlineData("for (int i = 0; i > -5; i--)", false)]
+    [InlineData("for (int i = 0; j < 5; i++)", false)]
+    [InlineData("for (int i = 0; i < n; i++)", false)]
+    [InlineData("for (float f = 0.0; f < 5.0; f++)", false)]
+    [InlineData("while (true) { }", false)]
+    [InlineData("do { } while (x < 3);", false)]
+    public void Loops_must_be_bounded_counted_for_loops(string loop, bool allowed)
+    {
+        var frag = CustomFrags.Frag(extra: "void f() { " + loop + " { } }\n");
+        Assert.Equal(allowed, CustomEffectStore.Validate("abc", "n", "", frag) is null);
+    }
+
+    [Fact]
+    public void Loop_words_inside_comments_and_longer_identifiers_are_fine()
+    {
+        var frag = CustomFrags.Frag(extra: "// while (true) do\n/* for (;;) */\nfloat window = 1.0; float undo = 2.0; float format = 3.0;\n");
+        Assert.Null(CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void A_rejected_loop_says_why()
+    {
+        var msg = CustomEffectStore.Validate("abc", "n", "", CustomFrags.Frag(extra: "void f() { while (true) { } }\n"));
+        Assert.Contains("while", msg);
     }
 
     [Fact]

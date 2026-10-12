@@ -562,6 +562,29 @@ public sealed class LightingEngine : IDisposable
         OnEffectChanged?.Invoke();
     }
 
+    /// <summary>
+    /// Replace <paramref name="expected"/> with <paramref name="replacement"/> only if it is
+    /// still the running effect, under the engine lock. Paused, frozen and blackout state
+    /// are left as they are, unlike <see cref="SetEffect"/>. Returns false (replacement
+    /// untouched) when another effect took over meanwhile.
+    /// </summary>
+    public bool SwapEffectIfCurrent(IEffect expected, IEffect replacement)
+    {
+        lock (_lock)
+        {
+            if (!ReferenceEquals(_currentEffect, expected))
+            {
+                return false;
+            }
+            _currentEffect = replacement;
+            try
+            { expected.Dispose(); }
+            catch { }
+        }
+        OnEffectChanged?.Invoke();
+        return true;
+    }
+
     public void Stop()
     {
         lock (_lock)

@@ -103,7 +103,6 @@ public sealed class CustomEffectRoutesTests : IClassFixture<CustomEffectAppFacto
         var a = CustomFrags.NewId();
         var b = CustomFrags.NewId();
         await http.PutAsync(Url(a), Body("A", "", CustomFrags.Frag()));
-        await Task.Delay(5);
         await http.PutAsync(Url(b), Body("B", "", CustomFrags.Frag()));
 
         var list = await Read(await http.GetAsync("/lighting/custom-effects"));
@@ -123,7 +122,9 @@ public sealed class CustomEffectRoutesTests : IClassFixture<CustomEffectAppFacto
         var res = await Desktop().PutAsync(Url(id), Body("n", "", CustomFrags.Frag()));
 
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.False(string.IsNullOrEmpty((await Read(res)).GetProperty("error").GetString()));
+        var body = await Read(res);
+        Assert.True(body.GetProperty("error").GetBoolean());
+        Assert.False(string.IsNullOrEmpty(body.GetProperty("msg").GetString()));
     }
 
     [Fact]
@@ -144,6 +145,24 @@ public sealed class CustomEffectRoutesTests : IClassFixture<CustomEffectAppFacto
         Assert.Equal(HttpStatusCode.BadRequest, (await http.PutAsync(Url(id), Body("n", "", "void main() {}"))).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await http.PutAsync(Url(id), Body("  ", "", CustomFrags.Frag()))).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await http.GetAsync("/lighting/shaders/custom:" + id)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Put_rejects_an_unbounded_loop_with_a_clear_message()
+    {
+        var res = await Desktop().PutAsync(Url(CustomFrags.NewId()),
+            Body("n", "", CustomFrags.Frag(extra: "void f() { while (true) { } }\n")));
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Contains("while", (await Read(res)).GetProperty("msg").GetString());
+    }
+
+    [Fact]
+    public async Task Put_rejects_an_id_with_a_trailing_newline()
+    {
+        var res = await Desktop().PutAsync(Url("abc%0A"), Body("n", "", CustomFrags.Frag()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
     }
 
     [Fact]
@@ -168,7 +187,9 @@ public sealed class CustomEffectRoutesTests : IClassFixture<CustomEffectAppFacto
         var res = await Desktop().PutAsync(Url(id), Body("n", "", CustomFrags.Frag()));
 
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.Equal("0:7(3): error: syntax error", (await Read(res)).GetProperty("error").GetString());
+        var body = await Read(res);
+        Assert.True(body.GetProperty("error").GetBoolean());
+        Assert.Equal("0:7(3): error: syntax error", body.GetProperty("msg").GetString());
         Assert.Null(_factory.Services.GetRequiredService<CustomEffectStore>().Get(id));
     }
 

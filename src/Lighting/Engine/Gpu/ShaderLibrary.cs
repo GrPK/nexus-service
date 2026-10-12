@@ -37,8 +37,8 @@ internal static class ShaderLibrary
 
     // User-made sources mirrored from CustomEffectStore. Self-contained shaders: no prelude.
     private static readonly ConcurrentDictionary<string, string> CustomSources = new(System.StringComparer.Ordinal);
-    // Derived data per custom key, stamped with the source it was computed from so a
-    // read racing a replacement can never leave stale data behind.
+    // Derived data per custom key, stamped with the source it was computed from; a read
+    // whose stamp is not the current source recomputes, so stale data is never served.
     private static readonly ConcurrentDictionary<string, (string Frag, IReadOnlyDictionary<string, ShaderParamSpec> Params, string Tag)> CustomDerived = new();
 
     public static bool IsCustomKey(string key) => key.StartsWith(CustomPrefix, System.StringComparison.Ordinal);
@@ -60,7 +60,51 @@ internal static class ShaderLibrary
     }
 
     /// <summary>Whether a source reads any live audio uniform.</summary>
-    public static bool ReadsAudio(string frag) => frag.Contains("u_audio", System.StringComparison.Ordinal);
+    public static bool ReadsAudio(string frag)
+    {
+        var i = 0;
+        while (i < frag.Length)
+        {
+            var c = frag[i];
+            if (c == '/' && i + 1 < frag.Length && frag[i + 1] == '/')
+            {
+                while (i < frag.Length && frag[i] != '\n')
+                {
+                    i++;
+                }
+            }
+            else if (c == '/' && i + 1 < frag.Length && frag[i + 1] == '*')
+            {
+                var end = frag.IndexOf("*/", i + 2, System.StringComparison.Ordinal);
+                i = end < 0 ? frag.Length : end + 2;
+            }
+            else if (char.IsAsciiLetterOrDigit(c) || c == '_')
+            {
+                var start = i;
+                while (i < frag.Length && (char.IsAsciiLetterOrDigit(frag[i]) || frag[i] == '_'))
+                {
+                    i++;
+                }
+                if (AudioUniforms.Contains(frag.Substring(start, i - start)))
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                i++;
+            }
+        }
+        return false;
+    }
+
+    // Every audio uniform ShaderEffect binds. u_audioBoost alone does not count: it
+    // reaches GL through ExtraParams and reads no capture data.
+    private static readonly HashSet<string> AudioUniforms = new(System.StringComparer.Ordinal)
+    {
+        "u_audioLevel", "u_audioBass", "u_audioMid", "u_audioHigh", "u_audioBeat",
+        "u_spectrum", "u_spectrum64", "u_specHist", "u_bassPeak", "u_midPeak", "u_highPeak",
+    };
 
     private static (string Frag, IReadOnlyDictionary<string, ShaderParamSpec> Params, string Tag) Derived(string key)
     {

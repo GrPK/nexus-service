@@ -76,6 +76,28 @@ public sealed class CustomShaderLibraryTests : IDisposable
         Assert.True(ShaderLibrary.IsAudioEffect("spectrumbars"));
     }
 
+    [Theory]
+    [InlineData("uniform float u_audioLevel;", true)]
+    [InlineData("uniform float u_audioBass;", true)]
+    [InlineData("uniform float u_audioMid;", true)]
+    [InlineData("uniform float u_audioHigh;", true)]
+    [InlineData("uniform float u_audioBeat;", true)]
+    [InlineData("uniform float u_spectrum[32];", true)]
+    [InlineData("uniform float u_spectrum64[64];", true)]
+    [InlineData("uniform vec4 u_specHist[8];", true)]
+    [InlineData("uniform float u_bassPeak;", true)]
+    [InlineData("uniform float u_midPeak;", true)]
+    [InlineData("uniform float u_highPeak;", true)]
+    [InlineData("uniform float u_audioBoost;", false)]
+    [InlineData("uniform float u_audioLevelScale;", false)]
+    [InlineData("uniform float my_u_spectrum;", false)]
+    [InlineData("// u_audioLevel only in a comment", false)]
+    [InlineData("/* u_spectrum */", false)]
+    public void ReadsAudio_matches_whole_identifiers_the_effect_binds(string line, bool expected)
+    {
+        Assert.Equal(expected, ShaderLibrary.ReadsAudio(CustomFrags.Frag(extra: line + "\n")));
+    }
+
     [Fact]
     public void Sanitize_clamps_a_custom_key_against_its_hint_ranges()
     {

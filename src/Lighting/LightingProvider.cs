@@ -562,6 +562,19 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     public (byte[] Bytes, string Tag)? CaptureAnimateThumbnail(string key, int slot, bool skipCache = false, bool frozen = false)
     {
+        try
+        {
+            return CaptureAnimateThumbnailCore(key, slot, skipCache, frozen);
+        }
+        catch (System.IO.FileNotFoundException)
+        {
+            // A custom effect deleted mid-request is simply unknown.
+            return null;
+        }
+    }
+
+    private (byte[] Bytes, string Tag)? CaptureAnimateThumbnailCore(string key, int slot, bool skipCache, bool frozen)
+    {
         // Shader thumbnails are GPU-rendered; with no usable GPU the render is a
         // no-op and the frame stays black, so skip it and let the caller 404 -
         // the UI shows a placeholder instead of a grid of black tiles.
@@ -713,7 +726,21 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         var extras = cur.ExtraParams is null
             ? null
             : new System.Collections.Generic.Dictionary<string, float>(cur.ExtraParams);
-        _engine.SetEffect(MakeShader(key, ShaderLibrary.Get(key), cur.Speed, cur.Intensity, cur.Hue, cur.Colorize, cur.Saturation, cur.Contrast, extras));
+        ShaderEffect fresh;
+        try
+        {
+            fresh = MakeShader(key, ShaderLibrary.Get(key), cur.Speed, cur.Intensity, cur.Hue, cur.Colorize, cur.Saturation, cur.Contrast, extras);
+        }
+        catch (System.IO.FileNotFoundException)
+        {
+            return;
+        }
+        // Compare-and-swap under the engine lock: a concurrent effect switch wins, and
+        // paused, frozen and blackout state survive the swap.
+        if (!_engine.SwapEffectIfCurrent(cur, fresh))
+        {
+            fresh.Dispose();
+        }
     }
 
     public void DropCustomEffect(string key)
@@ -724,6 +751,15 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             s.Lighting.Animate.States.Remove(key);
             s.Lighting.Animate.Templates.Remove(key);
+            // Not running (static mode, stopped): the next animate start must not run rainbow under the dead name.
+            if (string.Equals(s.Lighting.Animate.Effect, key, System.StringComparison.OrdinalIgnoreCase))
+            {
+                s.Lighting.Animate.Effect = "rainbow";
+            }
+            if (string.Equals(s.Lighting.Sync, key, System.StringComparison.OrdinalIgnoreCase))
+            {
+                s.Lighting.Sync = "rainbow";
+            }
         });
         if (!running)
         {
@@ -1030,8 +1066,16 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // holds falls back to rainbow like any other unknown key.
         if (ShaderLibrary.IsCustomKey(name))
         {
-            return MakeShader(name, ShaderLibrary.IsKnownKey(name) ? ShaderLibrary.Get(name) : ShaderLibrary.Rainbow,
-                effectSpeed, intensity, hue, colorize, saturation, contrast, extras);
+            string customSrc;
+            try
+            {
+                customSrc = ShaderLibrary.Get(name);
+            }
+            catch (System.IO.FileNotFoundException)
+            {
+                customSrc = ShaderLibrary.Rainbow;
+            }
+            return MakeShader(name, customSrc, effectSpeed, intensity, hue, colorize, saturation, contrast, extras);
         }
         // Simple solid-colour fills all share one cheap shader; the colour is
         // carried by the post-process tint, not the GLSL.

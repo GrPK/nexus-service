@@ -103,6 +103,46 @@ public sealed class CustomEffectProviderTests : IDisposable
     }
 
     [Fact]
+    public void Reload_keeps_the_paused_state()
+    {
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag());
+        _provider.StartAnimate(Start(Key));
+        _provider.SetPaused(true);
+
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag(gainDefault: 1.0f));
+        _provider.ReloadCustomEffect(Key);
+
+        Assert.True(_provider.IsPaused);
+    }
+
+    [Fact]
+    public void Swap_loses_to_a_concurrent_effect_switch()
+    {
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag());
+        _provider.StartAnimate(Start(Key));
+        var stale = _engine.CurrentEffect!;
+        _provider.StartAnimate(Start("plasma"));
+        var replacement = new ShaderEffect(Key, _gpu, CustomFrags.Frag());
+
+        Assert.False(_engine.SwapEffectIfCurrent(stale, replacement));
+        Assert.Equal("plasma", _engine.CurrentEffectName);
+    }
+
+    [Fact]
+    public void Drop_resets_the_saved_effect_name_even_when_it_is_not_running()
+    {
+        ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag());
+        _provider.StartAnimate(Start(Key));
+        _provider.StartStatic(new StaticHeadlessStart { Effect = "simplered", Intensity = 1f, Saturation = 1f, Contrast = 1f, Persist = true });
+        Assert.Equal(Key, _config.Load().Lighting.Animate.Effect);
+
+        _provider.DropCustomEffect(Key);
+
+        Assert.Equal("rainbow", _config.Load().Lighting.Animate.Effect);
+        Assert.NotEqual(Key, _config.Load().Lighting.Sync);
+    }
+
+    [Fact]
     public void Reload_leaves_a_different_running_effect_alone()
     {
         ShaderLibrary.RegisterCustom(_id, CustomFrags.Frag());

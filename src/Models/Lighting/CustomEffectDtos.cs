@@ -17,9 +17,3 @@ public sealed class CustomEffectPutBody
     public string? Recipe { get; set; }
     public string? Frag { get; set; }
 }
-
-/// <summary>400 body for a rejected custom effect: the validation message or the GL info log.</summary>
-public sealed class CustomEffectErrorResponse
-{
-    public string Error { get; set; } = "";
-}

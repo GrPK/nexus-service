@@ -536,7 +536,6 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(CustomEffectResponse))]
 [JsonSerializable(typeof(List<CustomEffectResponse>))]
 [JsonSerializable(typeof(CustomEffectPutBody))]
-[JsonSerializable(typeof(CustomEffectErrorResponse))]
 [JsonSerializable(typeof(CurrentSyncResponse))]
 [JsonSerializable(typeof(Nexus.Service.Models.Lighting.LightingPauseBody))]
 [JsonSerializable(typeof(Nexus.Service.Models.Lighting.LightingPauseResponse))]

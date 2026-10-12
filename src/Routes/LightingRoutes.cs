@@ -417,8 +417,7 @@ public static class LightingRoutes
     };
 
     private static IResult CustomEffectError(string message) =>
-        Results.Json(new Nexus.Service.Models.Lighting.CustomEffectErrorResponse { Error = message },
-            AppJsonContext.Default.CustomEffectErrorResponse, statusCode: StatusCodes.Status400BadRequest);
+        Results.Json(ApiResponse.Fail(message), AppJsonContext.Default.ApiResponse, statusCode: StatusCodes.Status400BadRequest);
 
     private static void MapCustomEffects(WebApplication app)
     {
@@ -447,7 +446,7 @@ public static class LightingRoutes
             l.ReloadCustomEffect(ShaderLibrary.CustomPrefix + id);
             PanelTopics.BroadcastLighting(hub);
             return Results.Json(ToResponse(entry), AppJsonContext.Default.CustomEffectResponse);
-        }).AllowPanel();
+        });
         app.MapDelete("/lighting/custom-effects/{id}", (string id,
             Nexus.Service.Lighting.CustomEffects.CustomEffectStore custom,
             ILightingProvider l, MultiplexHub hub) =>
@@ -459,7 +458,7 @@ public static class LightingRoutes
             l.DropCustomEffect(ShaderLibrary.CustomPrefix + id);
             PanelTopics.BroadcastLighting(hub);
             return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
-        }).AllowPanel();
+        });
     }
 
     // The three headless-start routes are re-posted on every slider move, so
