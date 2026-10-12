@@ -23,7 +23,7 @@ public enum LintScope
 
 public sealed record LintHazard(string ChannelId, string ChannelName, string Kind, string RootId, string RootName);
 
-public sealed class LintInput
+public sealed record LintInput
 {
     public IReadOnlyList<CurveDocument> Curves { get; init; } = Array.Empty<CurveDocument>();
     public IReadOnlyList<FanChannel> Channels { get; init; } = Array.Empty<FanChannel>();
@@ -111,19 +111,12 @@ public static class CoolingConfigLint
 
     // A persisted curves list can hold a null entry, and a curve a null outputs list; both are
     // normalized once here so Analyze and Heal never see them. The input curves are not mutated.
-    private static LintInput Normalize(LintInput input) => new()
+    private static LintInput Normalize(LintInput input) => input with
     {
         Curves = input.Curves
             .Where(c => c is not null)
             .Select(c => c.Outputs is null ? CloneCurve(c) : c)
             .ToList(),
-        Channels = input.Channels,
-        Sources = input.Sources,
-        FanRoles = input.FanRoles,
-        ManualSpeeds = input.ManualSpeeds,
-        Uncontrolled = input.Uncontrolled,
-        LimitC = input.LimitC,
-        Scope = input.Scope,
     };
 
     private readonly record struct Found(string Kind, string RootId, string RootName);

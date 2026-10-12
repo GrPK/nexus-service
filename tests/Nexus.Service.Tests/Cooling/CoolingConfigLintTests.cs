@@ -365,6 +365,27 @@ public class CoolingConfigLintTests
     }
 
     [Fact]
+    public void ControllerHeal_WithANullCurveEntry_HealsAndSnapshotsWithoutIt()
+    {
+        var fans = new LintFans(T1Channels(), Sources());
+        var store = new InMemoryConfigStore();
+        store.Update(s =>
+        {
+            s.Cooling.Curves.Add(null!);
+            s.Cooling.Curves.AddRange(T1Curves());
+        });
+        var controller = new ThermalGuardController(fans, store);
+
+        var healed = controller.HealNow(automatic: false);
+
+        Assert.True(healed.UndoAvailable);
+        Assert.Equal(4, healed.Channels.Count);
+        var cooling = store.Load().Cooling;
+        Assert.DoesNotContain(null, cooling.Curves);
+        Assert.DoesNotContain(null, cooling.HealSnapshot!);
+    }
+
+    [Fact]
     public void ControllerHeal_AfterATripAlsoTakesWeakCurves_AFixFromTheSavePromptDoesNot()
     {
         var fans = new LintFans(T1Channels(), Sources());
