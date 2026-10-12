@@ -141,15 +141,22 @@ public class WebSocketHub
                 return;
             }
 
-            await _writeLock.WaitAsync();
+            var acquired = false;
             try
             {
+                await _writeLock.WaitAsync();
+                acquired = true;
                 await _socket.SendAsync(payload, type, endOfMessage: true, CancellationToken.None);
             }
-            catch { /* peer dead, will be reaped on next ReceiveAsync */ }
+            catch { /* peer dead or entry disposed mid-send; reaped by the receive loop */ }
             finally
             {
-                _writeLock.Release();
+                if (acquired)
+                {
+                    try
+                    { _writeLock.Release(); }
+                    catch (ObjectDisposedException) { /* disposed while the send was in flight */ }
+                }
             }
         }
 
