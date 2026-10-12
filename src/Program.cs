@@ -143,11 +143,12 @@ Nexus.Service.Lifecycle.BootTimer.Mark("after URL resolve");
 // Single-instance guard - if another nexus-service is already running,
 // open or focus the dashboard window instead of spawning a second service.
 // When relaunching elevated, retry for up to 10s while the parent shuts down.
-// The --service instance (Windows SCM, macOS launchd agent) holds it too, so a
-// user-mode launch while it runs hands off instead of starting a second service
-// that fails binding the port or opening the stores the first one holds.
+// The Windows SCM instance holds it too, so a user-mode launch while the service
+// runs hands off instead of starting a second service that fails opening the
+// stores the first one holds. Not macOS: a NativeAOT named mutex there is
+// process-local, so it cannot guard against another process.
 System.Threading.Mutex? singleInstance = null;
-if (serviceMode && !testHost && (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()))
+if (serviceMode && !testHost && OperatingSystem.IsWindows())
 {
     singleInstance = new System.Threading.Mutex(true, "Global\\NexusServiceMutex", out var ownsMutex);
     if (!ownsMutex)

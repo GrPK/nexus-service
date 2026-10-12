@@ -263,7 +263,7 @@ public static class PanelRoutes
             {
                 stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }

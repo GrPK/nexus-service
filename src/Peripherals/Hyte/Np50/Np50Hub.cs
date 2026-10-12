@@ -449,9 +449,11 @@ public sealed class Np50Hub : IDisposable, IDfuFlashTarget
     private bool Exchange(string operation, byte[] request, int expectedLength, int timeoutMs, Action<ReadOnlySpan<byte>> parse)
     {
         if (!EnsureConnected()) return false;
-        var transport = _transport!;
         lock (_exchangeLock)
         {
+            // Re-read under the lock: the exchange we waited on may have dropped the port.
+            var transport = _transport;
+            if (transport is null) return false;
             if (!SendRequest(transport, operation, request)) return false;
 
             try

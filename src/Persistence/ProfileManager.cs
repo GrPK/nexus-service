@@ -790,14 +790,14 @@ public sealed partial class ProfileManager : IDisposable
             }
         }
 
-        _dirty = false;
-
         var activeEntry = _manifest.Profiles.FirstOrDefault(p => p.Id == _manifest.ActiveProfileId);
         if (activeEntry != null)
         {
             activeEntry.UpdatedAt = DateTimeOffset.UtcNow.ToString("o");
             SaveManifest();
         }
+
+        _dirty = false;
     }
 
     private void FlushIfDirty()

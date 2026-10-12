@@ -176,13 +176,18 @@ public static class GalleryRoutes
             }
             try
             {
-                file.ReadByte();
+                await file.ReadAtLeastAsync(new byte[1], 1, throwOnEndOfStream: false, ctx.RequestAborted);
                 file.Position = 0;
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                file.Dispose();
+                await file.DisposeAsync();
                 return Results.NotFound();
+            }
+            catch
+            {
+                await file.DisposeAsync();
+                throw;
             }
             // Without ranges the Chromium <video> on the panel has to land the
             // whole clip in one uninterrupted response and cannot seek or loop
