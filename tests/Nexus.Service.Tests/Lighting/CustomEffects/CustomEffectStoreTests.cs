@@ -215,6 +215,150 @@ public sealed class CustomEffectStoreTests : IDisposable
         Assert.Null(CustomEffectStore.Validate("abc", "n", "", frag));
     }
 
+    [Theory]
+    [InlineData("i = 0;")]
+    [InlineData("i += 1;")]
+    [InlineData("i -= 1;")]
+    [InlineData("i *= 2;")]
+    [InlineData("i /= 2;")]
+    [InlineData("i++;")]
+    [InlineData("i--;")]
+    [InlineData("++i;")]
+    [InlineData("--i;")]
+    [InlineData("int k = (i = 0);")]
+    public void The_loop_variable_cannot_be_written_in_the_body(string statement)
+    {
+        var frag = CustomFrags.Frag(extra: "void f() { for (int i = 0; i < 2; i++) { " + statement + " } }\n");
+        Assert.Contains("loop variable", CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void Reading_the_loop_variable_and_similar_names_in_the_body_is_fine()
+    {
+        var frag = CustomFrags.Frag(extra: "void f() { float s = 0.0; for (int i = 0; i < 4; i++) { float fi = float(i); if (i == 2 || i <= 1 || i >= 3 || i != 9) { s += fi * float(i) + s.x; } int ii = 3; ii = 4; } }\n");
+        Assert.Null(CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Theory]
+    [InlineData("#define W wh##ile\n")]
+    [InlineData("#define N 5\n")]
+    [InlineData("#ifdef GL_ES\n#endif\n")]
+    public void Preprocessor_directives_after_the_version_line_are_rejected(string directive)
+    {
+        var msg = CustomEffectStore.Validate("abc", "n", "", CustomFrags.Frag(extra: directive));
+        Assert.Contains("preprocessor", msg);
+    }
+
+    [Fact]
+    public void Nested_loops_multiply_against_the_cap()
+    {
+        string Nest(int outer, int inner) =>
+            CustomFrags.Frag(extra: $"void f() {{ for (int a = 0; a < {outer}; a++) {{ for (int b = 0; b < {inner}; b++) {{ }} }} }}\n");
+
+        Assert.Null(CustomEffectStore.Validate("abc", "n", "", Nest(8, 8)));
+        Assert.Contains("nested", CustomEffectStore.Validate("abc", "n", "", Nest(9, 8)));
+        Assert.Contains("nested", CustomEffectStore.Validate("abc", "n", "", Nest(64, 2)));
+    }
+
+    [Fact]
+    public void Unbraced_nested_loops_still_multiply()
+    {
+        var frag = CustomFrags.Frag(extra: "void f() { float x = 0.0; for (int a = 0; a < 20; a++) for (int b = 0; b < 20; b++) x += 1.0; }\n");
+        Assert.Contains("nested", CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void Sibling_loops_do_not_multiply()
+    {
+        var frag = CustomFrags.Frag(extra: "void f() { for (int a = 0; a < 60; a++) { } for (int b = 0; b < 60; b++) { } }\n");
+        Assert.Null(CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void A_loop_body_may_not_call_a_function_that_loops()
+    {
+        var frag = CustomFrags.Frag(extra:
+            "float fbm(vec2 p) { float s = 0.0; for (int i = 0; i < 5; i++) { s += p.x; } return s; }\n"
+            + "void f() { float t = 0.0; for (int a = 0; a < 3; a++) { t += fbm(vec2(1.0)); } }\n");
+        Assert.Contains("fbm", CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void A_function_that_calls_a_looping_function_counts_as_looping()
+    {
+        var frag = CustomFrags.Frag(extra:
+            "float fbm(vec2 p) { float s = 0.0; for (int i = 0; i < 5; i++) { s += p.x; } return s; }\n"
+            + "float wrap(vec2 p) { return fbm(p); }\n"
+            + "void f() { float t = 0.0; for (int a = 0; a < 3; a++) { t += wrap(vec2(1.0)); } }\n");
+        Assert.Contains("wrap", CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void The_studio_patterns_pass()
+    {
+        var frag = CustomFrags.Frag(extra:
+            "float hash21(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }\n"
+            + "float fbm(vec2 p) { float s = 0.0; float a = 0.5; for (int i = 0; i < 5; i++) { s += a * hash21(p); a *= 0.5; } return s; }\n"
+            + "void cells(vec2 uv) { float d = 9.0; for (int j = -1; j <= 1; j++) { for (int i = -1; i <= 1; i++) { d = min(d, hash21(uv + vec2(float(i), float(j)))); } } float n = fbm(uv); }\n");
+        Assert.Null(CustomEffectStore.Validate("abc", "n", "", frag));
+    }
+
+    [Fact]
+    public void Stored_entries_the_current_rules_reject_are_not_registered_or_listed_but_stay_in_the_file()
+    {
+        var bad = CustomFrags.NewId();
+        var good = CustomFrags.NewId();
+        var json = "{\"entries\":[{\"id\":\"" + bad + "\",\"name\":\"old\",\"recipe\":\"\",\"frag\":\"#version 330 core\\nvoid main() { while (true) { } }\",\"updatedAt\":1},"
+            + "{\"id\":\"" + good + "\",\"name\":\"ok\",\"recipe\":\"\",\"frag\":" + System.Text.Json.JsonSerializer.Serialize(CustomFrags.Frag()) + ",\"updatedAt\":2}]}";
+        var path = Path.Combine(_dir, "custom-effects.json");
+        File.WriteAllText(path, json);
+
+        var store = new CustomEffectStore(_dir);
+
+        Assert.Equal([good], store.List().Select(e => e.Id));
+        Assert.Null(store.Get(bad));
+        Assert.False(ShaderLibrary.IsKnownKey("custom:" + bad));
+        Assert.True(ShaderLibrary.IsKnownKey("custom:" + good));
+        // A later write must not destroy the skipped entry.
+        store.Put(CustomFrags.NewId(), "new", "", CustomFrags.Frag());
+        Assert.Contains(bad, File.ReadAllText(path));
+        // Replacing it with a valid source takes it over.
+        Assert.Null(store.Put(bad, "fixed", "", CustomFrags.Frag()).Error);
+        Assert.Contains(bad, store.List().Select(e => e.Id));
+    }
+
+    [Fact]
+    public void An_unreadable_file_fails_closed_keeps_the_file_and_recovers_when_readable()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        var path = Path.Combine(_dir, "custom-effects.json");
+        var id = CustomFrags.NewId();
+        new CustomEffectStore(_dir).Put(id, "keep", "", CustomFrags.Frag());
+        var original = File.ReadAllText(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var store = new CustomEffectStore(_dir);
+
+            Assert.False(store.EnsureAvailable());
+            Assert.NotNull(store.Put(CustomFrags.NewId(), "x", "", CustomFrags.Frag()).Error);
+            Assert.False(store.Delete(id));
+            Assert.Empty(Directory.GetFiles(_dir, "*.bad-*"));
+
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            Assert.True(store.EnsureAvailable());
+            Assert.Equal(id, store.List().Single().Id);
+            Assert.Equal(original, File.ReadAllText(path));
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
     [Fact]
     public void A_rejected_loop_says_why()
     {

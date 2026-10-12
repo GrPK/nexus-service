@@ -419,6 +419,10 @@ public static class LightingRoutes
     private static IResult CustomEffectError(string message) =>
         Results.Json(ApiResponse.Fail(message), AppJsonContext.Default.ApiResponse, statusCode: StatusCodes.Status400BadRequest);
 
+    private static IResult CustomEffectUnavailable() =>
+        Results.Json(ApiResponse.Fail(Nexus.Service.Lighting.CustomEffects.CustomEffectStore.UnavailableMessage),
+            AppJsonContext.Default.ApiResponse, statusCode: StatusCodes.Status503ServiceUnavailable);
+
     private static void MapCustomEffects(WebApplication app)
     {
         app.MapGet("/lighting/custom-effects", (Nexus.Service.Lighting.CustomEffects.CustomEffectStore custom) =>
@@ -428,6 +432,10 @@ public static class LightingRoutes
             Nexus.Service.Lighting.CustomEffects.CustomFragCompiler compile,
             ILightingProvider l, MultiplexHub hub) =>
         {
+            if (!custom.EnsureAvailable())
+            {
+                return CustomEffectUnavailable();
+            }
             var problem = Nexus.Service.Lighting.CustomEffects.CustomEffectStore.Validate(id, body?.Name, body?.Recipe, body?.Frag);
             if (problem is not null)
             {
@@ -451,6 +459,10 @@ public static class LightingRoutes
             Nexus.Service.Lighting.CustomEffects.CustomEffectStore custom,
             ILightingProvider l, MultiplexHub hub) =>
         {
+            if (!custom.EnsureAvailable())
+            {
+                return CustomEffectUnavailable();
+            }
             if (!custom.Delete(id))
             {
                 return Results.NotFound();

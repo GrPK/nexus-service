@@ -719,26 +719,32 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     public void ReloadCustomEffect(string key)
     {
         ClearThumbnails(key);
-        if (_engine.CurrentEffect is not ShaderEffect cur || cur.Name != key || !ShaderLibrary.IsKnownKey(key))
+        // A second pass covers a concurrent PUT of the same id that swapped in an older source
+        // between our read and our swap; the engine must never keep older source than the store.
+        for (var attempt = 0; attempt < 2; attempt++)
         {
-            return;
-        }
-        var extras = cur.ExtraParams is null
-            ? null
-            : new System.Collections.Generic.Dictionary<string, float>(cur.ExtraParams);
-        ShaderEffect fresh;
-        try
-        {
-            fresh = MakeShader(key, ShaderLibrary.Get(key), cur.Speed, cur.Intensity, cur.Hue, cur.Colorize, cur.Saturation, cur.Contrast, extras);
-        }
-        catch (System.IO.FileNotFoundException)
-        {
-            return;
-        }
-        // Compare-and-swap under the engine lock: a concurrent effect switch wins, and
-        // paused, frozen and blackout state survive the swap.
-        if (!_engine.SwapEffectIfCurrent(cur, fresh))
-        {
+            if (_engine.CurrentEffect is not ShaderEffect cur || cur.Name != key || !ShaderLibrary.IsKnownKey(key))
+            {
+                return;
+            }
+            var extras = cur.ExtraParams is null
+                ? null
+                : new System.Collections.Generic.Dictionary<string, float>(cur.ExtraParams);
+            ShaderEffect fresh;
+            try
+            {
+                fresh = MakeShader(key, ShaderLibrary.Get(key), cur.Speed, cur.Intensity, cur.Hue, cur.Colorize, cur.Saturation, cur.Contrast, extras);
+            }
+            catch (System.IO.FileNotFoundException)
+            {
+                return;
+            }
+            // Compare-and-swap under the engine lock: a concurrent effect switch wins, and
+            // paused, frozen and blackout state survive the swap.
+            if (_engine.SwapEffectIfCurrent(cur, fresh))
+            {
+                return;
+            }
             fresh.Dispose();
         }
     }
