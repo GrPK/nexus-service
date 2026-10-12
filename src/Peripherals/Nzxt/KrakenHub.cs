@@ -17,10 +17,16 @@ public sealed class KrakenHub : IDisposable
 {
     private const int ConnectReadTimeoutMs = 1000;
     private const int CommandReadTimeoutMs = 700;
+    private const int StreamRetryDelayMs = 1000;
+    private const int StreamFailuresBeforeRetryDelay = 3;
+    // A direct-path reply arrives within a few ms; a missing one is not an error.
+    private const int DirectReplyTimeoutMs = 150;
     private const int PollReadTimeoutMs = 250;
 
     // Bulk pixel data goes out in chunks; 64 KiB measured ~13 MB/s on the bench unit.
     private const int BulkChunkBytes = 64 * 1024;
+    // Direct-path transfer size; divides a 640x640 BGR888 frame evenly.
+    private const int DirectChunkBytes = 245_760;
 
     private readonly object _lock = new();
     // Serialises whole LCD transfers with each other. The stream path holds this across a
@@ -45,17 +51,23 @@ public sealed class KrakenHub : IDisposable
 
     // 0x72 tuple selection. Only the 2023 Kraken and Kraken Elite ever moved theirs.
     private bool _useNewSpeedChannels = true;
+    // KrakenModel.DirectStream confirmed by firmware at Connect: the capture behind it is 2.x.
+    private bool _directStream;
 
     private volatile bool _isConnected;
     private volatile KrakenSnapshot _snapshot = KrakenSnapshot.Empty;
     // Last image pushed, stored unrotated so a rotation change can re-render it.
     private byte[]? _lastLcdFrame;
+    // Last GIF pushed, panel-sized and unrotated; rotating it takes ffmpeg, so the caller does.
+    private byte[]? _lastLcdGif;
 
     // Streaming state. The buckets are allocated once, then rotated: the panel rejects
     // a transfer into the bucket it is currently displaying (code 9), so a stream has
     // to write an idle one and switch to it.
     private bool _streamReady;
     private int _streamActiveBucket = -1;
+    private long _streamRetryAtMs;
+    private int _streamFailures;
 
     // Three, not two. Ping-pong rewrites the bucket that just left the screen on the
     // very next frame while the panel is still reading it, which shows as a band of
@@ -92,7 +104,7 @@ public sealed class KrakenHub : IDisposable
     private int _fadeLastSent = -1;
     private LcdFadeRunner? _fadeRunner;
 
-    /// <summary>Millisecond clock the fade reads; tests replace it.</summary>
+    /// <summary>Millisecond clock the fade and the Z3 stream retry read; tests replace it.</summary>
     internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
 
     internal LcdFadeRunner FadeRunner => _fadeRunner ??= new LcdFadeRunner(StepFade, onFault: FaultFade);
@@ -419,6 +431,7 @@ public sealed class KrakenHub : IDisposable
             _lcdWidth = model.LcdWidth;
             _lcdHeight = model.LcdHeight;
             _useNewSpeedChannels = !model.SpeedChannelsFollowFirmware;
+            _directStream = false;
         }
     }
 
@@ -461,6 +474,7 @@ public sealed class KrakenHub : IDisposable
             {
                 _useNewSpeedChannels = KrakenProtocol.UsesNewSpeedChannels(fw);
             }
+            _directStream = _model.DirectStream && fw is { Major: >= 2 };
 
             // Starts the cooler's telemetry stream. Without it the accessory table is not
             // populated yet and the lighting query answers with zero channels.
@@ -783,11 +797,15 @@ public sealed class KrakenHub : IDisposable
             _lockPendingReupload = false;
             var reply = ExchangeLocked(
                 KrakenProtocol.EncodeSetDisplayMode(mode, bucketIndex), 0x39, 0x01, CommandReadTimeoutMs);
-            if (reply == null || !KrakenProtocol.IsAck(reply))
+            if (!AcceptedLocked(reply))
             {
                 return false;
             }
             _snapshot = _snapshot.WithDisplayMode(mode);
+            if (_directStream)
+            {
+                _streamReady = false;
+            }
             return true;
         }
     }
@@ -870,6 +888,7 @@ public sealed class KrakenHub : IDisposable
                 return false;
             }
             _lastLcdFrame = source;
+            _lastLcdGif = null;
             _streamReady = false;
             if (_lockDimmed)
             {
@@ -929,16 +948,70 @@ public sealed class KrakenHub : IDisposable
 
     private bool UploadLcdFrameLocked(byte[] source, int quarterTurns)
     {
+        if (_device == null || _lcd == null)
+        {
+            return false;
+        }
+        int encoded = EncodeLcdPayloadLocked(source, quarterTurns, sourceIsBgra: false, out var format);
+        return UploadBucketLocked(_lcdScratch.AsSpan(0, encoded), format);
+    }
+
+    /// <summary>
+    /// Uploads a GIF the pump animates itself and shows it. <paramref name="gif"/> was rotated
+    /// for <paramref name="quarterTurns"/> off the lock, so a rotation since makes it Stale, as
+    /// does, with <paramref name="onlyIfShown"/>, any upload that replaced <paramref name="unrotated"/>.
+    /// The bulk transfer holds the HID lock; the cooler runs its own curves meanwhile.
+    /// </summary>
+    public KrakenGifUpload UploadLcdGif(byte[] gif, byte[] unrotated, int quarterTurns, bool onlyIfShown = false)
+    {
+        lock (_lcdTransferLock)
+        lock (_lock)
+        {
+            if (_device == null || _lcd == null || !_model.FirmwareGif)
+            {
+                return KrakenGifUpload.Failed;
+            }
+            if (_snapshot.LcdOrientationQuarterTurns != (quarterTurns & 0x03)
+                || (onlyIfShown && (!ReferenceEquals(_lastLcdGif, unrotated) || _snapshot.DisplayMode != KrakenDisplayMode.Bucket)))
+            {
+                return KrakenGifUpload.Stale;
+            }
+            // A rotation must not bring back the still this GIF replaced.
+            _lastLcdFrame = null;
+            _lastLcdGif = unrotated;
+            return UploadBucketLocked(gif, KrakenProtocol.BulkFormatGif) ? KrakenGifUpload.Shown : KrakenGifUpload.Failed;
+        }
+    }
+
+    /// <summary>The unrotated copy of the GIF on the panel, or null when it shows anything else.</summary>
+    public byte[]? ShownLcdGif
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _snapshot.DisplayMode == KrakenDisplayMode.Bucket ? _lastLcdGif : null;
+            }
+        }
+    }
+
+    private bool UploadBucketLocked(ReadOnlySpan<byte> payload, byte format)
+    {
         var lcd = _lcd;
         if (_device == null || lcd == null)
         {
             return false;
         }
-        int encoded = EncodeLcdPayloadLocked(source, quarterTurns, sourceIsBgra: false, out var format);
-        var payload = _lcdScratch.AsSpan(0, encoded);
-        var header = KrakenProtocol.EncodeBulkHeader(format, encoded);
-        int pages = KrakenProtocol.PagesFor(encoded);
+        var header = KrakenProtocol.EncodeBulkHeader(format, payload.Length);
+        int pages = KrakenProtocol.PagesFor(payload.Length);
+        // The bucket wipe below invalidates whatever a stream set up.
+        _streamReady = false;
         {
+            // Drops a half-finished transfer; these models' uploads open with it.
+            if (_directStream || _model.StreamRecreatesBuckets)
+            {
+                ExchangeLocked(KrakenProtocol.EncodeCancelTransfers(), 0x37, 0x03, CommandReadTimeoutMs);
+            }
             // Releases the active bucket so it becomes deletable.
             ExchangeLocked(KrakenProtocol.EncodeSetDisplayMode(KrakenDisplayMode.Liquid, 0), 0x39, 0x01, CommandReadTimeoutMs);
             for (int i = 0; i < KrakenProtocol.BucketCount; i++)
@@ -948,14 +1021,14 @@ public sealed class KrakenHub : IDisposable
 
             const int bucket = 0;
             var setup = ExchangeLocked(KrakenProtocol.EncodeSetupBucket(bucket, 0, pages), 0x33, 0x01, CommandReadTimeoutMs);
-            if (setup == null || !KrakenProtocol.IsAck(setup))
+            if (!AcceptedLocked(setup))
             {
                 ServiceLog.Warn("[nzxt-kraken] LCD bucket setup rejected");
                 return false;
             }
 
             var start = ExchangeLocked(KrakenProtocol.EncodeStartTransfer(bucket), 0x37, 0x01, CommandReadTimeoutMs);
-            if (start == null || !KrakenProtocol.IsAck(start))
+            if (!AcceptedLocked(start))
             {
                 ServiceLog.Warn("[nzxt-kraken] LCD transfer start rejected");
                 return false;
@@ -981,7 +1054,7 @@ public sealed class KrakenHub : IDisposable
 
             var activate = ExchangeLocked(
                 KrakenProtocol.EncodeSetDisplayMode(KrakenDisplayMode.Bucket, bucket), 0x39, 0x01, CommandReadTimeoutMs);
-            if (activate == null || !KrakenProtocol.IsAck(activate))
+            if (!AcceptedLocked(activate))
             {
                 ServiceLog.Warn("[nzxt-kraken] LCD bucket activation rejected");
                 return false;
@@ -1005,6 +1078,14 @@ public sealed class KrakenHub : IDisposable
         if (expected <= 0 || bgra.Length != expected)
         {
             return false;
+        }
+        if (_directStream)
+        {
+            return PushDirectFrame(bgra);
+        }
+        if (_model.StreamRecreatesBuckets)
+        {
+            return PushRecreatedBucketFrame(bgra);
         }
         lock (_lcdTransferLock)
         {
@@ -1076,8 +1157,188 @@ public sealed class KrakenHub : IDisposable
         }
     }
 
+    /// <summary>
+    /// One live frame on the 2023 Elite's direct path: start, raw BGR888 on the bulk
+    /// endpoint, end. No bucket and no per-frame mode switch, so the flash store is never written.
+    /// </summary>
+    private bool PushDirectFrame(ReadOnlySpan<byte> bgra)
+    {
+        lock (_lcdTransferLock)
+        {
+            int encoded;
+            byte[] scratch;
+            IKrakenLcdTransport lcd;
+            lock (_lock)
+            {
+                if (_device == null || _lcd == null)
+                {
+                    return false;
+                }
+                if (!_streamReady)
+                {
+                    // One-time entry: drop half-done transfers and stored images.
+                    ExchangeLocked(KrakenProtocol.EncodeCancelTransfers(), 0x37, 0x03, CommandReadTimeoutMs);
+                    ExchangeLocked(KrakenProtocol.EncodeSetDisplayMode(KrakenDisplayMode.Liquid, 0), 0x39, 0x01, CommandReadTimeoutMs);
+                    for (int i = 0; i < KrakenProtocol.BucketCount; i++)
+                    {
+                        ExchangeLocked(KrakenProtocol.EncodeDeleteBucket(i), 0x33, 0x02, CommandReadTimeoutMs);
+                    }
+                    _snapshot = _snapshot.WithDisplayMode(KrakenDisplayMode.Liquid);
+                    _streamReady = true;
+                }
+                lcd = _lcd;
+                EnsureLcdScratch(_lcdWidth * _lcdHeight * 3);
+                encoded = KrakenProtocol.ToWireBgr(
+                    bgra, _lcdWidth, _lcdHeight, _snapshot.LcdOrientationQuarterTurns, sourceIsBgra: true, _lcdScratch);
+                // The capture shows one report read after start and end, not which,
+                // so neither reply is required; re-entry is left to the calls that invalidate it.
+                ExchangeLocked(KrakenProtocol.EncodeStartDirectTransfer(), 0x37, 0x01, DirectReplyTimeoutMs);
+                scratch = _lcdScratch;
+            }
+
+            if (!WriteBulkPayload(lcd, KrakenProtocol.BulkFormatBgr888, scratch.AsSpan(0, encoded), DirectChunkBytes))
+            {
+                lock (_lock) { _streamReady = false; }
+                return false;
+            }
+
+            lock (_lock)
+            {
+                if (_device == null)
+                {
+                    return false;
+                }
+                ExchangeLocked(KrakenProtocol.EncodeEndTransfer(), 0x37, 0x02, DirectReplyTimeoutMs);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// One live frame on the Z3, in the order a USB capture of the vendor app shows: the
+    /// target bucket is deleted (twice) and re-created before every write, rotating
+    /// through all sixteen at fixed page offsets. A filled bucket rewritten in place is
+    /// acked but never shown.
+    /// </summary>
+    private bool PushRecreatedBucketFrame(ReadOnlySpan<byte> bgra)
+    {
+        lock (_lcdTransferLock)
+        {
+            // Re-entry after a failed frame is a burst of exchanges under _lock, so a run of
+            // failures retries on a slow timer rather than crowding out cooling control.
+            if (Clock() < Volatile.Read(ref _streamRetryAtMs))
+            {
+                return false;
+            }
+            bool ok = PushRecreatedBucketFrameOnce(bgra);
+            _streamFailures = ok ? 0 : _streamFailures + 1;
+            if (_streamFailures >= StreamFailuresBeforeRetryDelay)
+            {
+                Volatile.Write(ref _streamRetryAtMs, Clock() + StreamRetryDelayMs);
+            }
+            return ok;
+        }
+    }
+
+    private bool PushRecreatedBucketFrameOnce(ReadOnlySpan<byte> bgra)
+    {
+        lock (_lcdTransferLock)
+        {
+            if (LockDimmed)
+            {
+                return true;
+            }
+            int target;
+            int encoded;
+            byte format;
+            byte[] scratch;
+            IKrakenLcdTransport lcd;
+            lock (_lock)
+            {
+                if (_device == null || _lcd == null)
+                {
+                    return false;
+                }
+                if (!_streamReady)
+                {
+                    EnterRecreatedBucketStreamLocked();
+                }
+                lcd = _lcd;
+                target = (_streamActiveBucket + 1) % KrakenProtocol.BucketCount;
+                encoded = EncodeLcdPayloadLocked(
+                    bgra, _snapshot.LcdOrientationQuarterTurns, sourceIsBgra: true, out format);
+                // Pages cover the pixels only, not the bulk header: what the capture reserves.
+                int pages = (encoded + KrakenProtocol.BucketPageBytes - 1) / KrakenProtocol.BucketPageBytes;
+                ExchangeLocked(KrakenProtocol.EncodeDeleteBucket(target), 0x33, 0x02, CommandReadTimeoutMs);
+                ExchangeLocked(KrakenProtocol.EncodeDeleteBucket(target), 0x33, 0x02, CommandReadTimeoutMs);
+                var setup = ExchangeLocked(
+                    KrakenProtocol.EncodeSetupBucket(target, target * pages, pages), 0x33, 0x01, CommandReadTimeoutMs);
+                if (setup == null || !KrakenProtocol.IsAck(setup))
+                {
+                    _streamReady = false;
+                    return false;
+                }
+                var start = ExchangeLocked(KrakenProtocol.EncodeStartTransfer(target), 0x37, 0x01, CommandReadTimeoutMs);
+                if (start == null || !KrakenProtocol.IsAck(start))
+                {
+                    _streamReady = false;
+                    return false;
+                }
+                scratch = _lcdScratch;
+            }
+
+            bool written = WriteBulkPayload(lcd, format, scratch.AsSpan(0, encoded));
+
+            lock (_lock)
+            {
+                if (!written)
+                {
+                    _streamReady = false;
+                    return false;
+                }
+                if (_device == null)
+                {
+                    return false;
+                }
+                ExchangeLocked(KrakenProtocol.EncodeEndTransfer(), 0x37, 0x02, CommandReadTimeoutMs);
+                var show = ExchangeLocked(
+                    KrakenProtocol.EncodeSetDisplayMode(KrakenDisplayMode.Bucket, target), 0x39, 0x01, CommandReadTimeoutMs);
+                if (show == null || !KrakenProtocol.IsAck(show))
+                {
+                    _streamReady = false;
+                    return false;
+                }
+                _streamActiveBucket = target;
+                _snapshot = _snapshot.WithDisplayMode(KrakenDisplayMode.Bucket);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>Stream entry: drops a half-done transfer, releases the panel and clears every bucket.</summary>
+    private void EnterRecreatedBucketStreamLocked()
+    {
+        ExchangeLocked(KrakenProtocol.EncodeCancelTransfers(), 0x37, 0x03, CommandReadTimeoutMs);
+        ExchangeLocked(KrakenProtocol.EncodeSetDisplayMode(KrakenDisplayMode.Liquid, 0), 0x39, 0x01, CommandReadTimeoutMs);
+        for (int i = 0; i < KrakenProtocol.BucketCount; i++)
+        {
+            ExchangeLocked(KrakenProtocol.EncodeDeleteBucket(i), 0x33, 0x02, CommandReadTimeoutMs);
+        }
+        _streamActiveBucket = -1;
+        _streamReady = true;
+        _snapshot = _snapshot.WithDisplayMode(KrakenDisplayMode.Liquid);
+    }
+
+    /// <summary>
+    /// A reply counts as success when it carries the ack byte. The 2023 Elite on firmware 2.x
+    /// is reported to answer successful bucket commands with other values (0x05), so there
+    /// any reply does; a rejection still arrives as a NAK, which reads as null.
+    /// </summary>
+    private bool AcceptedLocked(byte[]? reply) =>
+        reply != null && (_directStream || KrakenProtocol.IsAck(reply));
+
     /// <summary>Header then pixels on the bulk endpoint; takes no lock of its own.</summary>
-    private static bool WriteBulkPayload(IKrakenLcdTransport lcd, byte format, ReadOnlySpan<byte> payload)
+    private static bool WriteBulkPayload(IKrakenLcdTransport lcd, byte format, ReadOnlySpan<byte> payload, int chunkBytes = BulkChunkBytes)
     {
         var header = KrakenProtocol.EncodeBulkHeader(format, payload.Length);
         // The header must be its own bulk transfer; concatenating corrupts the upload.
@@ -1085,9 +1346,9 @@ public sealed class KrakenHub : IDisposable
         {
             return false;
         }
-        for (int offset = 0; offset < payload.Length; offset += BulkChunkBytes)
+        for (int offset = 0; offset < payload.Length; offset += chunkBytes)
         {
-            int len = Math.Min(BulkChunkBytes, payload.Length - offset);
+            int len = Math.Min(chunkBytes, payload.Length - offset);
             if (!lcd.Write(payload.Slice(offset, len)))
             {
                 return false;
@@ -1219,6 +1480,10 @@ public sealed class KrakenHub : IDisposable
             _isConnected = false;
             _fade = null;
             _snapshot = KrakenSnapshot.Empty;
+            // A re-attached cooler may hold buckets from before; the next stream re-enters.
+            _streamReady = false;
+            Volatile.Write(ref _streamRetryAtMs, 0);
+            Volatile.Write(ref _streamFailures, 0);
             _lcd?.Dispose();
             _lcd = null;
             _device?.Dispose();
@@ -1244,4 +1509,12 @@ public sealed class KrakenHub : IDisposable
             _device = null;
         }
     }
+}
+
+public enum KrakenGifUpload
+{
+    Shown,
+    /// <summary>The orientation or the shown GIF changed while it was being prepared; nothing was sent.</summary>
+    Stale,
+    Failed,
 }
