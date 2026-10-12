@@ -67,15 +67,26 @@ public class CoolingConfigLintTests
         AppJsonContext.Default.SetCurvesBody);
 
     [Fact]
-    public void Analyze_NullCurveEntryAndNullOutputs_DoesNotThrow()
+    public void AnalyzeAndHeal_NullCurveEntryAndNullOutputs_MatchTheCleanInput()
     {
-        var curves = T1Curves();
-        curves.Insert(0, new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Outputs = null! });
-        curves.Insert(0, null!);
+        var clean = T1Curves();
+        clean.Add(new CurveDocument { Id = "mix", Name = "Mix", Type = "Mixed", Mixed = new MixedCurveData { CurveIds = { "broken", "sync-fan1" } } });
+        clean.Add(new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Flat = new FlatCurveData { Speed = 50 } });
 
-        var hazards = CoolingConfigLint.Analyze(Input(curves));
+        var dirty = T1Curves();
+        dirty.Insert(0, null!);
+        dirty.Add(new CurveDocument { Id = "mix", Name = "Mix", Type = "Mixed", Mixed = new MixedCurveData { CurveIds = { "broken", "sync-fan1" } } });
+        dirty.Add(new CurveDocument { Id = "broken", Name = "Broken", Type = "Flat", Flat = new FlatCurveData { Speed = 50 }, Outputs = null! });
 
-        Assert.NotNull(hazards);
+        var expected = CoolingConfigLint.Analyze(Input(clean));
+        var actual = CoolingConfigLint.Analyze(Input(dirty));
+        Assert.Equal(expected, actual);
+        Assert.NotEmpty(actual);
+
+        var healedClean = CoolingConfigLint.Heal(Input(clean), expected)!;
+        var healedDirty = CoolingConfigLint.Heal(Input(dirty), actual)!;
+        Assert.Equal(healedClean.Healed, healedDirty.Healed);
+        Assert.Equal(Json(healedClean.Curves), Json(healedDirty.Curves));
     }
 
     [Fact]

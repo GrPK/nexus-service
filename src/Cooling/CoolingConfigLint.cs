@@ -81,6 +81,7 @@ public static class CoolingConfigLint
 
     public static List<LintHazard> Analyze(LintInput input)
     {
+        input = Normalize(input);
         var result = new List<LintHazard>();
         var byId = input.Channels.ToDictionary(c => c.Id, StringComparer.Ordinal);
         foreach (var ch in input.Channels)
@@ -89,7 +90,7 @@ public static class CoolingConfigLint
             {
                 continue;
             }
-            var curve = input.Curves.FirstOrDefault(c => Drives(c, ch.Id));
+            var curve = input.Curves.FirstOrDefault(c => c.Outputs.Any(o => o.Id == ch.Id));
             if (curve is null)
             {
                 var minManual = input.Scope == LintScope.AfterTrip ? AfterTripMinManualPercent : StopPercent;
@@ -108,9 +109,22 @@ public static class CoolingConfigLint
         return result;
     }
 
-    // A persisted curves list can hold a null entry, and a curve a null outputs list.
-    private static bool Drives(CurveDocument? curve, string channelId) =>
-        curve?.Outputs?.Any(o => o?.Id == channelId) == true;
+    // A persisted curves list can hold a null entry, and a curve a null outputs list; both are
+    // normalized once here so Analyze and Heal never see them. The input curves are not mutated.
+    private static LintInput Normalize(LintInput input) => new()
+    {
+        Curves = input.Curves
+            .Where(c => c is not null)
+            .Select(c => c.Outputs is null ? CloneCurve(c) : c)
+            .ToList(),
+        Channels = input.Channels,
+        Sources = input.Sources,
+        FanRoles = input.FanRoles,
+        ManualSpeeds = input.ManualSpeeds,
+        Uncontrolled = input.Uncontrolled,
+        LimitC = input.LimitC,
+        Scope = input.Scope,
+    };
 
     private readonly record struct Found(string Kind, string RootId, string RootName);
 
@@ -147,7 +161,7 @@ public static class CoolingConfigLint
         {
             return stoppable;
         }
-        var driver = input.Curves.FirstOrDefault(c => Drives(c, sourceId));
+        var driver = input.Curves.FirstOrDefault(c => c.Outputs.Any(o => o.Id == sourceId));
         if (driver is null)
         {
             return stoppable;
@@ -307,6 +321,7 @@ public static class CoolingConfigLint
     /// </summary>
     public static HealResult? Heal(LintInput input, IReadOnlyList<LintHazard> hazards)
     {
+        input = Normalize(input);
         var cpuInput = PickGuardInput(input.Curves.FirstOrDefault(c => c.Id == GuardCurveId), input.Sources);
         var legacy = input.Curves.Where(IsLegacyGuardCurve).ToList();
         if (cpuInput is null || (hazards.Count == 0 && legacy.Count == 0))
