@@ -120,6 +120,10 @@ public sealed class LightingEngine : IDisposable
     // Set when the overlay clears; the next paused tick outside a hold repaints the effect's own frame once.
     private volatile bool _resampleOnce;
 
+    // Tick and effect of the last live render, so a paused repaint shows the frame the pause held. Loop thread only.
+    private long _lastRenderMs;
+    private IEffect? _lastRenderEffect;
+
     public event Action<ReadOnlyMemory<byte>>? OnFrame;
     public event Action? OnEffectChanged;
 
@@ -724,7 +728,9 @@ public sealed class LightingEngine : IDisposable
                         var epoch = Volatile.Read(ref _frozenEpoch);
                         if (!_frozen || Volatile.Read(ref _frozenRenderedEpoch) != epoch)
                         {
-                            effect.RenderFrame(_canvas, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                            _lastRenderMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                            _lastRenderEffect = effect;
+                            effect.RenderFrame(_canvas, _lastRenderMs);
                             TrackAheadParams(effect);
                             Volatile.Write(ref _frozenRenderedEpoch, epoch);
                         }
@@ -775,7 +781,7 @@ public sealed class LightingEngine : IDisposable
                     }
                     else if ((_studioOverlay is not null || _resampleOnce) && wakeMs <= 0)
                     {
-                        // Paused: the effect holds, the studio overlay keeps animating over it, and once it clears the held canvas goes back onto the devices.
+                        // Paused: the effect holds, the studio overlay keeps animating over it, and once it clears the effect's paused frame is repainted onto the devices.
                         var devices = _devices;
                         if (_studioOverlay is not null)
                         {
@@ -785,7 +791,7 @@ public sealed class LightingEngine : IDisposable
                         {
                             _resampleOnce = false;
                             // Repaint the effect's own frame: the canvas may be stale or cleared by a hold, and the devices may carry overlay pixels.
-                            effect.RenderFrame(_canvas, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                            effect.RenderFrame(_canvas, ReferenceEquals(effect, _lastRenderEffect) ? _lastRenderMs : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                             SampleDevicesFromCanvas(devices);
                             ApplyLedColorLocks(devices);
                             if (effect is GameSyncEffect pausedGame)
@@ -1181,7 +1187,7 @@ public sealed class LightingEngine : IDisposable
                 _aheadActive = req;
             }
             if (req.Abandoned || !ReferenceEquals(req.Effect, effect) || req.ParamsSig != _aheadParamsSig
-                || effect is not Gpu.ShaderEffect { ReadsAudio: false })
+                || effect is not Gpu.ShaderEffect { ReadsAudio: false } || _studioOverlay is not null)
             {
                 _aheadActive = null;
                 req.Done.Set();

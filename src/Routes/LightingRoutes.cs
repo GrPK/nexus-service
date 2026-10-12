@@ -487,7 +487,7 @@ public static class LightingRoutes
     }
 
     // Shader Studio live preview. Dashboard-only: no AllowPanel, so a panel token is refused on both verbs.
-    // The session holds nothing in settings; see LightingProvider.StudioLive.cs for what it snapshots and restores.
+    // The session holds nothing in settings: it is an engine overlay over the running mode (LightingProvider.StudioLive.cs).
     private static void MapStudioLive(WebApplication app)
     {
         app.MapPost("/lighting/studio-live", (Nexus.Service.Models.Lighting.StudioLiveBody? body,

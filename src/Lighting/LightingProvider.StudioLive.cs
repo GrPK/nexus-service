@@ -161,7 +161,7 @@ public sealed partial class LightingProvider
         return was;
     }
 
-    /// <summary>Clears the overlay. When the session itself kept the loop alive over an Off mode, Off is put back as StopAll leaves it, without its settings write. Caller holds _studioLock.</summary>
+    /// <summary>Clears the overlay, so the running mode shows again. Caller holds _studioLock.</summary>
     private bool EndStudioLocked()
     {
         var s = _studio;

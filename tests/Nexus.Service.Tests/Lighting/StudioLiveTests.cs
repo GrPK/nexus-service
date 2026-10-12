@@ -60,6 +60,24 @@ public sealed class StudioLiveTests : IDisposable
         public void Dispose() => Disposed = true;
     }
 
+    // Records the tick of each render, for asserting which frame a repaint shows.
+    private sealed class ClockEffect : IEffect
+    {
+        private long _lastTick;
+        private int _renders;
+        public string Name => "clock";
+        public int Renders => Volatile.Read(ref _renders);
+        public long LastTick => Interlocked.Read(ref _lastTick);
+
+        public void RenderFrame(CanvasBuffer canvas, double tickMs)
+        {
+            Interlocked.Exchange(ref _lastTick, (long)tickMs);
+            Interlocked.Increment(ref _renders);
+        }
+
+        public void Dispose() { }
+    }
+
     private static void WaitFor(Func<bool> condition)
     {
         var deadline = Environment.TickCount64 + 3000;
@@ -445,6 +463,30 @@ public sealed class StudioLiveTests : IDisposable
 
         AssertRed(dev);
         Assert.True(_engine.Paused);
+    }
+
+    [Fact]
+    public void A_paused_repaint_renders_the_frame_the_pause_held()
+    {
+        var dev = Device("d", 1);
+        _engine.UpdateDevices([dev]);
+        var clock = new ClockEffect();
+        _engine.SetEffect(clock);
+        WaitFor(() => clock.Renders > 2);
+        _engine.SetPaused(true);
+        WaitTicks(3);
+        var held = clock.LastTick;
+        var rendersAtPause = clock.Renders;
+        _engine.SetStudioOverlay(new FakeEffect("studio", g: 90));
+        WaitForLed(dev, 0, 0, 90, 0);
+        WaitTicks(3);
+
+        _engine.SetStudioOverlay(null);
+        WaitFor(() => clock.Renders > rendersAtPause);
+        WaitTicks(3);
+
+        Assert.Equal(rendersAtPause + 1, clock.Renders);
+        Assert.Equal(held, clock.LastTick);
     }
 
     [Theory]
