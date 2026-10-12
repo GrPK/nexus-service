@@ -452,6 +452,7 @@ public sealed class MultiplexHub
     {
         private readonly WebSocket _socket;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private readonly CancellationTokenSource _disposeCts = new();
         private readonly HashSet<string> _topics = new(StringComparer.OrdinalIgnoreCase);
         private readonly object _topicLock = new();
 
@@ -544,7 +545,7 @@ public sealed class MultiplexHub
             var acquired = false;
             try
             {
-                await _writeLock.WaitAsync();
+                await _writeLock.WaitAsync().WaitAsync(_disposeCts.Token);
                 acquired = true;
                 await _socket.SendAsync(payload, type, endOfMessage: true, CancellationToken.None);
             }
@@ -560,6 +561,13 @@ public sealed class MultiplexHub
             }
         }
 
-        public void Dispose() => _writeLock.Dispose();
+        public void Dispose()
+        {
+            // SemaphoreSlim.Dispose leaves pending async waiters hanging, and cancelling
+            // WaitAsync(token) did not release them in a test; the Task.WaitAsync on the
+            // send path is what completes them.
+            _disposeCts.Cancel();
+            _writeLock.Dispose();
+        }
     }
 }

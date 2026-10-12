@@ -1,6 +1,7 @@
 using System;
 using System.Net.WebSockets;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Nexus.Service.Sockets;
 
@@ -42,7 +43,7 @@ public sealed class HubSendAfterDisposeTests
         await WaitFor(() => hub.ClientCount == 1);
 
         socket.InjectSubscribe("t");
-        await WaitFor(() => socket.SubscribeConsumed);
+        await socket.SecondReceive.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var broadcast = hub.BroadcastTopicAsync("t", new byte[] { 1 });
         await socket.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -52,6 +53,51 @@ public sealed class HubSendAfterDisposeTests
         socket.ReleaseSend();
 
         await broadcast.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task WebSocketHub_QueuedSenderCompletesWhenClientDisposed()
+    {
+        var hub = new WebSocketHub();
+        using var cts = new CancellationTokenSource();
+        var socket = new GatedSocket();
+        var loop = hub.HandleClientAsync(socket, null, cts.Token);
+        await WaitFor(() => hub.ClientCount == 1);
+
+        var first = hub.BroadcastBinaryAsync(new byte[] { 1 });
+        await socket.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = hub.BroadcastBinaryAsync(new byte[] { 2 });
+
+        socket.EndReceive();
+        await loop.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The first send is still blocked; the queued one must not wait on a disposed lock forever.
+        await queued.WaitAsync(TimeSpan.FromSeconds(5));
+        socket.ReleaseSend();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task MultiplexHub_QueuedSenderCompletesWhenClientDisposed()
+    {
+        var hub = new MultiplexHub();
+        using var cts = new CancellationTokenSource();
+        var socket = new GatedSocket();
+        var loop = hub.HandleClientAsync(socket, "sess", MultiplexHub.ClientTransport.Lan, cts.Token);
+        await WaitFor(() => hub.ClientCount == 1);
+        socket.InjectSubscribe("t");
+        await socket.SecondReceive.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var first = hub.BroadcastTopicAsync("t", new byte[] { 1 });
+        await socket.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = hub.BroadcastTopicAsync("t", new byte[] { 2 });
+
+        socket.EndReceive();
+        await loop.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await queued.WaitAsync(TimeSpan.FromSeconds(5));
+        socket.ReleaseSend();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     private static async Task WaitFor(Func<bool> predicate)
@@ -67,39 +113,36 @@ public sealed class HubSendAfterDisposeTests
     private sealed class GatedSocket : WebSocket
     {
         private readonly TaskCompletionSource _sendGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _end = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private string? _pending;
+        private readonly Channel<string?> _incoming = Channel.CreateUnbounded<string?>();
         private WebSocketState _state = WebSocketState.Open;
+        private int _receives;
 
         public TaskCompletionSource SendStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public bool SubscribeConsumed { get; private set; }
+        public TaskCompletionSource SecondReceive { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void ReleaseSend() => _sendGate.TrySetResult();
-        public void EndReceive() => _end.TrySetResult();
-        public void InjectSubscribe(string topic) => _pending = "{\"sub\":[\"" + topic + "\"]}";
+        public void EndReceive() => _incoming.Writer.TryWrite(null);
+        public void InjectSubscribe(string topic) => _incoming.Writer.TryWrite("{\"sub\":[\"" + topic + "\"]}");
 
         public override async Task<WebSocketReceiveResult> ReceiveAsync(
             ArraySegment<byte> buffer, CancellationToken cancellationToken)
         {
-            while (true)
+            // The hub handles a message fully before asking for the next one.
+            if (Interlocked.Increment(ref _receives) == 2)
             {
-                if (_pending is { } msg)
-                {
-                    _pending = null;
-                    var bytes = System.Text.Encoding.UTF8.GetBytes(msg);
-                    bytes.CopyTo(buffer.Array!, buffer.Offset);
-                    SubscribeConsumed = true;
-                    return new WebSocketReceiveResult(bytes.Length, WebSocketMessageType.Text, true);
-                }
-
-                if (_end.Task.IsCompleted)
-                {
-                    _state = WebSocketState.CloseReceived;
-                    return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
-                }
-
-                await Task.Delay(5, CancellationToken.None);
+                SecondReceive.TrySetResult();
             }
+
+            var msg = await _incoming.Reader.ReadAsync(cancellationToken);
+            if (msg is null)
+            {
+                _state = WebSocketState.CloseReceived;
+                return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(msg);
+            bytes.CopyTo(buffer.Array!, buffer.Offset);
+            return new WebSocketReceiveResult(bytes.Length, WebSocketMessageType.Text, true);
         }
 
         public override Task SendAsync(
