@@ -780,7 +780,8 @@ public sealed class StreamedPanelCoordinator : BackgroundService
         var records = _store.Load();
         if (records.TryGetValue(info.Serial, out var rec)
             && !string.IsNullOrEmpty(rec.PanelDeviceId)
-            && _registry.Get(rec.PanelDeviceId) is not null)
+            && _registry.Get(rec.PanelDeviceId) is not null
+            && !(info.Profile.MultiInstance && HeldByAnotherSession(rec.PanelDeviceId, info.Serial)))
         {
             // Re-stamp: the driver can report a different surface than it did when the
             // record was minted (a Thermalright splits square from wide by model), and a
@@ -794,19 +795,43 @@ public sealed class StreamedPanelCoordinator : BackgroundService
             {
                 _registry.Patch(rec.PanelDeviceId, new PanelDevicePatch { Layout = seed });
             }
+            if (info.Profile.MultiInstance && !rec.MultiInstance)
+            {
+                rec.MultiInstance = true;
+                _store.Save(records);
+            }
             return rec.PanelDeviceId;
         }
 
-        var record = _registry.Allocate(info.Profile.DisplayName, info.Profile.BuildCapabilities());
+        // A multi-screen device's screens never share a record, nor lend one to another panel.
+        var multiInstanceIds = records.Values.Where(r => r.MultiInstance).Select(r => r.PanelDeviceId).ToHashSet(StringComparer.Ordinal);
+        var record = _registry.Allocate(
+            info.Profile.DisplayName,
+            info.Profile.BuildCapabilities(),
+            info.Profile.MultiInstance ? _ => false : candidate => !multiInstanceIds.Contains(candidate.Id));
         if (IsStrip(info.Profile))
         {
             _registry.Patch(record.Id, new PanelDevicePatch { Layout = PanelLayoutDefaults.ForStrip(info.Profile.Surface) });
         }
         rec ??= new StreamedPanelRecord();
         rec.PanelDeviceId = record.Id;
+        rec.MultiInstance = info.Profile.MultiInstance;
         records[info.Serial] = rec;
         _store.Save(records);
         return record.Id;
+    }
+
+    /// <summary>
+    /// A multi-instance screen whose stored record another live session renders gets a fresh
+    /// one: a build that shared one record across a device's screens left every serial on it.
+    /// </summary>
+    private bool HeldByAnotherSession(string panelDeviceId, string serial)
+    {
+        lock (_lock)
+        {
+            return _bySerial.Values.Any(ds =>
+                ds.Session.PanelDeviceId == panelDeviceId && !string.Equals(ds.Info.Serial, serial, StringComparison.Ordinal));
+        }
     }
 
     private void TryReopenTransport(DeviceSession ds)

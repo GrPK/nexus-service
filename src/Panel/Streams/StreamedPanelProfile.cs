@@ -49,6 +49,9 @@ public sealed record StreamedPanelProfile
     /// <summary>The panel renders tall when its record's Portrait is on.</summary>
     public bool SupportsPortrait { get; init; }
 
+    /// <summary>One device carries several screens on this surface, so each serial gets its own record instead of the surface's shared one.</summary>
+    public bool MultiInstance { get; init; }
+
     /// <summary>Physical px/inch, which sizes the widget grid; null leaves the surface's estimate.</summary>
     public double? Dpi { get; init; }
 

@@ -1434,6 +1434,8 @@ public sealed class DevicesSettings
     /// <summary>The key of the hub pinned to each slot, first slot first: its USB serial, or its device path when it reports none.</summary>
     public List<string> LianLiHubKeys { get; set; } = new();
     public TlLightingSettings TlLighting { get; set; } = new();
+    /// <summary>Uni Fan TL LCD screens by screen key (L-Connect's serial, else port and fan); same content model as the SL wireless screens.</summary>
+    public Dictionary<string, LianLiWirelessScreenSettings> TlLcdScreens { get; set; } = new();
     public StrimerLightingSettings StrimerLighting { get; set; } = new();
     public Galahad2LightingSettings Galahad2Lighting { get; set; } = new();
     public HydroShift2LightingSettings HydroShift2Lighting { get; set; } = new();
@@ -1834,9 +1836,11 @@ public sealed class RecentApp
     public long LastFocusedUtcMs { get; set; }
 }
 
-/// <summary>One SL-LCD Wireless fan screen's persisted content selection and display settings.</summary>
+/// <summary>One Lian Li fan screen's persisted content selection and display settings (SL wireless and Uni Fan TL).</summary>
 public sealed class LianLiWirelessScreenSettings
 {
+    /// <summary>The screen is a streamed Nexus panel; <see cref="ContentType"/> is what it shows when this is off.</summary>
+    public bool NexusPanel { get; set; }
     /// <summary>"off" | "image" | "gif" | "video" | "sensor" | "clock" | "animation".</summary>
     public string ContentType { get; set; } = "off";
     public string? MediaId { get; set; }

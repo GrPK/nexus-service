@@ -39,7 +39,8 @@ public sealed class PanelDeviceRegistry
     /// </summary>
     public event Action<PanelDeviceRecord>? DisplayRecordReady;
 
-    public PanelDeviceRecord Allocate(string? displayName, PanelDeviceCapabilities? capabilities)
+    /// <param name="canReuse">Narrows which record a single-instance surface may reuse; null allows any.</param>
+    public PanelDeviceRecord Allocate(string? displayName, PanelDeviceCapabilities? capabilities, Func<PanelDeviceRecord, bool>? canReuse = null)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var surface = capabilities?.Surface;
@@ -57,7 +58,8 @@ public sealed class PanelDeviceRegistry
             {
                 var existing = s.PanelDevices.Values
                     .Where(d => string.IsNullOrEmpty(d.DisplayId)
-                        && string.Equals(d.Capabilities?.Surface, surface, StringComparison.Ordinal))
+                        && string.Equals(d.Capabilities?.Surface, surface, StringComparison.Ordinal)
+                        && (canReuse is null || canReuse(d)))
                     .OrderByDescending(d => d.LastSeenAt)
                     .FirstOrDefault();
                 if (existing is not null)

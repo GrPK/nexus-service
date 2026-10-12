@@ -691,6 +691,7 @@ app.MapSessionEndpoints();
 app.MapTryxEndpoints();
 app.MapSlv3Endpoints();
 app.MapSlv3LcdEndpoints();
+app.MapTlLcdEndpoints();
 app.MapUpdateEndpoints();
 app.MapCloudEndpoints();
 app.MapAiEndpoints();

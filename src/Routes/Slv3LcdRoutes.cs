@@ -5,6 +5,8 @@ using System.IO;
 using Microsoft.AspNetCore.Http;
 using Nexus.Service.Media;
 using Nexus.Service.Models;
+using Nexus.Service.Panel.Streams;
+using Nexus.Service.Peripherals.FanLcd;
 using Nexus.Service.Peripherals.LianLiWireless;
 using Nexus.Service.Persistence;
 using Nexus.Service.Serialization;
@@ -21,6 +23,8 @@ public sealed class Slv3LcdScreenDto
     public byte Brightness { get; set; }
     public bool SleepWhenLocked { get; set; } = true;
     public byte Rotation { get; set; }
+    /// <summary>The screen is a streamed Nexus panel; <see cref="ContentType"/> is what it shows when this is off.</summary>
+    public bool NexusPanel { get; set; }
     public string ContentType { get; set; } = "off";
     public string? MediaId { get; set; }
     /// <summary>"cpuLoad" | "cpuTemp" | "gpuLoad" | "gpuTemp" | "memoryUsage" | "vramUsage" | "fanRpm". Set when contentType is "sensor".</summary>
@@ -39,6 +43,10 @@ public sealed class Slv3LcdScreenDto
     public string? TempUnit { get; set; }
     /// <summary>User-chosen list position (0-based); -1 when not set. The list is already sorted by it.</summary>
     public int Order { get; set; } = -1;
+    /// <summary>The screen's panel record while <see cref="NexusPanel"/> is on and the record exists; null otherwise.</summary>
+    public string? PanelDeviceId { get; set; }
+    /// <summary>Where the screen sits, e.g. "#1.2" (port 1, fan 2) on a Uni Fan TL; null when the family has no such label.</summary>
+    public string? Label { get; set; }
 }
 
 public sealed class Slv3LcdScreensResponse
@@ -52,6 +60,7 @@ public sealed class Slv3LcdSettingsRequest
     public byte? Brightness { get; set; }
     public byte? Rotation { get; set; }
     public bool? SleepWhenLocked { get; set; }
+    public bool? NexusPanel { get; set; }
 }
 
 public sealed class Slv3LcdOrderRequest
@@ -142,9 +151,10 @@ public static class Slv3LcdRoutes
 
     public static void MapSlv3LcdEndpoints(this WebApplication app)
     {
-        app.MapGet("/devices/lianli-wireless/screens", (Slv3LcdHub hub, IConfigStore store) =>
+        app.MapGet("/devices/lianli-wireless/screens", (Slv3LcdHub hub, Slv3LcdScreens screens, IConfigStore store, StreamedPanelStore panelStore) =>
         {
             var screenSettings = store.Load().Devices.LianLiWireless.Screens;
+            var panelRecords = panelStore.Load();
             var response = new Slv3LcdScreensResponse();
             foreach (var screen in OrderScreens(hub.Screens, screenSettings))
             {
@@ -159,7 +169,8 @@ public static class Slv3LcdRoutes
                     Brightness = settings.Brightness,
                     SleepWhenLocked = settings.SleepWhenLocked,
                     Rotation = settings.Rotation,
-                    ContentType = settings.ContentType,
+                    NexusPanel = FanLcdContent.IsPanel(settings),
+                    ContentType = FanLcdContent.ContentOf(settings),
                     MediaId = settings.MediaId,
                     SensorSource = settings.SensorSource,
                     SensorStyle = settings.SensorStyle,
@@ -168,6 +179,7 @@ public static class Slv3LcdRoutes
                     ColorA = settings.ColorA,
                     ColorB = settings.ColorB,
                     TempUnit = settings.TempUnit,
+                    PanelDeviceId = PanelDeviceIdFor(panelRecords, screens, screen.Serial, settings),
                 });
             }
             return Results.Json(response, AppJsonContext.Default.Slv3LcdScreensResponse);
@@ -205,6 +217,7 @@ public static class Slv3LcdRoutes
                 if (body.Brightness.HasValue) screen.Brightness = body.Brightness.Value;
                 if (body.Rotation.HasValue) screen.Rotation = body.Rotation.Value;
                 if (body.SleepWhenLocked.HasValue) screen.SleepWhenLocked = body.SleepWhenLocked.Value;
+                if (body.NexusPanel is { } nexusPanel) ApplyNexusPanel(screen, nexusPanel);
                 s.Devices.LianLiWireless.Screens[body.Serial] = screen;
             });
 
@@ -216,17 +229,9 @@ public static class Slv3LcdRoutes
         app.MapPost("/devices/lianli-wireless/screens/order", (Slv3LcdOrderRequest body, IConfigStore store) =>
         {
             var serials = body.Serials ?? new List<string>();
-            if (serials.Count == 0)
+            if (ValidateOrder(serials) is { } orderError)
             {
-                return Results.Json(ApiResponse.Fail("missing serials"), AppJsonContext.Default.ApiResponse);
-            }
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var serial in serials)
-            {
-                if (string.IsNullOrWhiteSpace(serial) || !seen.Add(serial))
-                {
-                    return Results.Json(ApiResponse.Fail("serials must be distinct and non-empty"), AppJsonContext.Default.ApiResponse);
-                }
+                return Results.Json(ApiResponse.Fail(orderError), AppJsonContext.Default.ApiResponse);
             }
 
             store.Update(s =>
@@ -246,45 +251,9 @@ public static class Slv3LcdRoutes
 
         app.MapPost("/devices/lianli-wireless/screen/content", (Slv3LcdContentRequest body, IConfigStore store) =>
         {
-            if (string.IsNullOrWhiteSpace(body.Serial))
+            if (ValidateContent(body) is { } contentError)
             {
-                return Results.Json(ApiResponse.Fail("missing serial"), AppJsonContext.Default.ApiResponse);
-            }
-            if (Array.IndexOf(ValidContentTypes, body.ContentType) < 0)
-            {
-                return Results.Json(ApiResponse.Fail("invalid contentType"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.MediaId is not null && !MediaLibrary.IsValidId(body.MediaId))
-            {
-                return Results.Json(ApiResponse.Fail("invalid mediaId"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.SensorSource is not null && Array.IndexOf(ValidSensorSources, body.SensorSource) < 0)
-            {
-                return Results.Json(ApiResponse.Fail("invalid sensorSource"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.SensorStyle is not null && Array.IndexOf(ValidSensorStyles, body.SensorStyle) < 0)
-            {
-                return Results.Json(ApiResponse.Fail("invalid sensorStyle"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.ClockFace is not null && Array.IndexOf(ValidClockFaces, body.ClockFace) < 0)
-            {
-                return Results.Json(ApiResponse.Fail("invalid clockFace"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.AnimationId is not null && Array.IndexOf(ValidAnimationIds, body.AnimationId) < 0)
-            {
-                return Results.Json(ApiResponse.Fail("invalid animationId"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.TempUnit is not null && Array.IndexOf(ValidTempUnits, body.TempUnit) < 0)
-            {
-                return Results.Json(ApiResponse.Fail("invalid tempUnit"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.ColorA is not null && !IsValidHexColor(body.ColorA))
-            {
-                return Results.Json(ApiResponse.Fail("invalid colorA"), AppJsonContext.Default.ApiResponse);
-            }
-            if (body.ColorB is not null && !IsValidHexColor(body.ColorB))
-            {
-                return Results.Json(ApiResponse.Fail("invalid colorB"), AppJsonContext.Default.ApiResponse);
+                return Results.Json(ApiResponse.Fail(contentError), AppJsonContext.Default.ApiResponse);
             }
 
             store.Update(s =>
@@ -292,15 +261,7 @@ public static class Slv3LcdRoutes
                 var screen = s.Devices.LianLiWireless.Screens.TryGetValue(body.Serial, out var existing)
                     ? existing
                     : new LianLiWirelessScreenSettings();
-                screen.ContentType = body.ContentType;
-                screen.MediaId = body.ContentType == "off" ? null : body.MediaId;
-                screen.SensorSource = body.SensorSource ?? screen.SensorSource;
-                screen.SensorStyle = body.SensorStyle ?? screen.SensorStyle;
-                screen.ClockFace = body.ClockFace ?? screen.ClockFace;
-                screen.AnimationId = body.AnimationId ?? screen.AnimationId;
-                screen.ColorA = body.ColorA ?? screen.ColorA;
-                screen.ColorB = body.ColorB ?? screen.ColorB;
-                screen.TempUnit = body.TempUnit ?? screen.TempUnit;
+                ApplyContent(screen, body);
                 s.Devices.LianLiWireless.Screens[body.Serial] = screen;
             });
 
@@ -409,6 +370,106 @@ public static class Slv3LcdRoutes
             return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
         });
     }
+
+    /// <summary>The first problem with a content request, or null when it is valid.</summary>
+    internal static string? ValidateContent(Slv3LcdContentRequest body)
+    {
+        if (string.IsNullOrWhiteSpace(body.Serial))
+        {
+            return "missing serial";
+        }
+        if (Array.IndexOf(ValidContentTypes, body.ContentType) < 0)
+        {
+            return "invalid contentType";
+        }
+        if (body.MediaId is not null && !MediaLibrary.IsValidId(body.MediaId))
+        {
+            return "invalid mediaId";
+        }
+        if (body.SensorSource is not null && Array.IndexOf(ValidSensorSources, body.SensorSource) < 0)
+        {
+            return "invalid sensorSource";
+        }
+        if (body.SensorStyle is not null && Array.IndexOf(ValidSensorStyles, body.SensorStyle) < 0)
+        {
+            return "invalid sensorStyle";
+        }
+        if (body.ClockFace is not null && Array.IndexOf(ValidClockFaces, body.ClockFace) < 0)
+        {
+            return "invalid clockFace";
+        }
+        if (body.AnimationId is not null && Array.IndexOf(ValidAnimationIds, body.AnimationId) < 0)
+        {
+            return "invalid animationId";
+        }
+        if (body.TempUnit is not null && Array.IndexOf(ValidTempUnits, body.TempUnit) < 0)
+        {
+            return "invalid tempUnit";
+        }
+        if (body.ColorA is not null && !IsValidHexColor(body.ColorA))
+        {
+            return "invalid colorA";
+        }
+        if (body.ColorB is not null && !IsValidHexColor(body.ColorB))
+        {
+            return "invalid colorB";
+        }
+        return null;
+    }
+
+    internal static void ApplyContent(LianLiWirelessScreenSettings screen, Slv3LcdContentRequest body)
+    {
+        // A legacy stored panel content keeps its panel on while the content behind it changes.
+        if (screen.ContentType == FanLcdContent.Panel)
+        {
+            screen.NexusPanel = true;
+        }
+        screen.ContentType = body.ContentType;
+        screen.MediaId = body.ContentType == "off" ? null : body.MediaId;
+        screen.SensorSource = body.SensorSource ?? screen.SensorSource;
+        screen.SensorStyle = body.SensorStyle ?? screen.SensorStyle;
+        screen.ClockFace = body.ClockFace ?? screen.ClockFace;
+        screen.AnimationId = body.AnimationId ?? screen.AnimationId;
+        screen.ColorA = body.ColorA ?? screen.ColorA;
+        screen.ColorB = body.ColorB ?? screen.ColorB;
+        screen.TempUnit = body.TempUnit ?? screen.TempUnit;
+    }
+
+    internal static void ApplyNexusPanel(LianLiWirelessScreenSettings screen, bool on)
+    {
+        screen.NexusPanel = on;
+        if (screen.ContentType == FanLcdContent.Panel)
+        {
+            screen.ContentType = "off";
+        }
+    }
+
+    /// <summary>The problem with a screen-order request, or null when it is valid.</summary>
+    internal static string? ValidateOrder(List<string> serials)
+    {
+        if (serials.Count == 0)
+        {
+            return "missing serials";
+        }
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var serial in serials)
+        {
+            if (string.IsNullOrWhiteSpace(serial) || !seen.Add(serial))
+            {
+                return "serials must be distinct and non-empty";
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The panel record of a screen with its panel on, once its session has minted one.</summary>
+    internal static string? PanelDeviceIdFor(
+        IReadOnlyDictionary<string, StreamedPanelRecord> panelRecords, IFanLcdScreens screens, string serial, LianLiWirelessScreenSettings settings) =>
+        FanLcdContent.IsPanel(settings)
+        && panelRecords.TryGetValue(FanLcdPanelDiscovery.PanelSerial(screens, serial), out var record)
+        && !string.IsNullOrEmpty(record.PanelDeviceId)
+            ? record.PanelDeviceId
+            : null;
 
     private static bool IsValidHexColor(string value)
     {
