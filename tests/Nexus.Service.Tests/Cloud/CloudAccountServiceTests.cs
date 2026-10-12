@@ -766,4 +766,35 @@ public sealed class CloudAccountServiceTests
         Assert.Equal("no_session", result.ErrorCode);
         Assert.Empty(store.Load().Auth!.CloudAccounts);
     }
+
+    [Fact]
+    public async Task WithAuthAsync_reports_offline_when_the_refresh_gets_a_5xx_and_keeps_the_session()
+    {
+        var (svc, api, store) = Make();
+        Seed(store);
+        api.OnRefresh = _ => CloudApiResult<CloudAuthSession>.Fail(503, "unavailable", "down");
+
+        var result = await svc.WithAuthAsync("acct-1",
+            _ => Task.FromResult(CloudApiResult<CloudVoid>.Ok(CloudVoid.Instance)), CancellationToken.None);
+
+        Assert.True(result.Offline);
+        Assert.Single(store.Load().Auth!.CloudAccounts);
+    }
+
+    [Fact]
+    public async Task WithAuthAsync_reports_offline_when_the_re_refresh_after_a_401_cannot_reach_the_cloud()
+    {
+        var (svc, api, store) = Make();
+        Seed(store);
+        var refreshes = 0;
+        api.OnRefresh = _ => ++refreshes == 1
+            ? CloudApiResult<CloudAuthSession>.Ok(new CloudAuthSession { AccessToken = "a", RefreshToken = "r2", Account = Account("acct-1") })
+            : CloudApiResult<CloudAuthSession>.NetworkError("down");
+
+        var result = await svc.WithAuthAsync("acct-1",
+            _ => Task.FromResult(CloudApiResult<CloudVoid>.Fail(401, null, null)), CancellationToken.None);
+
+        Assert.True(result.Offline);
+        Assert.Equal(2, api.RefreshCalls);
+    }
 }

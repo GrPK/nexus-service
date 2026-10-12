@@ -285,6 +285,9 @@ public sealed class EffectMarketRoutesTests : IClassFixture<EffectMarketAppFacto
 
     [Theory]
     [InlineData(502, "text/html", "<html>bad gateway</html>")]
+    [InlineData(502, "application/json", "<html>bad gateway</html>")]
+    [InlineData(403, "application/json", "<html>edge block</html>")]
+    [InlineData(429, "application/json", "Too many requests")]
     [InlineData(503, "application/json", "")]
     public async Task A_non_json_or_empty_cloud_5xx_is_503_market_unavailable(int status, string contentType, string body)
     {
@@ -298,7 +301,20 @@ public sealed class EffectMarketRoutesTests : IClassFixture<EffectMarketAppFacto
     }
 
     [Fact]
-    public async Task A_json_cloud_5xx_and_any_relayed_body_are_served_as_application_json()
+    public async Task A_json_cloud_5xx_with_a_body_is_relayed_unchanged()
+    {
+        const string body = "{\"statusCode\":500,\"message\":\"boom\"}";
+        _factory.Api.OnSendRaw = (_, _, _, _) => CloudApiResult<CloudRawResponse>.Ok(
+            new CloudRawResponse { Body = body, ContentType = "application/json" }, 500);
+
+        var res = await Desktop().GetAsync("/lighting/effect-market");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, res.StatusCode);
+        Assert.Equal(body, await res.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_json_body_labeled_text_html_is_relayed_as_application_json()
     {
         _factory.Api.OnSendRaw = (_, _, _, _) => CloudApiResult<CloudRawResponse>.Ok(
             new CloudRawResponse { Body = "{\"message\":\"x\"}", ContentType = "text/html" }, 404);

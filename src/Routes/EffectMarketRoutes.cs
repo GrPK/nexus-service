@@ -129,17 +129,32 @@ public static class EffectMarketRoutes
         {
             return Fail(StatusCodes.Status503ServiceUnavailable, "market_unavailable");
         }
-        var json = value.ContentType.Equals("application/json", StringComparison.OrdinalIgnoreCase);
-        if (result.StatusCode >= 500 && !(json && value.Body.Length > 0))
-        {
-            // An edge or proxy error page is not ours to relay onto the dashboard origin.
-            return Fail(StatusCodes.Status503ServiceUnavailable, "market_unavailable");
-        }
         if (value.Body.Length == 0)
         {
-            return Results.StatusCode(result.StatusCode);
+            return result.StatusCode >= 500
+                ? Fail(StatusCodes.Status503ServiceUnavailable, "market_unavailable")
+                : Results.StatusCode(result.StatusCode);
+        }
+        // Decided by the body, not the header: the client labels a reply with no Content-Type as JSON.
+        // An edge or proxy page is not ours to relay onto the dashboard origin.
+        if (!IsJson(value.Body))
+        {
+            return Fail(StatusCodes.Status503ServiceUnavailable, "market_unavailable");
         }
         return Results.Text(value.Body, "application/json", statusCode: result.StatusCode);
+    }
+
+    private static bool IsJson(string body)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            return true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     private static IResult Fail(int status, string msg) =>

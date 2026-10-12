@@ -316,17 +316,10 @@ public sealed class CloudAccountService
     // ── access token / refresh ──────────────────────────────────────────
 
     /// <summary>Returns a usable access token for the account, refreshing first if the cached one is missing or near expiry. Null when there is no stored session (or the refresh token was rejected, in which case the local session is dropped).</summary>
-    public async Task<string?> GetValidAccessTokenAsync(string accountId, CancellationToken ct)
-    {
-        if (_accessTokens.TryGetValue(accountId, out var cached) &&
-            cached.ExpiresAt > _clock.GetUtcNow().AddSeconds(AccessTokenRefreshSkewSeconds))
-        {
-            return cached.Token;
-        }
-        return await RefreshAsync(accountId, ct).ConfigureAwait(false);
-    }
+    public async Task<string?> GetValidAccessTokenAsync(string accountId, CancellationToken ct) =>
+        (await GetValidAccessTokenDetailedAsync(accountId, ct).ConfigureAwait(false)).Token;
 
-    /// <summary>Same as <see cref="GetValidAccessTokenAsync"/>, but says when a null token is because the refresh could not reach the cloud.</summary>
+    /// <summary>Same as <see cref="GetValidAccessTokenAsync"/>, but says when a null token is because the refresh failed transiently (offline, 5xx, malformed reply) rather than being refused.</summary>
     private async Task<(string? Token, bool Unreachable)> GetValidAccessTokenDetailedAsync(string accountId, CancellationToken ct)
     {
         if (_accessTokens.TryGetValue(accountId, out var cached) &&
@@ -403,12 +396,13 @@ public sealed class CloudAccountService
             // refresh token itself may still be good, so the session stays and
             // the caller retries later instead of forcing every machine to log
             // back in on a server blip.
-            if (!result.Offline && (result.StatusCode == 401 || result.StatusCode == 403))
+            var rejected = !result.Offline && (result.StatusCode == 401 || result.StatusCode == 403);
+            if (rejected)
             {
                 Console.Error.WriteLine($"[cloud] refresh rejected ({result.StatusCode} {result.ErrorCode}: {result.ErrorMessage}); signing out {accountId}");
                 RemoveAccountLocally(accountId);
             }
-            return (null, result.Offline);
+            return (null, !rejected);
         }
 
         var session = result.Value;
@@ -482,10 +476,10 @@ public sealed class CloudAccountService
             return result;
         }
 
-        var refreshed = await RefreshAsync(accountId, ct).ConfigureAwait(false);
+        var (refreshed, refreshUnreachable) = await RefreshDetailedAsync(accountId, ct).ConfigureAwait(false);
         if (refreshed is null)
         {
-            return result;
+            return refreshUnreachable ? CloudApiResult<T>.NetworkError("Cloud unreachable while refreshing the session.") : result;
         }
         return await call(refreshed).ConfigureAwait(false);
     }
