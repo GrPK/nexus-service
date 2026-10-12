@@ -88,17 +88,11 @@ public sealed class LightingEngine : IDisposable
     public int FrameIntervalMs { get; set; } = 33;
 
     /// <summary>
-    /// Selects the canvas-to-LED sampling technique. True = LED FOOTPRINT
-    /// SAMPLING: each LED integrates its cell of the device frame (see
-    /// <see cref="SampleLedFootprint"/>), so sparse content - music-reactive
-    /// bars, isolated lit pixels - registers anywhere inside the frame.
-    /// False = POINT SAMPLING: each LED reads the single canvas pixel under
-    /// its mapped point; content that misses those exact pixels leaves the
-    /// device dark. Flip to false to revert to the pre-footprint behaviour.
-    /// Ignored under <see cref="FullFrameSampling"/>, which always takes the
-    /// plain cell mean (<see cref="SampleLedBox"/>).
+    /// Side of the sampling spot at an LED, as a fraction of the canvas width.
+    /// An LED reads the plain mean of a spot this size centered on its sample position, clamped at the canvas edges and
+    /// never larger than the LED's own cell.
     /// </summary>
-    public bool FootprintSamplingEnabled { get; set; } = true;
+    private const float SpotSideOfCanvasWidth = 3f / 160f;
 
     /// <summary>
     /// Every device samples the WHOLE canvas instead of the rect its layout
@@ -160,22 +154,72 @@ public sealed class LightingEngine : IDisposable
         _stackSlots = Nexus.Service.Lighting.StackSlots.Index(stacks);
     }
 
-    /// <summary>
-    /// Per-device Static assignments. Set once at wire-up; null in tests and any
-    /// host that never assigns one, in which case sampling is unchanged.
-    /// </summary>
-    public Nexus.Service.Lighting.StaticDeviceEffectTracker? StaticEffects { get; set; }
-
     /// <summary>Per-LED colour locks, painted after every other pass. Null in tests.</summary>
     public Nexus.Service.Lighting.LedColorLockTracker? LedColorLocks { get; set; }
     /// <summary>Lights keyboards as keys are pressed; painted after the canvas sample, under the colour locks.</summary>
     public Nexus.Service.Lighting.KeyReactive.KeyReactiveOverlay? KeyReactive { get; set; }
 
     /// <summary>
-    /// Builds the IEffect for an assignment. Supplied by the provider, which
+    /// Per-device pins. Set once at wire-up; null in tests and any host that
+    /// never pins one, in which case sampling is unchanged.
+    /// </summary>
+    public Nexus.Service.Lighting.DevicePinTracker? Pins { get; set; }
+
+    /// <summary>
+    /// Builds the IEffect for a static pin. Supplied by the provider, which
     /// owns shader construction - the engine only renders what it is handed.
     /// </summary>
-    public Func<Nexus.Service.Lighting.StaticDeviceAssignment, IEffect?>? StaticEffectFactory { get; set; }
+    public Func<Nexus.Service.Persistence.DevicePin, IEffect?>? StaticPinEffectFactory { get; set; }
+
+    /// <summary>
+    /// Content tag of a pinned source's resolved current look, so the engine can
+    /// tell when a pinned effect needs updating. The key is an Animate shader key
+    /// or <see cref="MirrorPinKey"/>. Supplied by the provider, which owns where
+    /// that look lives.
+    /// </summary>
+    public Func<string, string?>? PinLookTag { get; set; }
+
+    /// <summary>
+    /// Builds a pinned effect at its resolved current look. Given the instance
+    /// built before (or null), it may update that one in place and return it,
+    /// which avoids a shader recompile per slider drag; any other return value
+    /// replaces it and the engine disposes the old one.
+    /// </summary>
+    public Func<string, IEffect?, IEffect?>? PinEffectFactory { get; set; }
+
+    /// <summary>Render key of the screen capture shared by every mirror pin.</summary>
+    public const string MirrorPinKey = "@mirror";
+
+    /// <summary>Render key of the one Media source shared by every media pin.</summary>
+    public const string MediaPinKey = "@media";
+
+    /// <summary>Name of the global Media effect; a media pin shares its canvas while it runs.</summary>
+    public const string MediaEffectName = "media";
+
+    /// <summary>Name of the global Screen Mirror effect; a mirror pin shares its canvas while it runs.</summary>
+    public const string ScreenEffectName = "screen";
+
+    // One live instance per distinct pinned source (Animate shader or the mirror capture). Engine thread only: the
+    // GL context lives there.
+    private sealed class PinRender
+    {
+        public IEffect? Effect;
+        public CanvasBuffer Canvas = null!;
+        public string? Tag;
+        public bool Failed;
+        public bool Rendered;
+        public long UsedTick = -1;
+        public long RetryAtMs;
+    }
+    private readonly Dictionary<string, PinRender> _pinRenders = new(StringComparer.Ordinal);
+    // Device id to the canvas it samples this tick; a null canvas means the
+    // main one. Absent means no animate/mirror pin (or its source failed to render).
+    private readonly Dictionary<string, CanvasBuffer?> _pinnedDevices = new(StringComparer.Ordinal);
+    // Devices pinned to a Simple-mode sweep: they read the whole canvas, as every
+    // device does globally while a sweep is the active effect.
+    private readonly HashSet<string> _pinFullFrame = new(StringComparer.Ordinal);
+    private long _pinTick;
+    private bool[] _gameSkip = Array.Empty<bool>();
 
     // One assignment renders once into this scratch canvas and every device
     // wearing that look samples it. Static is a held frame, so a look is
@@ -758,14 +802,15 @@ public sealed class LightingEngine : IDisposable
                         // publish: UpdateDevices swaps the array lock-free,
                         // and the skip mask below is indexed against it.
                         var devices = _devices;
+                        RenderPins(effect, devices);
                         SampleDevicesFromCanvas(devices);
                         ApplyLedColorLocks(devices);
                         if (effect is GameSyncEffect gs)
                         {
-                            // A locked look (or a highlight / test pattern)
+                            // A static pin (or a highlight / test pattern)
                             // already owns its device; the game frame must
                             // not paint over it.
-                            gs.WriteToDevices(devices, _overlaid);
+                            gs.WriteToDevices(devices, GameSkipMask(devices));
                             // The game frame paints whole devices, locked LEDs too.
                             ApplyLedColorLocks(devices);
                         }
@@ -819,6 +864,10 @@ public sealed class LightingEngine : IDisposable
                         RestoreBlackoutBaseline();
                         SetBlackout(false);
                     }
+                    if (_paused || _blackout)
+                    {
+                        PrunePinRenders(_devices);
+                    }
                     SerializeAndBroadcast();
                     FramePublished?.Invoke();
                     // After the publish, so look-ahead renders never delay this tick's frame.
@@ -856,6 +905,7 @@ public sealed class LightingEngine : IDisposable
         }
         finally
         {
+            DisposePinRenders();
             _canvas.Clear();
             foreach (var dev in _devices)
             {
@@ -873,6 +923,249 @@ public sealed class LightingEngine : IDisposable
             _tickCount++;
             Monitor.PulseAll(_tickGate);
         }
+    }
+
+    private void DisposePinRenders()
+    {
+        foreach (var r in _pinRenders.Values)
+        {
+            try { r.Effect?.Dispose(); } catch { /* best-effort */ }
+        }
+        _pinRenders.Clear();
+        _pinnedDevices.Clear();
+    }
+
+    private static string? PinRenderKey(Nexus.Service.Persistence.DevicePin pin)
+    {
+        if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate && !string.IsNullOrEmpty(pin.Effect))
+        {
+            return pin.Effect;
+        }
+        if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Mirror)
+        {
+            return MirrorPinKey;
+        }
+        if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+        {
+            return MediaPinKey;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// While paused or held black no pin renders, but a render whose pin no
+    /// longer exists is disposed so a cleared mirror pin stops screen capture.
+    /// Existing pins keep their held frame. Engine thread.
+    /// </summary>
+    private int _prunedPinsVersion = -1;
+    private DeviceFrame[]? _prunedDevices;
+
+    private void PrunePinRenders(DeviceFrame[] devices)
+    {
+        if (_pinRenders.Count == 0)
+        {
+            return;
+        }
+        var tracker = Pins;
+        if (tracker is null || !tracker.Any)
+        {
+            DisposePinRenders();
+            return;
+        }
+        // A held pause costs nothing until the pins or the device set change.
+        if (tracker.Version == _prunedPinsVersion && ReferenceEquals(devices, _prunedDevices))
+        {
+            return;
+        }
+        _prunedPinsVersion = tracker.Version;
+        _prunedDevices = devices;
+        var pins = tracker.Snapshot();
+        HashSet<string> live = new(StringComparer.Ordinal);
+        foreach (var dev in devices)
+        {
+            if (pins.TryGetValue(dev.Id, out var pin) && PinRenderKey(pin) is { } k)
+            {
+                live.Add(k);
+            }
+        }
+        List<string>? stale = null;
+        foreach (var key in _pinRenders.Keys)
+        {
+            if (!live.Contains(key)) (stale ??= new List<string>()).Add(key);
+        }
+        if (stale is not null)
+        {
+            foreach (var key in stale)
+            {
+                try { _pinRenders[key].Effect?.Dispose(); } catch { /* best-effort */ }
+                _pinRenders.Remove(key);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Renders each distinct pinned source (an Animate shader, the one screen
+    /// capture every mirror pin shares, or the one Media item every media pin
+    /// shares) that is not the active effect onto its own canvas and records
+    /// which canvas every pinned device samples. A device pinned to the active
+    /// effect keeps the main canvas. Only pins whose device is present render, so
+    /// the mirror capture and the media source run while any pinned device
+    /// exists and are disposed when none remain. Engine thread.
+    /// </summary>
+    private void RenderPins(IEffect active, DeviceFrame[] devices)
+    {
+        var tracker = Pins;
+        _pinnedDevices.Clear();
+        _pinFullFrame.Clear();
+        if (tracker is null || !tracker.Any)
+        {
+            if (_pinRenders.Count > 0)
+            {
+                DisposePinRenders();
+            }
+            return;
+        }
+        var factory = PinEffectFactory;
+        if (factory is null)
+        {
+            return;
+        }
+        var pins = tracker.Snapshot();
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var tick = ++_pinTick;
+        var used = 0;
+        var activeName = active.Name;
+        foreach (var dev in devices)
+        {
+            if (!pins.TryGetValue(dev.Id, out var pin))
+            {
+                continue;
+            }
+            if (PinRenderKey(pin) is not { } key)
+            {
+                continue;
+            }
+            var sweep = key != MirrorPinKey && key != MediaPinKey && Gpu.ShaderLibrary.IsSweepEffect(key);
+            // Pinned to what is already running globally: share its canvas.
+            var shared = key == MirrorPinKey ? ScreenEffectName : key == MediaPinKey ? MediaEffectName : key;
+            if (string.Equals(activeName, shared, StringComparison.Ordinal))
+            {
+                _pinnedDevices[dev.Id] = null;
+                if (sweep) _pinFullFrame.Add(dev.Id);
+                continue;
+            }
+            if (!_pinRenders.TryGetValue(key, out var render))
+            {
+                render = new PinRender { Canvas = new CanvasBuffer(_canvas.Width, _canvas.Height) };
+                _pinRenders[key] = render;
+            }
+            if (render.UsedTick != tick)
+            {
+                render.UsedTick = tick;
+                used++;
+                UpdatePinRender(key, render, factory, nowMs);
+                if (!render.Failed && render.Effect is not null)
+                {
+                    try
+                    {
+                        render.Effect.RenderFrame(render.Canvas, nowMs);
+                        render.Rendered = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        // A pinned effect that cannot render must not take the
+                        // frame down; its devices fall through to the canvas.
+                        render.Failed = true;
+                        render.Rendered = false;
+                        render.RetryAtMs = nowMs + PinRetryMs;
+                        Gpu.GpuContext.Log($"[pin] render failed for {key}: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    render.Rendered = false;
+                }
+            }
+            if (render.Rendered)
+            {
+                _pinnedDevices[dev.Id] = render.Canvas;
+                if (sweep) _pinFullFrame.Add(dev.Id);
+            }
+        }
+        if (used < _pinRenders.Count)
+        {
+            // Drop instances nothing present references any more.
+            List<string>? stale = null;
+            foreach (var (key, r) in _pinRenders)
+            {
+                if (r.UsedTick != tick) (stale ??= new List<string>()).Add(key);
+            }
+            if (stale is not null)
+            {
+                foreach (var key in stale)
+                {
+                    try { _pinRenders[key].Effect?.Dispose(); } catch { /* best-effort */ }
+                    _pinRenders.Remove(key);
+                }
+            }
+        }
+    }
+
+    private const long PinRetryMs = 1000;
+
+    private void UpdatePinRender(string key, PinRender render, Func<string, IEffect?, IEffect?> factory, long nowMs)
+    {
+        try
+        {
+            var tag = PinLookTag?.Invoke(key);
+            if (render.Effect is not null && !render.Failed && tag is not null && tag == render.Tag)
+            {
+                return;
+            }
+            // A failed build or render retries on a changed look, or after a pause.
+            if (render.Failed && tag is not null && tag == render.Tag && nowMs < render.RetryAtMs)
+            {
+                return;
+            }
+            var previous = render.Failed ? null : render.Effect;
+            var built = factory(key, previous);
+            if (!ReferenceEquals(built, render.Effect))
+            {
+                try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+            }
+            render.Effect = built;
+            render.Tag = tag;
+            render.Failed = built is null;
+            render.RetryAtMs = nowMs + PinRetryMs;
+        }
+        catch (Exception ex)
+        {
+            try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+            render.Effect = null;
+            render.Failed = true;
+            render.RetryAtMs = nowMs + PinRetryMs;
+            Gpu.GpuContext.Log($"[pin] build failed for {key}: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The skip mask for the game frame: whatever an overlay painted, plus
+    /// pinned devices, which the shared game frame must not overwrite.
+    /// The key-reactive pass keeps using the overlay mask alone, so a pinned
+    /// keyboard still reacts to presses.
+    /// </summary>
+    private bool[] GameSkipMask(DeviceFrame[] devices)
+    {
+        if (_pinnedDevices.Count == 0)
+        {
+            return _overlaid;
+        }
+        if (_gameSkip.Length < devices.Length) _gameSkip = new bool[devices.Length];
+        for (var i = 0; i < devices.Length; i++)
+        {
+            _gameSkip[i] = (i < _overlaid.Length && _overlaid[i]) || _pinnedDevices.ContainsKey(devices[i].Id);
+        }
+        return _gameSkip;
     }
 
     /// <summary>
@@ -897,6 +1190,11 @@ public sealed class LightingEngine : IDisposable
             var editing = d.HighlightLeds is { Count: > 0 } || d.TestPattern is not null
                 || d.PreviewLayout is not null || d.PreviewLedCount is not null;
             if (editing && deviceIds.Contains(d.Id))
+            {
+                return false;
+            }
+            // A pinned device shows its own source, which a loop rendered from the active effect would miss.
+            if (Pins?.IsPinned(d.Id) == true && deviceIds.Contains(d.Id))
             {
                 return false;
             }
@@ -962,7 +1260,7 @@ public sealed class LightingEngine : IDisposable
                 var shadow = req.NewShadowFrames();
                 effect.RenderFrame(_aheadCanvas, req.TickMs[req.NextFrame]);
                 _sampleCanvas = _aheadCanvas;
-                SampleDevicesFromCanvas(shadow);
+                SampleDevicesFromCanvas(shadow, honorPins: false);
                 ApplyLedColorLocks(shadow);
                 foreach (var d in shadow)
                 {
@@ -990,7 +1288,20 @@ public sealed class LightingEngine : IDisposable
         }
     }
 
-    private void SampleDevicesFromCanvas(DeviceFrame[] devices)
+    private void SampleDevicesFromCanvas(DeviceFrame[] devices, bool honorPins = true)
+    {
+        var baseCanvas = _sampleCanvas;
+        try
+        {
+            SampleDevicesCore(devices, baseCanvas, honorPins && _pinnedDevices.Count > 0);
+        }
+        finally
+        {
+            _sampleCanvas = baseCanvas;
+        }
+    }
+
+    private void SampleDevicesCore(DeviceFrame[] devices, CanvasBuffer baseCanvas, bool honorPins)
     {
         var cw = _sampleCanvas.Width;
         var ch = _sampleCanvas.Height;
@@ -1005,6 +1316,11 @@ public sealed class LightingEngine : IDisposable
         for (var di = 0; di < devices.Length; di++)
         {
             var dev = devices[di];
+            // An animate or mirror pinned device samples its source's canvas, the main
+            // one when it is pinned to what is running globally.
+            CanvasBuffer? pinCanvas = null;
+            var onPinCanvas = honorPins && _pinnedDevices.TryGetValue(dev.Id, out pinCanvas) && pinCanvas is not null;
+            _sampleCanvas = onPinCanvas ? pinCanvas! : baseCanvas;
             // Preview LED count from the editor's unsaved draft; clamped to the
             // physical buffer size because SetLed bounds-guards on LedCount.
             var ledCount = dev.PreviewLedCount is { } pc
@@ -1035,11 +1351,13 @@ public sealed class LightingEngine : IDisposable
             // unturned in units, rotated about (frameCx, frameCy), and only
             // then scaled onto the pixel grid. A stack slot is cut from the
             // unturned rect and turns with the whole frame.
-            var fullFrame = FullFrameSampling;
-            // A full-frame device's cell is a slice of the whole canvas, which
-            // SampleLedFootprint's lit-pixel weighting reads wrong; it takes the
-            // plain mean instead. See SampleLedBox for why.
-            var footprint = FootprintSamplingEnabled && !fullFrame;
+            // A device on its own pin canvas follows that source alone: the
+            // global sweep flag describes the main canvas, not this one.
+            var fullFrame = onPinCanvas
+                ? _pinFullFrame.Contains(dev.Id)
+                : FullFrameSampling || (honorPins && _pinFullFrame.Contains(dev.Id));
+            // A full-frame device's cell is a slice of the whole canvas, so it
+            // takes the plain cell mean instead of the spot. See SampleLedBox.
             var rectX = fullFrame ? 0f : dev.X;
             var rectY = fullFrame ? 0f : dev.Y;
             var rectW = fullFrame ? CW : dev.W;
@@ -1107,7 +1425,7 @@ public sealed class LightingEngine : IDisposable
 
             if (scene is not null && scene.Placements.TryGetValue(dev.Id, out var quads))
             {
-                SampleSceneDevice(dev, ledCount, devLedU, devLedV, devLedDisabled, quads, scene.Camera, FootprintSamplingEnabled, kx, ky);
+                SampleSceneDevice(dev, ledCount, devLedU, devLedV, devLedDisabled, quads, scene.Camera, kx, ky);
                 continue;
             }
 
@@ -1158,11 +1476,9 @@ public sealed class LightingEngine : IDisposable
                     var ly = rectY + devLedV[i] * rectH - frameCy;
                     var sx = (frameCx + lx * cos - ly * sin) * kx;
                     var sy = (frameCy + lx * sin + ly * cos) * ky;
-                    var (r, g, b) = footprint
-                        ? SampleLedFootprint(sx - uvHalfW, sy - uvHalfH, sx + uvHalfW, sy + uvHalfH)
-                        : fullFrame
-                            ? SampleLedBox(sx - uvHalfW, sy - uvHalfH, sx + uvHalfW, sy + uvHalfH)
-                            : _sampleCanvas.GetPixel((int)sx, (int)sy);
+                    var (r, g, b) = fullFrame
+                        ? SampleLedBox(sx - uvHalfW, sy - uvHalfH, sx + uvHalfW, sy + uvHalfH)
+                        : SampleLedSpot(sx, sy, uvHalfW, uvHalfH);
                     dev.SetLed(i, r, g, b);
                 }
                 continue;
@@ -1195,11 +1511,9 @@ public sealed class LightingEngine : IDisposable
                 var lx = rectX + rectW * 0.5f + t * rectW - frameCx;
                 var sx = (frameCx + lx * cos - midY * sin) * kx;
                 var sy = (frameCy + lx * sin + midY * cos) * ky;
-                var (r, g, b) = footprint
-                    ? SampleLedFootprint(sx - linHalfW, sy - linHalfH, sx + linHalfW, sy + linHalfH)
-                    : fullFrame
-                        ? SampleLedBox(sx - linHalfW, sy - linHalfH, sx + linHalfW, sy + linHalfH)
-                        : _sampleCanvas.GetPixel((int)sx, (int)sy);
+                var (r, g, b) = fullFrame
+                    ? SampleLedBox(sx - linHalfW, sy - linHalfH, sx + linHalfW, sy + linHalfH)
+                    : SampleLedSpot(sx, sy, linHalfW, linHalfH);
                 dev.SetLed(i, r, g, b);
             }
         }
@@ -1214,7 +1528,7 @@ public sealed class LightingEngine : IDisposable
     private void SampleSceneDevice(
         DeviceFrame dev, int ledCount, float[]? ledU, float[]? ledV, bool[]? disabled,
         Nexus.Service.Lighting.Scene.SceneQuad[] quads, in Nexus.Service.Lighting.Scene.SceneCameraBasis cam,
-        bool footprint, float kx, float ky)
+        float kx, float ky)
     {
         var hasUv = ledU is not null && ledV is not null && ledU.Length == ledCount && ledV.Length == ledCount;
         var runs = quads.Length;
@@ -1295,54 +1609,46 @@ public sealed class LightingEngine : IDisposable
                 }
                 var sx = cx * kx;
                 var sy = cy * ky;
-                var (r, g, b) = footprint
-                    ? SampleLedFootprint(sx - halfW, sy - halfH, sx + halfW, sy + halfH)
-                    : _sampleCanvas.GetPixel((int)sx, (int)sy);
+                var (r, g, b) = SampleLedSpot(sx, sy, halfW, halfH);
                 dev.SetLed(i, r, g, b);
             }
         }
     }
 
     /// <summary>
-    /// LED FOOTPRINT SAMPLING (gated by <see cref="FootprintSamplingEnabled"/>):
-    /// samples the LED's cell of the canvas instead of a single point, so sparse
-    /// content (music-reactive bars, isolated lit pixels) registers wherever it
-    /// lands inside the frame. Samples are weighted by max-channel luminance
-    /// squared: lit pixels dominate dark filler, an all-dark cell stays black,
-    /// and hue is preserved (a per-channel max would mix channels from different
-    /// pixels). Reads every canvas pixel in the cell; cells tile the frame
-    /// (linear) or partition it by LED density (UV), so per-device cost is
-    /// bounded by the frame's canvas-pixel area per rendered frame.
+    /// Color of one LED: the plain mean, black included, of a small spot of
+    /// canvas pixels centered on the LED's sample position (<paramref name="sx"/>,
+    /// <paramref name="sy"/>, canvas pixels). The spot is
+    /// <see cref="SpotSideOfCanvasWidth"/> of the canvas width on a side, centered
+    /// on the pixel holding the position, and shrinks to the LED's own cell
+    /// (<paramref name="cellHalfW"/>, <paramref name="cellHalfH"/>, half extents
+    /// in canvas pixels) when that is smaller, so dense neighbours do not blur
+    /// together. Clamped at the canvas edges.
     /// </summary>
-    private (byte r, byte g, byte b) SampleLedFootprint(float x0, float y0, float x1, float y1)
+    private (byte r, byte g, byte b) SampleLedSpot(float sx, float sy, float cellHalfW, float cellHalfH)
     {
-        var ix0 = Math.Clamp((int)MathF.Floor(x0), 0, _sampleCanvas.Width - 1);
-        var iy0 = Math.Clamp((int)MathF.Floor(y0), 0, _sampleCanvas.Height - 1);
-        var ix1 = Math.Clamp((int)MathF.Ceiling(x1) - 1, ix0, _sampleCanvas.Width - 1);
-        var iy1 = Math.Clamp((int)MathF.Ceiling(y1) - 1, iy0, _sampleCanvas.Height - 1);
-        long wSum = 0, rSum = 0, gSum = 0, bSum = 0;
+        var spotHalf = Math.Max(0.5f, _sampleCanvas.Width * SpotSideOfCanvasWidth * 0.5f);
+        var hx = Math.Min(cellHalfW, spotHalf);
+        var hy = Math.Min(cellHalfH, spotHalf);
+        var cx = MathF.Floor(sx) + 0.5f;
+        var cy = MathF.Floor(sy) + 0.5f;
+        var ix0 = Math.Clamp((int)MathF.Floor(cx - hx), 0, _sampleCanvas.Width - 1);
+        var iy0 = Math.Clamp((int)MathF.Floor(cy - hy), 0, _sampleCanvas.Height - 1);
+        var ix1 = Math.Clamp((int)MathF.Ceiling(cx + hx) - 1, ix0, _sampleCanvas.Width - 1);
+        var iy1 = Math.Clamp((int)MathF.Ceiling(cy + hy) - 1, iy0, _sampleCanvas.Height - 1);
+        long n = 0, rSum = 0, gSum = 0, bSum = 0;
         for (int py = iy0; py <= iy1; py++)
         {
             for (int px = ix0; px <= ix1; px++)
             {
                 var (r, g, b) = _sampleCanvas.GetPixel(px, py);
-                int m = Math.Max(r, Math.Max(g, b));
-                if (m == 0)
-                {
-                    continue;
-                }
-                long w = m * m;
-                wSum += w;
-                rSum += w * r;
-                gSum += w * g;
-                bSum += w * b;
+                rSum += r;
+                gSum += g;
+                bSum += b;
+                n++;
             }
         }
-        if (wSum == 0)
-        {
-            return (0, 0, 0);
-        }
-        return ((byte)(rSum / wSum), (byte)(gSum / wSum), (byte)(bSum / wSum));
+        return ((byte)(rSum / n), (byte)(gSum / n), (byte)(bSum / n));
     }
 
     /// <summary>
@@ -1352,9 +1658,8 @@ public sealed class LightingEngine : IDisposable
     /// filter over the pattern: a device with LEDs to spare resolves the dark
     /// gaps, and one with too few settles on the pattern's average instead of
     /// aliasing (a 1-LED zone whose point sample would blink at the band rate
-    /// holds a steady mid tone). <see cref="SampleLedFootprint"/>'s lit-pixel
-    /// weighting is wrong here for the opposite reason: it exists to find sparse
-    /// content inside a frame, and a sweep fills the frame.
+    /// holds a steady mid tone). The per-LED spot read does not fit here: a
+    /// sweep fills the frame and the cell is the unit.
     /// </summary>
     private (byte r, byte g, byte b) SampleLedBox(float x0, float y0, float x1, float y1)
     {
@@ -1401,8 +1706,7 @@ public sealed class LightingEngine : IDisposable
 
     /// <summary>
     /// Paint the devices whose frame comes from something other than the canvas:
-    /// a zone highlight, a per-device Static assignment (every one in Static,
-    /// only locked ones elsewhere), or a test pattern.
+    /// a zone highlight, a static pin (in every mode), or a test pattern.
     /// Returns, per device, whether it painted the whole preview range, so the
     /// caller can skip a canvas sample that would only be overwritten.
     /// </summary>
@@ -1434,9 +1738,11 @@ public sealed class LightingEngine : IDisposable
                 continue;
             }
 
-            if (StaticEffects is not null
+            // Identify and test overlays outrank a pin; a pin outranks the global source.
+            if (Pins is not null
                 && dev.TestPattern is null
-                && StaticEffects.TryGet(dev.Id, out var assignment))
+                && Pins.TryGet(dev.Id, out var assignment)
+                && assignment.Kind == Nexus.Service.Persistence.DevicePinKinds.Static)
             {
                 // A palette pick is a colour, not an effect: nothing to render,
                 // nothing to sample, no canvas. Paint it and move on.
@@ -1546,7 +1852,7 @@ public sealed class LightingEngine : IDisposable
         buf[pos++] = (byte)Math.Min(devices.Length, 255);
         foreach (var dev in devices)
         {
-            buf[pos++] = (byte)dev.Index;
+            buf[pos++] = DeviceFrameIndex.WireByte(dev);
             var lc = (ushort)dev.LedCount;
             buf[pos++] = (byte)(lc & 0xFF);
             buf[pos++] = (byte)(lc >> 8);
@@ -1560,10 +1866,10 @@ public sealed class LightingEngine : IDisposable
     /// Rendered pixels for an assignment, rendering it if this look has not been
     /// seen. Runs on the engine thread, which is where the GL context lives.
     /// </summary>
-    private byte[]? RenderAssignment(Nexus.Service.Lighting.StaticDeviceAssignment assignment)
+    private byte[]? RenderAssignment(Nexus.Service.Persistence.DevicePin assignment)
     {
-        var tracker = StaticEffects;
-        var factory = StaticEffectFactory;
+        var tracker = Pins;
+        var factory = StaticPinEffectFactory;
         if (tracker is null || factory is null) return null;
         if (tracker.Version != _assignVersionSeen)
         {
@@ -1571,7 +1877,7 @@ public sealed class LightingEngine : IDisposable
             _assignVersionSeen = tracker.Version;
             _assignRenders.Clear();
         }
-        var key = assignment.Key();
+        var key = Nexus.Service.Lighting.DevicePinLook.StaticKey(assignment);
         if (_assignRenders.TryGetValue(key, out var cached)) return cached;
 
         IEffect? effect = null;
@@ -1591,7 +1897,7 @@ public sealed class LightingEngine : IDisposable
         {
             // A look that cannot render must not take the whole frame down; the
             // device falls through to the shared canvas.
-            Gpu.GpuContext.Log($"[static-assign] render failed for {assignment.Effect}: {ex.GetType().Name}: {ex.Message}");
+            Gpu.GpuContext.Log($"[static-pin] render failed for {assignment.Effect}: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
         finally

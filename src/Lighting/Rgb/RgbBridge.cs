@@ -1376,7 +1376,9 @@ public sealed class RgbBridge : IDisposable
             var setKeys = new string[frames.Length];
             for (var i = 0; i < frames.Length; i++)
             {
-                setKeys[i] = frames[i].LedCount > 0 ? frames[i].Id : frames[i].Id + "#0";
+                // The frame index rides in the key: clients map ids to frame bytes
+                // through it, so a reorder with the same ids must notify too.
+                setKeys[i] = (frames[i].LedCount > 0 ? frames[i].Id : frames[i].Id + "#0") + "@" + frames[i].Index;
             }
             Array.Sort(setKeys, StringComparer.Ordinal);
             var signature = string.Join('\n', setKeys);

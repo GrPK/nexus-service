@@ -373,7 +373,10 @@ public static class LightingRoutes
                 return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
             }
             l.StartScreen(body);
-            CaptureEffect(telemetry, "screen", null);
+            if (!body.KeepMode)
+            {
+                CaptureEffect(telemetry, "screen", null);
+            }
             PanelTopics.BroadcastLighting(hub);
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();

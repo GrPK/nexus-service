@@ -41,7 +41,7 @@ internal static class McpTestHarness
             new SetGlobalFanSpeedTool(curves, fans, store, hub),
             new SetFanCurveTool(curves, fans, store, hub),
             new ApplyLightingScenarioTool(lighting, hub),
-            new SetStaticColorTool(lighting, store, hub),
+            new SetStaticColorTool(lighting, hub),
             new SetBrightnessTool(store, hub),
             new StopLightingTool(lighting, hub),
         };
@@ -117,6 +117,7 @@ internal static class McpTestHarness
         public void StartScreen(ScreenHeadlessStart body) { }
         public void ReselectScreen() { }
         public bool StartMedia(string mediaId) => false;
+        public bool StartMedia(string mediaId, bool keepMode) => false;
         public void StartMediaIdle() { }
         public void StartGameSync() { }
         public Nexus.Service.Lighting.Engine.Effects.GameSyncEffect? ActiveGameSyncEffect() => null;

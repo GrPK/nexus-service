@@ -27,6 +27,7 @@ public static class LightingPresetLooks
             Sync = lighting.Sync ?? "",
             AnimateEffect = animate,
             StaticEffect = still,
+            StaticColor = lighting.Static?.Color,
             AnimateState = Clone(Resolve(templates, lighting.Animate?.States, animate)),
             StaticState = Clone(Resolve(templates, lighting.Static?.States, still)),
             AnimateSlot = SelectedSlot(templates, animate),
@@ -76,6 +77,7 @@ public static class LightingPresetLooks
             SetSlot(lighting.Animate.Templates, look.AnimateEffect, look.AnimateSlot);
             WriteState(lighting, lighting.Animate.States, look.AnimateEffect, look.AnimateState);
         }
+        lighting.Static.Color = StaticColorHex.TryParse(look.StaticColor, out _, out _, out _) ? look.StaticColor : null;
         if (!string.IsNullOrEmpty(look.StaticEffect))
         {
             lighting.Static.Effect = look.StaticEffect;

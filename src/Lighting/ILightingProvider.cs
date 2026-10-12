@@ -44,6 +44,13 @@ public interface ILightingProvider
     void StartScreen(ScreenHeadlessStart body);
     void ReselectScreen();
     bool StartMedia(string mediaId);
+
+    /// <summary>
+    /// With <paramref name="keepMode"/> false this is <see cref="StartMedia(string)"/>.
+    /// True changes the one shared media item and leaves the global mode alone
+    /// (global Media, when active, switches to the new item too).
+    /// </summary>
+    bool StartMedia(string mediaId, bool keepMode);
     void StartMediaIdle();
 
     /// <summary>Activate Game Sync mode and persist the selection.</summary>

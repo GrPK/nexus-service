@@ -659,11 +659,9 @@ public sealed class StudioLiveTests : IDisposable
     public void A_pause_restore_shows_the_restored_effects_frame_not_the_previews()
     {
         _engine.UpdateDevices([new DeviceFrame(0, "d", 1)]);
-        _engine.StaticEffects = new StaticDeviceEffectTracker();
-        _engine.StaticEffects.Enabled = true;
         // What the restored effect samples with each time it paints: a pause must not hold a frame made with the preview's settings.
-        var samples = new System.Collections.Concurrent.ConcurrentQueue<(bool Full, bool Static)>();
-        var prior = new FakeEffect("prior", red: 200, onRender: () => samples.Enqueue((_engine.FullFrameSampling, _engine.StaticEffects!.Enabled)));
+        var samples = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        var prior = new FakeEffect("prior", red: 200, onRender: () => samples.Enqueue(_engine.FullFrameSampling));
         _engine.SetEffect(prior);
         WaitFor(() => prior.Renders > 0);
         _engine.SetPaused(true);
@@ -675,7 +673,7 @@ public sealed class StudioLiveTests : IDisposable
         Assert.True(_engine.Paused);
         Assert.True(prior.Renders > rendersBefore);
         Assert.Equal(200, _engine.Devices[0].LedBytes[0]);
-        Assert.All(samples, x => Assert.Equal((false, true), x));
+        Assert.All(samples, x => Assert.False(x));
     }
 
     [Fact]

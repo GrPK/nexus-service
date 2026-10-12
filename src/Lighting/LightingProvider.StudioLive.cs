@@ -60,7 +60,6 @@ public sealed partial class LightingProvider
         public required bool PrevPaused { get; set; }
         public required bool PrevFrozen { get; set; }
         public required bool PrevFullFrame { get; set; }
-        public required bool PrevStaticEnabled { get; set; }
         public required bool RgbWasActive { get; init; }
         public required string ReportedSync { get; init; }
         public required string PersistedSync { get; init; }
@@ -145,7 +144,6 @@ public sealed partial class LightingProvider
         var reportedPaused = adopt?.PrevPaused ?? (!deadPreview && _engine.Paused);
         var prevFrozen = adopt?.PrevFrozen ?? (!deadPreview && _engine.Frozen);
         var prevFullFrame = adopt?.PrevFullFrame ?? (!deadPreview && _engine.FullFrameSampling);
-        var prevStaticEnabled = adopt?.PrevStaticEnabled ?? (!deadPreview && (_engine.StaticEffects?.Enabled ?? false));
         var rgbWasActive = adopt?.RgbWasActive ?? _rgb?.IsActive ?? false;
 
         ShaderLibrary.RegisterCustom(StudioLiveId, frag);
@@ -165,6 +163,7 @@ public sealed partial class LightingProvider
         {
             _studioHandoff = null;
         }
+        // Devices pinned to their own look keep it during a session; pins apply in every mode.
         var started = new StudioSession
         {
             Id = NewSessionId(),
@@ -174,7 +173,6 @@ public sealed partial class LightingProvider
             PrevPaused = reportedPaused,
             PrevFrozen = prevFrozen,
             PrevFullFrame = prevFullFrame,
-            PrevStaticEnabled = prevStaticEnabled,
             RgbWasActive = rgbWasActive,
             ReportedSync = reportedSync,
             PersistedSync = persistedSync,
@@ -212,7 +210,6 @@ public sealed partial class LightingProvider
                     started.PrevPaused = false;
                     started.PrevFrozen = replaced is ShaderEffect { Name: var frozenName } && StaticEffectCatalog.Contains(frozenName);
                     started.PrevFullFrame = replaced is ShaderEffect { Name: var sweepName } && ShaderLibrary.IsSweepEffect(sweepName);
-                    started.PrevStaticEnabled = started.PrevFrozen;
                     adoptedAway = adopt;
                 }
             }
@@ -333,7 +330,6 @@ public sealed partial class LightingProvider
             if (_engine.CurrentEffect is null)
             {
                 _engine.FullFrameSampling = s.PrevFullFrame;
-                _engine.StaticEffects?.Enabled = s.PrevStaticEnabled;
             }
         }
         finally
@@ -347,12 +343,8 @@ public sealed partial class LightingProvider
     {
         if (s.PrevEffect is not null)
         {
-            // The sampling flags go back inside the swap, so the frames painted before a pause already use the restored effect's settings.
-            if (!_engine.RestoreEffectIfCurrent(s.Live, s.PrevEffect, s.PrevFrozen, s.PrevPaused, () =>
-            {
-                _engine.FullFrameSampling = s.PrevFullFrame;
-                _engine.StaticEffects?.Enabled = s.PrevStaticEnabled;
-            }))
+            // The sampling flag goes back inside the swap, so the frames painted before a pause already use the restored effect's settings.
+            if (!_engine.RestoreEffectIfCurrent(s.Live, s.PrevEffect, s.PrevFrozen, s.PrevPaused, () => _engine.FullFrameSampling = s.PrevFullFrame))
             {
                 return false;
             }
@@ -373,7 +365,6 @@ public sealed partial class LightingProvider
             _rgb?.AwaitShutdown();
         }
         _engine.FullFrameSampling = s.PrevFullFrame;
-        _engine.StaticEffects?.Enabled = s.PrevStaticEnabled;
         return true;
     }
 

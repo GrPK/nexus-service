@@ -188,7 +188,7 @@ public static class CoolingRoutes
                 {
                     ch.DeviceName = blockCustom;
                 }
-                ch.Locked = FanProfiles.IsLocked(ch, cooling.FanLockOverrides);
+                ch.Pinned = FanProfiles.IsPinned(ch, cooling.FanPinOverrides);
                 ch.Controlled = cooling.UncontrolledFanChannels.Count == 0
                     || !cooling.UncontrolledFanChannels.Contains(ch.Id);
                 // An explicit user assignment wins; otherwise a GPU fan reports its
@@ -274,7 +274,7 @@ public static class CoolingRoutes
                 return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Cooling });
             }
             id = Uri.UnescapeDataString(id);
-            // Same guard as /lock: nothing prunes this list, so an id that was
+            // Same guard as /pin: nothing prunes this list, so an id that was
             // never a channel would sit in it with no UI affordance to clear it.
             if (!f.GetFanChannels().Any(c => c.Id == id))
             {
@@ -319,7 +319,7 @@ public static class CoolingRoutes
             return Results.Ok(ApiResponse.Ok());
         });
 
-        app.MapPost("/cooling/fan/{id}/lock", (string id, SetFanLockBody body, IFanControlProvider f, IConfigStore store, MultiplexHub hub) =>
+        app.MapPost("/cooling/fan/{id}/pin", (string id, SetFanPinBody body, IFanControlProvider f, IConfigStore store, MultiplexHub hub) =>
         {
             id = Uri.UnescapeDataString(id);
             var ch = f.GetFanChannels().FirstOrDefault(c => c.Id == id);
@@ -328,9 +328,9 @@ public static class CoolingRoutes
                 return Results.BadRequest(new ApiResponse { Error = true, Msg = "Unknown fan channel" });
             }
 
-            FanProfiles.SetLockOverride(ch, body.Locked, store);
+            FanProfiles.SetPinOverride(ch, body.Pinned, store);
 
-            // Locking/unlocking never moves a fan; only re-derive the active
+            // Pinning/unpinning never moves a fan; only re-derive the active
             // preset label so it stays truthful for future applies.
             var derived = FanProfiles.DerivePresetFromCurves(store, f);
             store.Update(s => s.Cooling.ActivePreset = derived);
