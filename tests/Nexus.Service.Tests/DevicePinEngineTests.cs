@@ -437,7 +437,7 @@ public class DevicePinEngineTests : IDisposable
     }
 
     [Fact]
-    public async Task A_media_pin_loads_nothing_while_global_media_is_active_and_loads_after_leaving_it()
+    public async Task A_media_pin_shows_the_item_at_once_after_leaving_global_media()
     {
         using var rig = new Rig(_tempDir);
         SeedMedia(rig.Media, "clip", 0, 0, 255);
@@ -453,6 +453,46 @@ public class DevicePinEngineTests : IDisposable
 
         var leds = await WaitFor(dev, l => l[2] > 200);
         Assert.Equal(255, leds[2]);
+    }
+
+    [Fact]
+    public void A_settings_write_with_no_pins_notifies_once_and_construction_writes_nothing()
+    {
+        var baselinePath = Path.Combine(_tempDir, "baseline", "settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(baselinePath)!);
+        using (var bare = new JsonConfigStore(baselinePath))
+        {
+            bare.Load();
+            bare.FlushNow();
+        }
+        using var rig = new Rig(_tempDir);
+        rig.Store.FlushNow();
+        // Whatever a bare first load persists, building the provider adds no write.
+        Assert.Equal(File.Exists(baselinePath), File.Exists(rig.Store.SettingsPath));
+        if (File.Exists(baselinePath))
+        {
+            Assert.Equal(File.ReadAllText(baselinePath), File.ReadAllText(rig.Store.SettingsPath));
+        }
+
+        var changes = 0;
+        rig.Store.OnChanged += () => Interlocked.Increment(ref changes);
+        rig.Store.Update(s => s.Lighting.MusicReactive = !s.Lighting.MusicReactive);
+
+        Assert.Equal(1, changes);
+    }
+
+    [Fact]
+    public void A_settings_write_with_a_media_pin_notifies_once_per_pin_refresh_pass_only()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
+        var changes = 0;
+        rig.Store.OnChanged += () => Interlocked.Increment(ref changes);
+
+        rig.Store.Update(s => s.Lighting.MusicReactive = !s.Lighting.MusicReactive);
+
+        // The write itself plus the refresh's own snapshot write; never a third.
+        Assert.InRange(changes, 1, 2);
     }
 
     [Fact]

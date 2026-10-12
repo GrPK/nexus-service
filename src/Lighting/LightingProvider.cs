@@ -782,14 +782,30 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             // A profile apply or cloud pull replaces the persisted screen.
             var persisted = _store.Load().Lighting;
             _mirrorMonitor = persisted.ScreenMonitor ?? "";
-            RefreshPinnedMedia();
-            if (_store.Load().Lighting.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
+            if (persisted.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
             {
+                // No pins at all: nothing to load, and no write, so a settings
+                // write elsewhere never causes a second one from here.
+                _pinnedMedia = null;
                 return;
             }
             var next = new System.Collections.Generic.Dictionary<string, PinnedLook>(System.StringComparer.Ordinal);
+            var mediaWanted = false;
+            var mediaId = "";
+            long mediaSeq = 0;
             _store.Update(s =>
             {
+                // Read in the same locked snapshot; the sequence orders snapshots.
+                mediaSeq = System.Threading.Interlocked.Increment(ref _mediaSeq);
+                mediaId = s.Lighting.LastMediaId ?? "";
+                foreach (var mp in s.Lighting.DevicePins.Values)
+                {
+                    if (mp?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+                    {
+                        mediaWanted = true;
+                        break;
+                    }
+                }
                 foreach (var pin in s.Lighting.DevicePins.Values)
                 {
                     var key = pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate ? pin.Effect : null;
@@ -832,6 +848,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             }
             _pinnedLooks = next;
             _pinnedAudio = audio;
+            LoadPinnedMedia(mediaWanted, mediaId, mediaSeq);
             ReconcileAudioCapture();
         }
         finally
@@ -844,37 +861,29 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     private static string MediaTag(string id, bool loaded = false) => "md|" + id + (loaded ? "|1" : "");
 
     private readonly object _mediaLoadLock = new();
+    private long _mediaSeq;
+    private long _mediaPublishedSeq;
 
     /// <summary>
     /// Loads the media item media pins play (meta and frame bytes) on the calling
     /// thread, only when a media pin exists and the item changed, so the engine
-    /// thread never touches the disk. The settings are read under the store lock
-    /// and the whole refresh is serialized, so the last caller always publishes
-    /// the newest selection. Global Media already holds the frames; pins share its
-    /// canvas then, so nothing is loaded. A failed load is retried on the next
-    /// refresh.
+    /// thread never touches the disk. The inputs come from a locked settings
+    /// snapshot taken by the caller; <paramref name="seq"/> orders snapshots so a
+    /// slow load of an older one never publishes over a newer one. The snapshot
+    /// is kept while global Media is active, so switching away does not rebuild
+    /// pins from black. A failed load is retried on the next refresh. Nothing in
+    /// here touches the store, so no change notification fires under the lock.
     /// </summary>
-    private void RefreshPinnedMedia()
+    private void LoadPinnedMedia(bool wanted, string id, long seq)
     {
         lock (_mediaLoadLock)
         {
-            var wanted = false;
-            var id = "";
-            var globalMedia = false;
-            _store.Update(s =>
+            if (seq < _mediaPublishedSeq)
             {
-                foreach (var pin in s.Lighting.DevicePins.Values)
-                {
-                    if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
-                    {
-                        wanted = true;
-                        break;
-                    }
-                }
-                id = s.Lighting.LastMediaId ?? "";
-                globalMedia = string.Equals(s.Lighting.Sync, "media", StringComparison.OrdinalIgnoreCase);
-            });
-            if (!wanted || globalMedia)
+                return;
+            }
+            _mediaPublishedSeq = seq;
+            if (!wanted)
             {
                 _pinnedMedia = null;
                 return;

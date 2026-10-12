@@ -254,15 +254,21 @@ public static class MediaLibraryRoutes
                 // Global Media keeps its own handling (the web plays the next or idles).
                 // Both conditions are checked under the store lock, so a play that
                 // lands meanwhile is not wiped.
-                store.Update(s =>
+                // The unlocked pre-check keeps an unrelated delete from writing settings.
+                var current = store.Load().Lighting;
+                if (current.LastMediaId == id
+                    && !string.Equals(current.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
                 {
-                    if (s.Lighting.LastMediaId == id
-                        && !string.Equals(s.Lighting.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
+                    store.Update(s =>
                     {
-                        s.Lighting.LastMediaId = "";
-                        LightingPresetLooks.CaptureIntoActive(s);
-                    }
-                });
+                        if (s.Lighting.LastMediaId == id
+                            && !string.Equals(s.Lighting.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
+                        {
+                            s.Lighting.LastMediaId = "";
+                            LightingPresetLooks.CaptureIntoActive(s);
+                        }
+                    });
+                }
                 PanelTopics.BroadcastMediaLibrary(hub);
             }
 
