@@ -696,6 +696,8 @@ public sealed class LightingSettings
     public string AudioOutputDeviceName { get; set; } = "";
     /// <summary>Post-process applied to the Screen Mirror frame stream (hue / colorize / saturation / contrast). Persists across sessions so the user's tweak survives a service restart.</summary>
     public PostProcessSettings ScreenEffect { get; set; } = new();
+    /// <summary>Screen the global Mirror mode captures; empty is the default screen. Mirror pins capture the same one, so the two agree after a restart.</summary>
+    public string ScreenMonitor { get; set; } = "";
     /// <summary>Post-process applied to Media Library playback frames. Same shape as ScreenEffect but tracked independently - users typically tune media differently from screen capture.</summary>
     public PostProcessSettings MediaEffect { get; set; } = new();
     /// <summary>Which GPU renders the lighting shaders. "auto" = let the OS pick;

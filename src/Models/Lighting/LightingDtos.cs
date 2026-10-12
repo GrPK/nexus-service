@@ -202,7 +202,8 @@ public class MusicHeadlessStart
 
 public class ScreenHeadlessStart
 {
-    public string Monitor { get; set; } = "";
+    /// <summary>Screen to mirror. Null keeps the persisted choice (a restore or Deck start); "" selects the default screen.</summary>
+    public string? Monitor { get; set; }
     public string Effect { get; set; } = "";
     public float Saturation { get; set; }
     public float Contrast { get; set; }

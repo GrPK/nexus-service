@@ -148,12 +148,6 @@ public sealed class DevicePinTracker
     {
         var store = _store;
         if (store is null) return;
-        if (store.Load().Lighting.StaticDeviceLooks is not null || store.Load().Lighting.AnimateDeviceLocks is not null
-            || store.Load().Lighting.LayoutPresets.Exists(p => p.StaticDeviceLooks is not null || p.AnimateDeviceLocks is not null))
-        {
-            // A wholesale settings replace can bring the pre-pin shape back.
-            store.Update(s => PinMigration.Apply(s.Lighting));
-        }
         var stored = store.Load().Lighting.DevicePins;
         var rebuilt = new Dictionary<string, DevicePin>(StringComparer.Ordinal);
         if (stored is not null)

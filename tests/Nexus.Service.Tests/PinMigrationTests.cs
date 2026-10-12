@@ -111,7 +111,7 @@ public class PinMigrationTests
     }
 
     [Fact]
-    public void A_pre_pin_settings_file_is_migrated_on_load_and_a_profile_replace_is_picked_up_by_the_tracker()
+    public void A_deserialized_pre_pin_document_migrates_lighting_and_cooling_together()
     {
         var json = """
             {"lighting":{"staticDeviceLooks":{"a":{"effect":"flat","color":"#010203","locked":false}},"animateDeviceLocks":{"b":"plasma"}},
@@ -122,16 +122,5 @@ public class PinMigrationTests
         Assert.Equal("#010203", doc.Lighting.DevicePins["a"].Color);
         Assert.Equal("plasma", doc.Lighting.DevicePins["b"].Effect);
         Assert.True(doc.Cooling.FanPinOverrides["fan1"]);
-
-        // A profile switch swaps the whole Lighting object, old shape included.
-        var store = new InMemoryConfigStore();
-        var tracker = new DevicePinTracker(store);
-        store.Update(s =>
-        {
-            s.Lighting = new LightingSettings { StaticDeviceLooks = new() { ["c"] = Look("flat", "#ffffff") } };
-        });
-        Assert.True(tracker.TryGet("c", out var pin));
-        Assert.Equal(DevicePinKinds.Static, pin.Kind);
-        Assert.Null(store.Load().Lighting.StaticDeviceLooks);
     }
 }

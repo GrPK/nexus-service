@@ -108,6 +108,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _beats = beats;
 
         var s = _store.Load().Lighting;
+        _mirrorMonitor = s.ScreenMonitor ?? "";
         _screenPP.Set(s.ScreenEffect.Hue, s.ScreenEffect.Colorize, s.ScreenEffect.Saturation, s.ScreenEffect.Contrast, s.ScreenEffect.FlipX, s.ScreenEffect.FlipY, s.ScreenEffect.Reactive, s.ScreenEffect.Reactivity, s.ScreenEffect.Intensity);
         _mediaPP.Set(s.MediaEffect.Hue, s.MediaEffect.Colorize, s.MediaEffect.Saturation, s.MediaEffect.Contrast, s.MediaEffect.FlipX, s.MediaEffect.FlipY);
 
@@ -1243,7 +1244,11 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // client calls /start with empty post-process fields before it has
         // fetched the current values, overwriting here would silently clobber
         // the user's saved look back to identity on every mode swap.
-        _mirrorMonitor = body.Monitor ?? "";
+        if (body.Monitor is not null)
+        {
+            _mirrorMonitor = body.Monitor;
+            _store.Update(s => s.Lighting.ScreenMonitor = _mirrorMonitor);
+        }
         _engine.SetEffect(new ScreenMirrorEffect(_mirrorMonitor, _screenPP, ScreenSource(), _gpu));
         _store.Update(s =>
         {

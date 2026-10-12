@@ -326,6 +326,7 @@ public sealed partial class ProfileManager : IDisposable
             {
                 var json = File.ReadAllText(filePath);
                 var settings = JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.NexusSettings);
+                Nexus.Service.Lighting.PinMigration.Apply(settings);
                 return settings is null ? null : ProfileSharing.ExtractShareable(settings);
             }
             catch { return null; }
@@ -384,6 +385,7 @@ public sealed partial class ProfileManager : IDisposable
     /// </summary>
     internal ProfileEntry ImportProfileWithId(string id, string name, NexusSettings data)
     {
+        Nexus.Service.Lighting.PinMigration.Apply(data);
         var trimmedName = string.IsNullOrWhiteSpace(name) ? "Imported" : name.Trim();
         bool reactivate;
         ProfileEntry entry;
@@ -529,6 +531,7 @@ public sealed partial class ProfileManager : IDisposable
 
                 foreach (var (id, _, data) in limited)
                 {
+                    Nexus.Service.Lighting.PinMigration.Apply(data);
                     data.Auth = null;
                     data.PrimaryProfileId = null;
                     data.SharedCategories = new List<string>();
@@ -560,6 +563,7 @@ public sealed partial class ProfileManager : IDisposable
 
     public ProfileEntry ImportProfile(string name, NexusSettings data, bool replaceExisting = false)
     {
+        Nexus.Service.Lighting.PinMigration.Apply(data);
         bool reactivate = false;
         ProfileEntry entry;
         lock (_lock)
@@ -837,6 +841,7 @@ public sealed partial class ProfileManager : IDisposable
 
         _store.Update(s =>
         {
+            Nexus.Service.Lighting.PinMigration.Apply(data);
             s.Lighting = data.Lighting ?? new LightingSettings { FreeRotationLayouts = true };
             // Pre-v10 profile files (local, imported, or cloud-synced) carry
             // fully materialized template dicts and dense activation states;
@@ -896,7 +901,11 @@ public sealed partial class ProfileManager : IDisposable
         try
         {
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.NexusSettings);
+            var data = JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.NexusSettings);
+            // Profile files never pass through JsonConfigStore.Load, so a
+            // pre-pin file is folded into pins here (a no-op once migrated).
+            Nexus.Service.Lighting.PinMigration.Apply(data);
+            return data;
         }
         catch
         {

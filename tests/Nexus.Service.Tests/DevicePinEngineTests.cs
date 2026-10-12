@@ -32,9 +32,10 @@ public class DevicePinEngineTests : IDisposable
     private sealed class FakeScreen : IScreenFrameSource
     {
         public int Starts, Stops;
+        public string? LastMonitor;
         public bool Running;
         public byte R = 255, G = 0, B = 0;
-        public void Start(string monitorId, int width, int height) { Starts++; Running = true; }
+        public void Start(string monitorId, int width, int height) { Starts++; Running = true; LastMonitor = monitorId; }
         public void Stop() { Stops++; Running = false; }
         public byte[]? TryAcquireFrame(out int width, out int height)
         {
@@ -215,9 +216,10 @@ public class DevicePinEngineTests : IDisposable
         public readonly FakeBeats Beats = new();
         public readonly LightingProvider Provider;
 
-        public Rig(string dir)
+        public Rig(string dir, Action<JsonConfigStore>? seed = null)
         {
             Store = new JsonConfigStore(Path.Combine(dir, "settings.json"));
+            seed?.Invoke(Store);
             Pins = new DevicePinTracker(Store);
             Engine = new LightingEngine { Pins = Pins, FrameIntervalMs = 10 };
             Provider = new LightingProvider(Store, Engine, new LightingOutputHub(), Gpu, new MediaLibrary(),
@@ -363,5 +365,38 @@ public class DevicePinEngineTests : IDisposable
         var after = rig.Engine.PinLookTag!("plasma");
         Assert.NotNull(after);
         Assert.NotEqual(before, after);
+    }
+
+    [Fact]
+    public async Task A_mirror_pin_captures_the_persisted_monitor_after_a_restart()
+    {
+        using var rig = new Rig(_tempDir, store =>
+        {
+            store.Update(s =>
+            {
+                s.Lighting.ScreenMonitor = "2";
+                s.Lighting.DevicePins["dev-a"] = new DevicePin { Kind = DevicePinKinds.Mirror };
+            });
+        });
+        var dev = Device();
+        rig.Engine.UpdateDevices(new[] { dev });
+        rig.Engine.SetEffect(new Fill("plasma", 0, 255, 0));
+
+        Assert.True(await Eventually(() => rig.Screen.Running));
+        Assert.Equal("2", rig.Screen.LastMonitor);
+    }
+
+    [Fact]
+    public void Starting_mirror_persists_the_monitor_and_a_start_without_one_keeps_it()
+    {
+        using var rig = new Rig(_tempDir);
+        rig.Provider.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart { Monitor = "3" });
+        Assert.Equal("3", rig.Store.Load().Lighting.ScreenMonitor);
+
+        rig.Provider.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart());
+        Assert.Equal("3", rig.Store.Load().Lighting.ScreenMonitor);
+
+        rig.Provider.StartScreen(new Nexus.Service.Models.Lighting.ScreenHeadlessStart { Monitor = "" });
+        Assert.Equal("", rig.Store.Load().Lighting.ScreenMonitor);
     }
 }
