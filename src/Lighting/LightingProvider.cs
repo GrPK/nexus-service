@@ -233,19 +233,15 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     /// DRAM over SMBus: publishing through the loop is what makes the black
     /// stick - the same push issued after <c>Stop</c> does not.
     /// </summary>
-    private bool BlackoutBeforeRelinquish(IEffect? onlyIf = null)
+    private bool BlackoutBeforeRelinquish(bool alreadyLatched = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         // Not gated on the bridge: the loop-published frame is what blanks the
         // NP50 / Lian Li / Keeb / AW5 writers, which exist without OpenRGB.
-        // With onlyIf the hold only latches while that effect still runs, so a mode started meanwhile is never held dark.
-        if (onlyIf is null)
+        // The studio end latches conditionally itself, so a mode started meanwhile is never held dark.
+        if (!alreadyLatched)
         {
             _engine.SetBlackout(true);
-        }
-        else if (!_engine.SetBlackoutIfCurrent(onlyIf))
-        {
-            return false;
         }
         var published = _engine.WaitForBlackout(EnginePublishBudget);
         var publishedMs = sw.ElapsedMilliseconds;

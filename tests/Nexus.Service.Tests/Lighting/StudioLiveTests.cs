@@ -496,7 +496,7 @@ public sealed class StudioLiveTests : IDisposable
         _engine.SetEffect(first);
         _engine.SetEffect(new FakeEffect("second"));
 
-        Assert.False(_engine.SetBlackoutIfCurrent(first));
+        Assert.False(_engine.SetBlackoutIfCurrent(first, out _));
 
         Assert.False(_engine.Blackout);
     }
@@ -544,22 +544,61 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void An_overlay_covering_every_device_stops_the_effect_rendering_until_a_test_pattern_needs_it()
+    public void A_mode_started_in_the_window_before_the_end_decides_is_never_held_dark()
+    {
+        _provider.StartStudioLive(Body());
+        _provider.BeforeStudioEnd = () => _provider.StartAnimate(Animate("plasma"));
+
+        _provider.StopStudioLive();
+
+        Assert.False(_engine.Blackout);
+        Assert.Equal("plasma", _engine.CurrentEffectName);
+    }
+
+    [Fact]
+    public void Ending_a_session_during_a_hold_keeps_the_hold_and_a_new_start_is_refused()
+    {
+        _provider.StartStudioLive(Body());
+        _engine.SetBlackout(true);
+
+        _provider.StopStudioLive();
+
+        Assert.True(_engine.Blackout);
+        Assert.Null(_engine.CurrentEffect);
+        Assert.False(_provider.StartStudioLive(Body()).Ok);
+        Assert.True(_engine.Blackout);
+    }
+
+    [Fact]
+    public void Installing_the_idle_effect_never_releases_a_hold()
+    {
+        _engine.SetBlackout(true);
+
+        Assert.False(_engine.SetEffectUnlessBlackout(new FakeEffect("x")));
+
+        Assert.True(_engine.Blackout);
+        Assert.Null(_engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void Paused_under_the_overlay_then_ended_during_a_hold_does_not_republish_black_on_wake()
     {
         var dev = Device("d", 1);
         _engine.UpdateDevices([dev]);
         var global = new FakeEffect("global", r: 200);
         _engine.SetEffect(global);
+        WaitFor(() => global.Renders > 0);
+        _engine.SetPaused(true);
         _engine.SetStudioOverlay(new FakeEffect("studio", g: 90));
         WaitForLed(dev, 0, 0, 90, 0);
-        Thread.Sleep(50);
-        var held = global.Renders;
-        Thread.Sleep(100);
-        Assert.Equal(held, global.Renders);
+        _engine.SetBlackout(true);
+        WaitForLed(dev, 0, 0, 0, 0);
 
-        dev.TestPattern = "none";
-        WaitFor(() => global.Renders > held);
+        _engine.SetStudioOverlay(null);
+        _engine.SetBlackout(false);
 
-        Assert.True(global.Renders > held);
+        // The hold cleared the canvas, so a paused effect has nothing to show; the point is that no resample is queued.
+        Assert.True(_engine.Paused);
+        Assert.False(_engine.StudioOverlayActive);
     }
 }

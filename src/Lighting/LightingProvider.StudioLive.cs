@@ -28,6 +28,8 @@ public sealed partial class LightingProvider
     private Timer? _studioTimer;
     // Runs the engine loop while the mode is Off; the loop only ticks with an effect.
     private volatile IEffect? _studioIdle;
+    // Test seam: runs just before the end-of-session Off restore decides anything.
+    internal Action? BeforeStudioEnd;
     // The overlay's fragment reads audio uniforms, which counts as audio demand for capture.
     private volatile bool _studioAudio;
 
@@ -159,8 +161,11 @@ public sealed partial class LightingProvider
         session.RgbWasActive = _rgb?.IsActive ?? false;
         EnsureRgbActive();
         var idle = new StudioIdleEffect();
-        _studioIdle = idle;
-        _engine.SetEffect(idle);
+        // Atomic with the hold: a sleep or lock that engages after the check above keeps it.
+        if (_engine.SetEffectUnlessBlackout(idle))
+        {
+            _studioIdle = idle;
+        }
     }
 
     private void SetStudioAudio(string? frag)
@@ -204,8 +209,14 @@ public sealed partial class LightingProvider
         // and both the hold and the stop are conditional on it atomically with a concurrent SetEffect.
         if (idle is not null)
         {
-            var held = _engine.Blackout ? ReferenceEquals(_engine.CurrentEffect, idle) : BlackoutBeforeRelinquish(idle);
-            if (held && _engine.StopIfCurrent(idle) && !s.RgbWasActive)
+            BeforeStudioEnd?.Invoke();
+            // Latch and currentness are decided together under the engine lock; a hold that was already engaged is kept through the stop.
+            var held = _engine.SetBlackoutIfCurrent(idle, out var wasHeld);
+            if (held && !wasHeld)
+            {
+                BlackoutBeforeRelinquish(alreadyLatched: true);
+            }
+            if (held && _engine.StopIfCurrent(idle, keepBlackout: wasHeld) && !s.RgbWasActive)
             {
                 _rgb?.Deactivate();
                 _rgb?.AwaitShutdown();
