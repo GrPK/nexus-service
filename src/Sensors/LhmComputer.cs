@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using Nexus.Service.Devices;
 using Nexus.Service.Devices.Handlers;
 using Nexus.Service.Lifecycle;
 using Nexus.Service.Persistence;
+using Nexus.Service.Platform;
 using RAMSPDToolkit.Windows.Driver;
 using RAMSPDToolkit.Windows.Driver.Interfaces;
 
@@ -41,6 +43,8 @@ public sealed class LhmComputer : IDisposable
     private readonly Task _openTask;
     private readonly object _updateLock = new();
     private long _lastUpdateTicks;
+    private const long UpdateErrorLogIntervalMs = 60_000;
+    private readonly Dictionary<string, long> _updateErrorLoggedAt = new(StringComparer.Ordinal);
     private readonly IConfigStore _config;
     private readonly DeviceControlGate _gate;
     private readonly HashSet<string> _smartSeeded = new(StringComparer.Ordinal);
@@ -241,11 +245,31 @@ public sealed class LhmComputer : IDisposable
                     if (hw.HardwareType == HardwareType.Storage)
                         StorageDevice.SmartUpdateCycleCount = SmartCyclesFor(hw, monitoring, refresh);
 
-                    hw.Update();
+                    TryUpdate(hw);
                     foreach (var sub in hw.SubHardware)
-                        sub.Update();
+                        TryUpdate(sub);
                 }
             }
+        }
+    }
+
+    // One unplugged or busy HID cooler (KrakenV2/V3 throw from Update) must not
+    // fail the walk for every other device or the routes that triggered it.
+    private void TryUpdate(IHardware hw)
+    {
+        try
+        {
+            hw.Update();
+        }
+        catch (Exception ex)
+        {
+            var key = hw.Identifier.ToString();
+            var now = Environment.TickCount64;
+            if (_updateErrorLoggedAt.TryGetValue(key, out var last) && now - last < UpdateErrorLogIntervalMs)
+                return;
+
+            _updateErrorLoggedAt[key] = now;
+            ServiceLog.Warn($"[lhm] update failed for {hw.Name}: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
