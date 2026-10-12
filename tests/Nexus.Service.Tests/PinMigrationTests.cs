@@ -36,25 +36,6 @@ public class PinMigrationTests
     }
 
     [Fact]
-    public void An_animation_lock_becomes_an_animate_pin_and_wins_over_a_static_look()
-    {
-        var lighting = new LightingSettings
-        {
-            StaticDeviceLooks = new() { ["both"] = Look("flat", "#00ff00"), ["only-static"] = Look("flat", "#0000ff") },
-            AnimateDeviceLocks = new() { ["both"] = "plasma", ["only-animate"] = "fire" },
-        };
-
-        PinMigration.Apply(lighting);
-
-        Assert.Equal(DevicePinKinds.Animate, lighting.DevicePins["both"].Kind);
-        Assert.Equal("plasma", lighting.DevicePins["both"].Effect);
-        Assert.Equal(DevicePinKinds.Static, lighting.DevicePins["only-static"].Kind);
-        Assert.Equal("fire", lighting.DevicePins["only-animate"].Effect);
-        Assert.Null(lighting.AnimateDeviceLocks);
-        Assert.Null(lighting.StaticDeviceLooks);
-    }
-
-    [Fact]
     public void An_existing_pin_is_never_overwritten_and_a_second_pass_changes_nothing()
     {
         var lighting = new LightingSettings
@@ -69,14 +50,13 @@ public class PinMigrationTests
     }
 
     [Fact]
-    public void A_preset_is_migrated_the_same_way_and_a_preset_without_either_field_stays_untouched()
+    public void A_preset_is_migrated_the_same_way_and_a_preset_without_the_field_stays_untouched()
     {
         var lighting = new LightingSettings();
         lighting.LayoutPresets.Add(new LayoutPreset
         {
             Id = "old",
             StaticDeviceLooks = new() { ["a"] = Look("flat", "#123456") },
-            AnimateDeviceLocks = new() { ["b"] = "plasma" },
         });
         lighting.LayoutPresets.Add(new LayoutPreset { Id = "ancient" });
 
@@ -84,9 +64,7 @@ public class PinMigrationTests
 
         var old = lighting.LayoutPresets[0];
         Assert.Equal("#123456", old.DevicePins!["a"].Color);
-        Assert.Equal(DevicePinKinds.Animate, old.DevicePins["b"].Kind);
         Assert.Null(old.StaticDeviceLooks);
-        Assert.Null(old.AnimateDeviceLocks);
         // Null still means "leave the live pins alone" on activate.
         Assert.Null(lighting.LayoutPresets[1].DevicePins);
     }
@@ -114,13 +92,12 @@ public class PinMigrationTests
     public void A_deserialized_pre_pin_document_migrates_lighting_and_cooling_together()
     {
         var json = """
-            {"lighting":{"staticDeviceLooks":{"a":{"effect":"flat","color":"#010203","locked":false}},"animateDeviceLocks":{"b":"plasma"}},
+            {"lighting":{"staticDeviceLooks":{"a":{"effect":"flat","color":"#010203","locked":false}}},
              "cooling":{"fanLockOverrides":{"fan1":true}}}
             """;
         var doc = System.Text.Json.JsonSerializer.Deserialize(json, Nexus.Service.Serialization.PersistenceJsonContext.Default.NexusSettings)!;
         PinMigration.Apply(doc);
         Assert.Equal("#010203", doc.Lighting.DevicePins["a"].Color);
-        Assert.Equal("plasma", doc.Lighting.DevicePins["b"].Effect);
         Assert.True(doc.Cooling.FanPinOverrides["fan1"]);
     }
 }

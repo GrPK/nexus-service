@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using Nexus.Service.Persistence;
 
@@ -111,7 +112,57 @@ public sealed class DevicePinTracker
         && pin.Colorize is null && pin.Saturation is null && pin.Contrast is null
         && pin.Params is null && pin.Slot is null;
 
-    /// <summary>Pins every id to a copy of <paramref name="pin"/>, replacing any pin it held; a null pin clears them.</summary>
+    /// <summary>
+    /// A copy holding only the fields the pin's kind reads: animate keeps its
+    /// effect, mirror and media keep nothing, static keeps its look with the
+    /// numeric controls clamped to the ranges its shader accepts. Unknown kinds
+    /// pass through as a plain copy.
+    /// </summary>
+    public static DevicePin Normalize(DevicePin pin)
+    {
+        switch (pin.Kind)
+        {
+            case DevicePinKinds.Animate:
+                return new DevicePin { Kind = pin.Kind, Effect = pin.Effect };
+            case DevicePinKinds.Mirror:
+            case DevicePinKinds.Media:
+                return new DevicePin { Kind = pin.Kind };
+            case DevicePinKinds.Static:
+                var copy = pin.Copy();
+                if (string.IsNullOrEmpty(copy.Effect)
+                    || !Nexus.Service.Lighting.Engine.Gpu.ShaderLibrary.AllEffectKeys.Contains(copy.Effect))
+                {
+                    return copy;
+                }
+                var specs = Nexus.Service.Lighting.Engine.Gpu.ShaderLibrary.Params(copy.Effect);
+                copy.Intensity = ClampField(specs, "u_intensity", copy.Intensity);
+                copy.Hue = ClampField(specs, "u_hue", copy.Hue);
+                copy.Colorize = ClampField(specs, "u_colorize", copy.Colorize);
+                copy.Saturation = ClampField(specs, "u_saturation", copy.Saturation);
+                copy.Contrast = ClampField(specs, "u_contrast", copy.Contrast);
+                if (copy.Params is not null)
+                {
+                    foreach (var key in new List<string>(copy.Params.Keys))
+                    {
+                        if (specs.TryGetValue(key, out var spec))
+                        {
+                            copy.Params[key] = Nexus.Service.Lighting.Engine.Gpu.ShaderParamSpec.Clamp(spec, copy.Params[key]);
+                        }
+                    }
+                }
+                return copy;
+            default:
+                return pin.Copy();
+        }
+    }
+
+    private static float? ClampField(
+        IReadOnlyDictionary<string, Nexus.Service.Lighting.Engine.Gpu.ShaderParamSpec> specs, string name, float? value) =>
+        value is { } v && specs.TryGetValue(name, out var spec)
+            ? Nexus.Service.Lighting.Engine.Gpu.ShaderParamSpec.Clamp(spec, v)
+            : value;
+
+    /// <summary>Pins every id to a normalized copy of <paramref name="pin"/>, replacing any pin it held; a null pin clears them.</summary>
     public void SetMany(IEnumerable<string> ids, DevicePin? pin)
     {
         var list = new List<string>();
@@ -120,13 +171,14 @@ public sealed class DevicePinTracker
             if (!string.IsNullOrEmpty(id)) list.Add(id);
         }
         if (list.Count == 0) return;
+        var normalized = pin is null ? null : Normalize(pin);
         lock (_lock)
         {
             var next = new Dictionary<string, DevicePin>(_pins, StringComparer.Ordinal);
             foreach (var id in list)
             {
-                if (pin is null) next.Remove(id);
-                else next[id] = pin.Copy();
+                if (normalized is null) next.Remove(id);
+                else next[id] = normalized.Copy();
             }
             _pins = next;
             Interlocked.Increment(ref _version);
@@ -135,8 +187,8 @@ public sealed class DevicePinTracker
         {
             foreach (var id in list)
             {
-                if (pin is null) s.Lighting.DevicePins.Remove(id);
-                else s.Lighting.DevicePins[id] = pin.Copy();
+                if (normalized is null) s.Lighting.DevicePins.Remove(id);
+                else s.Lighting.DevicePins[id] = normalized.Copy();
             }
         });
     }
@@ -157,7 +209,7 @@ public sealed class DevicePinTracker
         {
             foreach (var (id, pin) in stored)
             {
-                if (!string.IsNullOrEmpty(id) && pin is not null && DevicePinKinds.IsKnown(pin.Kind)) rebuilt[id] = pin;
+                if (!string.IsNullOrEmpty(id) && pin is not null && DevicePinKinds.IsKnown(pin.Kind)) rebuilt[id] = pin.Copy();
             }
         }
         lock (_lock)

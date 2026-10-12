@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,7 +6,6 @@ using Nexus.Service.Lifecycle;
 using Nexus.Service.Lighting;
 using Nexus.Service.Models.Lighting;
 using Nexus.Service.Models.Mcp;
-using Nexus.Service.Persistence;
 using Nexus.Service.Serialization;
 using Nexus.Service.Sockets;
 
@@ -20,14 +18,12 @@ namespace Nexus.Service.Mcp.Tools;
 public sealed class SetStaticColorTool : IMcpTool
 {
     private readonly ILightingProvider _lighting;
-    private readonly IConfigStore _store;
     private readonly MultiplexHub _hub;
     private readonly FeatureGates _gates;
 
-    public SetStaticColorTool(ILightingProvider lighting, IConfigStore store, MultiplexHub hub, FeatureGates? gates = null)
+    public SetStaticColorTool(ILightingProvider lighting, MultiplexHub hub, FeatureGates? gates = null)
     {
         _lighting = lighting;
-        _store = store;
         _hub = hub;
         _gates = gates ?? FeatureGates.AllEnabled;
     }

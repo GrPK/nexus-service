@@ -175,10 +175,14 @@ public sealed class DevicePinRoutesTests : IClassFixture<StubDeviceHostFactory>
     }
 
     [Fact]
-    public async Task A_malformed_static_colour_is_a_400()
+    public async Task A_malformed_static_color_answers_like_an_unknown_effect()
     {
-        var res = await _client.PostAsync("/lighting/static/headless-start", Json("""{"color":"not-a-colour"}"""));
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var res = await _client.PostAsync("/lighting/static/headless-start", Json("""{"color":"not-a-color"}"""));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Contains("\"error\":true", await res.Content.ReadAsStringAsync());
+        var unknown = await _client.PostAsync("/lighting/static/headless-start", Json("""{"effect":"nope"}"""));
+        Assert.Equal(HttpStatusCode.OK, unknown.StatusCode);
+        Assert.Contains("\"error\":true", await unknown.Content.ReadAsStringAsync());
     }
 
     [Fact]

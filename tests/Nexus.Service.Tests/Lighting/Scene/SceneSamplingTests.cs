@@ -43,7 +43,7 @@ public class SceneSamplingTests
         return await tcs.Task;
     }
 
-    // The spot is a 3x3 mean of the ramp, which differs from the centre pixel by rounding.
+    // The spot is a 3x3 mean of the ramp, which differs from the center pixel by rounding.
     private static void Near(byte expected, byte actual) => Assert.InRange(actual, expected - 3, expected + 3);
 
     private static byte Red(byte[] leds, int i) => leds[i * 3];

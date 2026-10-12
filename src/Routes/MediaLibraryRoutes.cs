@@ -256,6 +256,7 @@ public static class MediaLibraryRoutes
                 // lands meanwhile is not wiped.
                 // The unlocked pre-check keeps an unrelated delete from writing settings.
                 var current = store.Load().Lighting;
+                var cleared = false;
                 if (current.LastMediaId == id
                     && !string.Equals(current.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
                 {
@@ -266,10 +267,16 @@ public static class MediaLibraryRoutes
                         {
                             s.Lighting.LastMediaId = "";
                             LightingPresetLooks.CaptureIntoActive(s);
+                            cleared = true;
                         }
                     });
                 }
                 PanelTopics.BroadcastMediaLibrary(hub);
+                if (cleared)
+                {
+                    // Clearing the selection changes what media-pinned devices show.
+                    PanelTopics.BroadcastLighting(hub);
+                }
             }
 
             return deleted

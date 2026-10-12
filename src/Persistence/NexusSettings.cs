@@ -557,7 +557,7 @@ public sealed class DevicePin
     public string Kind { get; set; } = "";
     /// <summary>Static: the effect key. Animate: the shader key. Unused for mirror and media.</summary>
     public string? Effect { get; set; }
-    /// <summary>Static: a flat palette pick, "#rrggbb". Set means the look is that colour and every field below is inert.</summary>
+    /// <summary>Static: a flat palette pick, "#rrggbb". Set means the look is that color and every field below is inert.</summary>
     public string? Color { get; set; }
     public float? Intensity { get; set; }
     public float? Hue { get; set; }
@@ -668,8 +668,6 @@ public sealed class LightingSettings
     public Dictionary<string, DevicePin> DevicePins { get; set; } = new();
     /// <summary>Pre-pin per-device Static looks; migration input only, null once folded into <see cref="DevicePins"/>.</summary>
     public Dictionary<string, StaticDeviceLook>? StaticDeviceLooks { get; set; }
-    /// <summary>Pre-pin per-device animation locks (effect key by device id); migration input only, null once folded into <see cref="DevicePins"/>.</summary>
-    public Dictionary<string, string>? AnimateDeviceLocks { get; set; }
     /// <summary>Per-LED colour locks, "#rrggbb" by lighting-device id then LED index; held in every mode.</summary>
     public Dictionary<string, Dictionary<int, string>> LedColorLocks { get; set; } = new();
     /// <summary>Per-keyboard key reactions by lighting-device id; rendered by <see cref="Nexus.Service.Lighting.KeyReactive.KeyReactiveOverlay"/>.</summary>
@@ -831,7 +829,7 @@ public sealed class StaticSettings
 {
     /// <summary>Key of the last-selected static fill or pattern.</summary>
     public string Effect { get; set; } = Nexus.Service.Lighting.StaticEffectCatalog.DefaultEffect;
-    /// <summary>"#rrggbb" when the global Static look is one exact flat colour (an unpinned device shows it instead of <see cref="Effect"/>); null when it is the effect. Mirrored into <see cref="LightingSettings.StaticColor"/>.</summary>
+    /// <summary>"#rrggbb" when the global Static look is one exact flat color (an unpinned device shows it instead of <see cref="Effect"/>); null when it is the effect. Mirrored into <see cref="LightingSettings.StaticColor"/>.</summary>
     public string? Color { get; set; }
     /// <summary>Sparse per-key look, same delta-from-resolved-slot rule as
     /// <see cref="AnimateSettings.States"/>. Speed is unused - static runs at 0.</summary>
@@ -917,8 +915,6 @@ public sealed class LayoutPreset : IAppBoundPreset
     public Dictionary<string, DevicePin>? DevicePins { get; set; }
     /// <summary>Pre-pin Static looks of a preset; migration input only.</summary>
     public Dictionary<string, StaticDeviceLook>? StaticDeviceLooks { get; set; }
-    /// <summary>Pre-pin animation locks of a preset; migration input only.</summary>
-    public Dictionary<string, string>? AnimateDeviceLocks { get; set; }
     /// <summary>Per-device brightness / hue / saturation captured at save time,
     /// same null-means-untouched contract as the fields above.</summary>
     public Dictionary<string, LightingDevicePreference>? DevicePrefs { get; set; }
@@ -955,7 +951,7 @@ public sealed class LightingPresetLook
     public string Sync { get; set; } = "";
     public string AnimateEffect { get; set; } = "";
     public string StaticEffect { get; set; } = "";
-    /// <summary>Exact flat colour of the global Static look, "#rrggbb"; null when it is <see cref="StaticEffect"/>.</summary>
+    /// <summary>Exact flat color of the global Static look, "#rrggbb"; null when it is <see cref="StaticEffect"/>.</summary>
     public string? StaticColor { get; set; }
     /// <summary>Resolved look for <see cref="AnimateEffect"/>, stored dense.
     /// <see cref="AnimateSettings.States"/> is keyed by effect and shared by every

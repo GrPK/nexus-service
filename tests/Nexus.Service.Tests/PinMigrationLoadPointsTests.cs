@@ -3,7 +3,7 @@ using Nexus.Service.Persistence;
 namespace Nexus.Service.Tests;
 
 /// <summary>
-/// The pre-pin shape (static looks, animation locks, fan lock overrides) has to
+/// The pre-pin shape (static looks, fan lock overrides) has to
 /// reach pins at every point a document is read, before anything else uses it.
 /// </summary>
 public sealed class PinMigrationLoadPointsTests : IDisposable
@@ -12,7 +12,6 @@ public sealed class PinMigrationLoadPointsTests : IDisposable
         {
           "lighting": {
             "staticDeviceLooks": { "static-dev": { "effect": "flat", "color": "#0a0b0c", "slot": 1, "locked": true } },
-            "animateDeviceLocks": { "anim-dev": "plasma" },
             "layoutPresets": [ { "id": "p1", "name": "Old", "layouts": {}, "staticDeviceLooks": { "pre-dev": { "effect": "flat", "color": "#010101" } } } ]
           },
           "cooling": { "fanLockOverrides": { "fan1": true } }
@@ -33,11 +32,8 @@ public sealed class PinMigrationLoadPointsTests : IDisposable
         Assert.Equal(DevicePinKinds.Static, s.Lighting.DevicePins["static-dev"].Kind);
         Assert.Equal("#0a0b0c", s.Lighting.DevicePins["static-dev"].Color);
         Assert.Equal(1, s.Lighting.DevicePins["static-dev"].Slot);
-        Assert.Equal(DevicePinKinds.Animate, s.Lighting.DevicePins["anim-dev"].Kind);
-        Assert.Equal("plasma", s.Lighting.DevicePins["anim-dev"].Effect);
         Assert.True(s.Cooling.FanPinOverrides["fan1"]);
         Assert.Null(s.Lighting.StaticDeviceLooks);
-        Assert.Null(s.Lighting.AnimateDeviceLocks);
         Assert.Null(s.Cooling.FanLockOverrides);
     }
 

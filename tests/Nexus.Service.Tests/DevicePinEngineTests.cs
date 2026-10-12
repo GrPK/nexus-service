@@ -89,6 +89,20 @@ public class DevicePinEngineTests : IDisposable
         return cond();
     }
 
+    /// <summary>Completes after <paramref name="count"/> more published frames.</summary>
+    private static async Task Frames(LightingEngine engine, int count)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = 0;
+        void Handler()
+        {
+            if (Interlocked.Increment(ref seen) >= count) done.TrySetResult();
+        }
+        engine.FramePublished += Handler;
+        try { await done.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally { engine.FramePublished -= Handler; }
+    }
+
     private static LightingEngine Engine(DevicePinTracker pins, DeviceFrame dev, Func<string, IEffect?, IEffect?> factory)
     {
         var engine = new LightingEngine
@@ -171,7 +185,7 @@ public class DevicePinEngineTests : IDisposable
         engine.SetEffect(new Fill("green", 0, 255, 0));
 
         await WaitFor(dev, l => l[1] == 255);
-        await Task.Delay(100);
+        await Frames(engine, 5);
         Assert.Equal(0, builds);
     }
 
@@ -292,7 +306,7 @@ public class DevicePinEngineTests : IDisposable
         var b = new DeviceFrame(1, "dev-b", 5, x: 100, y: 100, w: 40, h: 250, rotation: 90);
         rig.Engine.UpdateDevices(new[] { a, b });
         rig.Engine.SetEffect(new Fill("plasma", 0, 255, 0));
-        await Task.Delay(100);
+        await Frames(rig.Engine, 5);
         Assert.Equal(0, rig.Screen.Starts);
 
         rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Mirror });
@@ -302,7 +316,7 @@ public class DevicePinEngineTests : IDisposable
         Assert.Equal(1, rig.Screen.Starts);
 
         rig.Pins.Clear("dev-a");
-        await Task.Delay(100);
+        await Frames(rig.Engine, 5);
         Assert.True(rig.Screen.Running);
 
         rig.Pins.Clear("dev-b");
@@ -470,7 +484,7 @@ public class DevicePinEngineTests : IDisposable
     }
 
     [Fact]
-    public void A_settings_write_with_a_media_pin_notifies_once_per_pin_refresh_pass_only()
+    public void A_settings_write_with_a_media_pin_notifies_once()
     {
         using var rig = new Rig(_tempDir);
         rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Media });
@@ -479,8 +493,7 @@ public class DevicePinEngineTests : IDisposable
 
         rig.Store.Update(s => s.Lighting.MusicReactive = !s.Lighting.MusicReactive);
 
-        // The write itself plus the refresh's own snapshot write; never a third.
-        Assert.InRange(changes, 1, 2);
+        Assert.Equal(1, changes);
     }
 
     [Fact]
@@ -646,9 +659,12 @@ public class DevicePinEngineTests : IDisposable
         await WaitFor(dev, l => l[0] > 200);
 
         rig.Engine.SetPaused(true);
+        // A tick already past the paused check may still render; let it publish
+        // before the screen changes.
+        await Frames(rig.Engine, 1);
         rig.Screen.R = 0;
         rig.Screen.B = 255;
-        await Task.Delay(150);
+        await Frames(rig.Engine, 5);
 
         Assert.Equal(255, dev.LedBytes.ToArray()[0]);
         Assert.Equal(0, dev.LedBytes.ToArray()[2]);
@@ -789,10 +805,89 @@ public class DevicePinEngineTests : IDisposable
         Assert.Equal(255, leds[9 * 3 + 2]); // last LED: blue end
     }
 
-    // ---- global static colour, monitors list, mirror post-process outside Mirror ----
+    private sealed class Halves : IEffect
+    {
+        public Halves(string name) { Name = name; }
+        public string Name { get; }
+        public void RenderFrame(CanvasBuffer canvas, double tickMs)
+        {
+            for (int y = 0; y < canvas.Height; y++)
+                for (int x = 0; x < canvas.Width; x++)
+                    canvas.SetPixel(x, y, x < canvas.Width / 2 ? (byte)255 : (byte)0, 0, x < canvas.Width / 2 ? (byte)0 : (byte)255);
+        }
+        public void Dispose() { }
+    }
 
     [Fact]
-    public async Task A_global_static_colour_is_exact_for_unpinned_devices_and_survives_presets_and_a_restart()
+    public async Task A_pinned_device_samples_its_own_rect_while_a_global_sweep_runs()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        // A small strip parked in the red half of the pin canvas.
+        var dev = new DeviceFrame(0, "dev-a", 10, x: 20, y: 20, w: 100, h: 20);
+        using var engine = Engine(pins, dev, (_, _) => new Halves("red"));
+        engine.FullFrameSampling = true;
+        engine.SetEffect(new Fill("sweeprainbow", 0, 255, 0));
+
+        var leds = await WaitFor(dev, l => l[0] == 255);
+        Assert.Equal(255, leds[0]);
+        Assert.Equal(0, leds[9 * 3 + 2]);
+    }
+
+    [Fact]
+    public async Task A_pin_cleared_while_paused_disposes_its_render_and_keeps_the_others_held()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        pins.Set("dev-b", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "blue" });
+        var a = Device("dev-a");
+        var b = new DeviceFrame(1, "dev-b", 5, x: 100, y: 100, w: 40, h: 250, rotation: 90);
+        var built = new Dictionary<string, Fill>();
+        var engine = new LightingEngine
+        {
+            Pins = pins,
+            PinEffectFactory = (key, _) => built[key] = key == "red" ? new Fill("red", 255, 0, 0) : new Fill("blue", 0, 0, 255),
+            PinLookTag = _ => "t",
+            FrameIntervalMs = 10,
+        };
+        using var disposeEngine = engine;
+        engine.UpdateDevices(new[] { a, b });
+        engine.SetEffect(new Fill("green", 0, 255, 0));
+        await WaitFor(a, l => l[0] == 255);
+        await WaitFor(b, l => l[2] == 255);
+
+        engine.SetPaused(true);
+        await Frames(engine, 2);
+        pins.Clear("dev-a");
+
+        Assert.True(await Eventually(() => built["red"].Disposed));
+        Assert.False(built["blue"].Disposed);
+        Assert.Equal(255, a.LedBytes.ToArray()[0]);
+        Assert.Equal(255, b.LedBytes.ToArray()[2]);
+    }
+
+    [Fact]
+    public async Task A_pin_cleared_while_blacked_out_disposes_its_render()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "red" });
+        var dev = Device();
+        Fill? built = null;
+        using var engine = Engine(pins, dev, (_, _) => built = new Fill("red", 255, 0, 0));
+        engine.SetEffect(new Fill("green", 0, 255, 0));
+        await WaitFor(dev, l => l[0] == 255);
+
+        engine.SetBlackout(true);
+        await Frames(engine, 2);
+        pins.Clear("dev-a");
+
+        Assert.True(await Eventually(() => built!.Disposed));
+    }
+
+    // ---- global static color, monitors list, mirror post-process outside Mirror ----
+
+    [Fact]
+    public async Task A_global_static_color_is_exact_for_unpinned_devices_and_survives_presets_and_a_restart()
     {
         using var rig = new Rig(_tempDir);
         var dev = Device();
@@ -814,7 +909,7 @@ public class DevicePinEngineTests : IDisposable
         LightingPresetLooks.Apply(lighting, look);
         Assert.Equal("#336699", lighting.Static.Color);
 
-        // A pin still wins over the global colour.
+        // A pin still wins over the global color.
         rig.Pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Static, Effect = "flat", Color = "#ff0000" });
         var pinned = await WaitFor(dev, l => l[0] == 255);
         Assert.Equal(255, pinned[0]);
@@ -822,7 +917,7 @@ public class DevicePinEngineTests : IDisposable
     }
 
     [Fact]
-    public void Picking_an_effect_after_a_colour_returns_the_global_static_look_to_the_effect()
+    public void Picking_an_effect_after_a_color_returns_the_global_static_look_to_the_effect()
     {
         using var rig = new Rig(_tempDir);
         rig.Provider.StartStatic(new Nexus.Service.Models.Lighting.StaticHeadlessStart { Color = "#336699" });
@@ -899,7 +994,7 @@ public class DevicePinEngineTests : IDisposable
     }
 
     [Fact]
-    public void A_malformed_static_colour_is_refused()
+    public void A_malformed_static_color_is_refused()
     {
         using var rig = new Rig(_tempDir);
         Assert.Throws<ArgumentException>(() =>

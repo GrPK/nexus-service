@@ -893,7 +893,7 @@ public static partial class DevicesRoutes
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
 
-        // Hue and saturation of a colour-capable device (smart lights), as
+        // Hue and saturation of a color-capable device (smart lights), as
         // device metadata the UI reads back. Not a pin: what a device shows on
         // its own goes through POST /devices/lighting-devices/pins.
         app.MapPost("/devices/lighting-devices/color", (

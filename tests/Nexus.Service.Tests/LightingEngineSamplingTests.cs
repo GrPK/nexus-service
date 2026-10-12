@@ -39,9 +39,9 @@ public class LightingEngineSamplingTests
     private static DeviceFrame MakeRam() => new(0, "ram", 10, x: 195, y: 205, w: 250, h: 40, rotation: 90);
 
     [Fact]
-    public async Task SingleLed_GoesBlackWhenABlackBandCoversItsCentre()
+    public async Task SingleLed_GoesBlackWhenABlackBandCoversItsCenter()
     {
-        // 1-LED frame maps to canvas rect x=96 y=30 w=16 h=15, centre (104,37).
+        // 1-LED frame maps to canvas rect x=96 y=30 w=16 h=15, center (104,37).
         var device = new DeviceFrame(0, "one", 1, x: 600, y: 200, w: 100, h: 100);
         var leds = await RenderOnce(device, c =>
         {
@@ -53,7 +53,7 @@ public class LightingEngineSamplingTests
     }
 
     [Fact]
-    public async Task SingleLed_LitCentreGivesTheLitColour_EvenWithTheRestOfTheBoxDark()
+    public async Task SingleLed_LitCenterGivesTheLitColor_EvenWithTheRestOfTheBoxDark()
     {
         var device = new DeviceFrame(0, "one", 1, x: 600, y: 200, w: 100, h: 100);
         var leds = await RenderOnce(device, c =>

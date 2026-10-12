@@ -182,7 +182,7 @@ public class ShaderParam
 public class StaticHeadlessStart
 {
     public string Effect { get; set; } = "";
-    /// <summary>"#rrggbb". When set the global static output is exactly that flat colour for every unpinned device and the fields below are inert. Empty keeps the effect look.</summary>
+    /// <summary>"#rrggbb". When set the global static output is exactly that flat color for every unpinned device and the fields below are inert. Empty keeps the effect look.</summary>
     public string? Color { get; set; }
     public float Intensity { get; set; }
     public float Hue { get; set; }

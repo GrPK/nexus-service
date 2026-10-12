@@ -296,7 +296,7 @@ public class DevicePinStaticTests
     public async Task An_unparseable_colour_falls_back_to_the_effect_path()
     {
         var tracker = new DevicePinTracker();
-        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "red", Color = "not-a-colour" });
+        tracker.Set("keeb:keys", new DevicePin { Kind = DevicePinKinds.Static, Effect = "red", Color = "not-a-color" });
         var leds = await RenderOnce(MakeDevice(), tracker, _ => new FillEffect(255, 0, 0));
         Assert.Equal(255, leds[0]);
         Assert.Equal(0, leds[1]);

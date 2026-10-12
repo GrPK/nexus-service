@@ -12,7 +12,7 @@ using Nexus.Service.Sockets;
 
 namespace Nexus.Service.Mcp.Tools;
 
-/// <summary>Write tool: applies a built-in cooling preset to every unlocked fan channel.</summary>
+/// <summary>Write tool: applies a built-in cooling preset to every unpinned fan channel.</summary>
 public sealed class ApplyCoolingPresetTool : IMcpTool
 {
     // Matches the day-one contract enum. FanProfiles.GetBuiltInProfiles also
@@ -36,9 +36,9 @@ public sealed class ApplyCoolingPresetTool : IMcpTool
     public string Title => "Apply Cooling Preset";
 
     public string Description =>
-        "Applies a built-in cooling preset (off, silent, balanced, turbo, max) to every unlocked fan " +
+        "Applies a built-in cooling preset (off, silent, balanced, turbo, max) to every unpinned fan " +
         "channel. Use when the user asks to make the PC quiet, cool it down, release fans to hardware " +
-        "control, or switch to a named cooling mode. Locked fans and fans on their own custom curve " +
+        "control, or switch to a named cooling mode. Pinned fans and fans on their own custom curve " +
         "are left alone.";
 
     public McpCapability Capability => McpCapability.Cooling;

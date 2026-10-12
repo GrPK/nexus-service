@@ -63,7 +63,7 @@ public sealed class LightingWriteToolsTests : IDisposable
     public async Task SetStaticColor_sets_the_exact_global_color(string color)
     {
         var lighting = new McpTestHarness.StubLightingProvider();
-        var tool = new SetStaticColorTool(lighting, NewStore(), new MultiplexHub());
+        var tool = new SetStaticColorTool(lighting, new MultiplexHub());
 
         var result = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { color }), CancellationToken.None);
 
@@ -81,7 +81,7 @@ public sealed class LightingWriteToolsTests : IDisposable
     [InlineData("ff0000")]
     public async Task SetStaticColor_invalid_hex_is_error(string color)
     {
-        var tool = new SetStaticColorTool(new McpTestHarness.StubLightingProvider(), NewStore(), new MultiplexHub());
+        var tool = new SetStaticColorTool(new McpTestHarness.StubLightingProvider(), new MultiplexHub());
 
         var result = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { color }), CancellationToken.None);
 

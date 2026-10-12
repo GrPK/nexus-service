@@ -341,6 +341,14 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         catch (Exception ex) { Console.Error.WriteLine($"[config-store] OnChanged handler threw: {ex.Message}"); }
     }
 
+    public void Read(Action<NexusSettings> reader)
+    {
+        lock (_lock)
+        {
+            reader(_cached ?? Load());
+        }
+    }
+
     public void Reload()
     {
         lock (_lock)

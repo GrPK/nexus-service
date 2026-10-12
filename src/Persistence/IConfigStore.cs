@@ -19,6 +19,14 @@ public interface IConfigStore
     /// </summary>
     void Update(System.Action<NexusSettings> mutator);
 
+    /// <summary>
+    /// Runs <paramref name="reader"/> against the settings document under the
+    /// same lock <see cref="Update"/> holds, so it sees a consistent snapshot.
+    /// Unlike Update it never marks the document dirty or raises OnChanged; the
+    /// reader must not mutate.
+    /// </summary>
+    void Read(System.Action<NexusSettings> reader) => reader(Load());
+
     /// <summary>Force any pending settings write to run now.</summary>
     void FlushNow();
 

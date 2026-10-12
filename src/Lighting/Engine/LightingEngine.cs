@@ -78,13 +78,11 @@ public sealed class LightingEngine : IDisposable
     public int FrameIntervalMs { get; set; } = 33;
 
     /// <summary>
-    /// Side of the sampling spot at an LED, as a fraction of the canvas width
-    /// (3 pixels at the 160 pixel canvas). An LED reads the plain mean of a spot
-    /// this size centred on its sample position, clamped at the canvas edges and
+    /// Side of the sampling spot at an LED, as a fraction of the canvas width.
+    /// An LED reads the plain mean of a spot this size centered on its sample position, clamped at the canvas edges and
     /// never larger than the LED's own cell.
     /// </summary>
     private const float SpotSideOfCanvasWidth = 3f / 160f;
-
 
     /// <summary>
     /// Every device samples the WHOLE canvas instead of the rect its layout
@@ -737,6 +735,10 @@ public sealed class LightingEngine : IDisposable
                         RestoreBlackoutBaseline();
                         SetBlackout(false);
                     }
+                    if (_paused || _blackout)
+                    {
+                        PrunePinRenders(_devices);
+                    }
                     SerializeAndBroadcast();
                     FramePublished?.Invoke();
                     // After the publish, so look-ahead renders never delay this tick's frame.
@@ -792,6 +794,64 @@ public sealed class LightingEngine : IDisposable
         _pinnedDevices.Clear();
     }
 
+    private static string? PinRenderKey(Nexus.Service.Persistence.DevicePin pin)
+    {
+        if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate && !string.IsNullOrEmpty(pin.Effect))
+        {
+            return pin.Effect;
+        }
+        if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Mirror)
+        {
+            return MirrorPinKey;
+        }
+        if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+        {
+            return MediaPinKey;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// While paused or held black no pin renders, but a render whose pin no
+    /// longer exists is disposed so a cleared mirror pin stops screen capture.
+    /// Existing pins keep their held frame. Engine thread.
+    /// </summary>
+    private void PrunePinRenders(DeviceFrame[] devices)
+    {
+        if (_pinRenders.Count == 0)
+        {
+            return;
+        }
+        var tracker = Pins;
+        if (tracker is null || !tracker.Any)
+        {
+            DisposePinRenders();
+            return;
+        }
+        var pins = tracker.Snapshot();
+        HashSet<string> live = new(StringComparer.Ordinal);
+        foreach (var dev in devices)
+        {
+            if (pins.TryGetValue(dev.Id, out var pin) && PinRenderKey(pin) is { } k)
+            {
+                live.Add(k);
+            }
+        }
+        List<string>? stale = null;
+        foreach (var key in _pinRenders.Keys)
+        {
+            if (!live.Contains(key)) (stale ??= new List<string>()).Add(key);
+        }
+        if (stale is not null)
+        {
+            foreach (var key in stale)
+            {
+                try { _pinRenders[key].Effect?.Dispose(); } catch { /* best-effort */ }
+                _pinRenders.Remove(key);
+            }
+        }
+    }
+
     /// <summary>
     /// Renders each distinct pinned source (an Animate shader, the one screen
     /// capture every mirror pin shares, or the one Media item every media pin
@@ -830,20 +890,7 @@ public sealed class LightingEngine : IDisposable
             {
                 continue;
             }
-            string key;
-            if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate && !string.IsNullOrEmpty(pin.Effect))
-            {
-                key = pin.Effect;
-            }
-            else if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Mirror)
-            {
-                key = MirrorPinKey;
-            }
-            else if (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
-            {
-                key = MediaPinKey;
-            }
-            else
+            if (PinRenderKey(pin) is not { } key)
             {
                 continue;
             }
@@ -1103,7 +1150,7 @@ public sealed class LightingEngine : IDisposable
         }
     }
 
-    private void SampleDevicesCore(DeviceFrame[] devices, CanvasBuffer baseCanvas, bool useLocks)
+    private void SampleDevicesCore(DeviceFrame[] devices, CanvasBuffer baseCanvas, bool honorPins)
     {
         var cw = _sampleCanvas.Width;
         var ch = _sampleCanvas.Height;
@@ -1120,9 +1167,9 @@ public sealed class LightingEngine : IDisposable
             var dev = devices[di];
             // An animate or mirror pinned device samples its source's canvas, the main
             // one when it is pinned to what is running globally.
-            _sampleCanvas = useLocks && _pinnedDevices.TryGetValue(dev.Id, out var pinCanvas) && pinCanvas is not null
-                ? pinCanvas
-                : baseCanvas;
+            CanvasBuffer? pinCanvas = null;
+            var onPinCanvas = honorPins && _pinnedDevices.TryGetValue(dev.Id, out pinCanvas) && pinCanvas is not null;
+            _sampleCanvas = onPinCanvas ? pinCanvas! : baseCanvas;
             // Preview LED count from the editor's unsaved draft; clamped to the
             // physical buffer size because SetLed bounds-guards on LedCount.
             var ledCount = dev.PreviewLedCount is { } pc
@@ -1153,7 +1200,11 @@ public sealed class LightingEngine : IDisposable
             // unturned in units, rotated about (frameCx, frameCy), and only
             // then scaled onto the pixel grid. A stack slot is cut from the
             // unturned rect and turns with the whole frame.
-            var fullFrame = FullFrameSampling || (useLocks && _pinFullFrame.Contains(dev.Id));
+            // A device on its own pin canvas follows that source alone: the
+            // global sweep flag describes the main canvas, not this one.
+            var fullFrame = onPinCanvas
+                ? _pinFullFrame.Contains(dev.Id)
+                : FullFrameSampling || (honorPins && _pinFullFrame.Contains(dev.Id));
             // A full-frame device's cell is a slice of the whole canvas, so it
             // takes the plain cell mean instead of the spot. See SampleLedBox.
             var rectX = fullFrame ? 0f : dev.X;
@@ -1414,10 +1465,10 @@ public sealed class LightingEngine : IDisposable
     }
 
     /// <summary>
-    /// Colour of one LED: the plain mean, black included, of a small spot of
-    /// canvas pixels centred on the LED's sample position (<paramref name="sx"/>,
+    /// Color of one LED: the plain mean, black included, of a small spot of
+    /// canvas pixels centered on the LED's sample position (<paramref name="sx"/>,
     /// <paramref name="sy"/>, canvas pixels). The spot is
-    /// <see cref="SpotSideOfCanvasWidth"/> of the canvas width on a side, centred
+    /// <see cref="SpotSideOfCanvasWidth"/> of the canvas width on a side, centered
     /// on the pixel holding the position, and shrinks to the LED's own cell
     /// (<paramref name="cellHalfW"/>, <paramref name="cellHalfH"/>, half extents
     /// in canvas pixels) when that is smaller, so dense neighbours do not blur

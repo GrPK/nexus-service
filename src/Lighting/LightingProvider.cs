@@ -445,7 +445,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
         if (!string.IsNullOrEmpty(body.Color) && !StaticColorHex.TryParse(body.Color, out _, out _, out _))
         {
-            throw new System.ArgumentException($"'{body.Color}' is not a #rrggbb colour", nameof(body));
+            throw new System.ArgumentException($"'{body.Color}' is not a #rrggbb color", nameof(body));
         }
         EnsureRgbActive();
         if (StaticColorHex.TryParse(body.Color, out var flatR, out var flatG, out var flatB))
@@ -532,7 +532,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         });
     }
 
-    /// <summary>The global Static look as one exact flat colour: every unpinned device shows it.</summary>
+    /// <summary>The global Static look as one exact flat color: every unpinned device shows it.</summary>
     private void StartFlatStatic(StaticHeadlessStart body, byte r, byte g, byte b)
     {
         _engine.SetEffect(new FlatColorEffect(r, g, b));
@@ -742,12 +742,21 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     private sealed record PinnedLook(Nexus.Service.Persistence.AnimateEffectState State, string Tag);
     private volatile System.Collections.Generic.Dictionary<string, PinnedLook> _pinnedLooks = new();
     private volatile bool _pinnedAudio;
-    [System.ThreadStatic] private static bool _refreshingLooks;
+    private long _pinnedLooksSeq;
 
     // The one screen capture. The global Mirror effect and the mirror-pin effect
     // each take a handle, so the capture runs once and closes with its last user.
     private readonly SharedScreenFrameSource? _sharedSource;
-    private string _mirrorMonitor = "";
+    // Monitor and its pin tag change together, so a reader never sees one
+    // without the other and the per-tick tag lookup allocates nothing.
+    private sealed record MirrorSelection(string Monitor, string Tag);
+    private volatile MirrorSelection _mirrorSel = new("", "m|");
+    private string _mirrorMonitor
+    {
+        get => _mirrorSel.Monitor;
+        set => _mirrorSel = new MirrorSelection(value, "m|" + value);
+    }
+    private static readonly string EmptyMediaTag = MediaTag("");
     // The media item pinned devices play, loaded off the engine thread and
     // published by reference swap. Null when no media pin exists.
     private sealed record PinnedMedia(string Id, string Tag, int Width, int Height, int Fps, byte[]? Frames);
@@ -757,9 +766,9 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     private string? PinTag(string key) =>
         key == LightingEngine.MirrorPinKey
-            ? "m|" + _mirrorMonitor
+            ? _mirrorSel.Tag
             : key == LightingEngine.MediaPinKey
-                ? _pinnedMedia?.Tag ?? MediaTag("")
+                ? _pinnedMedia?.Tag ?? EmptyMediaTag
                 : _pinnedLooks.TryGetValue(key, out var l) ? l.Tag : null;
 
     /// <summary>
@@ -770,91 +779,86 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     /// </summary>
     private void RefreshPinnedLooks()
     {
-        // The snapshot goes through Update to get the store lock, which raises
-        // OnChanged again; that re-entry has nothing new to read.
-        if (_refreshingLooks)
+        // A profile apply or cloud pull replaces the persisted screen.
+        var persisted = _store.Load().Lighting;
+        _mirrorMonitor = persisted.ScreenMonitor ?? "";
+        if (persisted.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
         {
+            // No pins at all: nothing to load, and no write, so a settings
+            // write elsewhere never causes a second one from here.
+            LoadPinnedMedia(false, "", System.Threading.Interlocked.Increment(ref _mediaSeq));
             return;
         }
-        _refreshingLooks = true;
-        try
+        var next = new System.Collections.Generic.Dictionary<string, PinnedLook>(System.StringComparer.Ordinal);
+        var mediaWanted = false;
+        var mediaId = "";
+        long mediaSeq = 0;
+        _store.Read(s =>
         {
-            // A profile apply or cloud pull replaces the persisted screen.
-            var persisted = _store.Load().Lighting;
-            _mirrorMonitor = persisted.ScreenMonitor ?? "";
-            if (persisted.DevicePins.Count == 0 && _pinnedLooks.Count == 0 && !_pinnedAudio)
+            // Read in the same locked snapshot; the sequence orders snapshots.
+            mediaSeq = System.Threading.Interlocked.Increment(ref _mediaSeq);
+            mediaId = s.Lighting.LastMediaId ?? "";
+            foreach (var mp in s.Lighting.DevicePins.Values)
             {
-                // No pins at all: nothing to load, and no write, so a settings
-                // write elsewhere never causes a second one from here.
-                LoadPinnedMedia(false, "", System.Threading.Interlocked.Increment(ref _mediaSeq));
+                if (mp?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
+                {
+                    mediaWanted = true;
+                    break;
+                }
+            }
+            foreach (var pin in s.Lighting.DevicePins.Values)
+            {
+                var key = pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate ? pin.Effect : null;
+                if (string.IsNullOrEmpty(key) || next.ContainsKey(key))
+                {
+                    continue;
+                }
+                var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, key);
+                if (slot is null && ShaderLibrary.IsSweepEffect(key))
+                {
+                    // Simple mode's sweeps have no preset bundle: use what simple
+                    // mode last persisted for them, else the plain defaults.
+                    slot = s.Lighting.Animate.States.TryGetValue(key, out var persisted) && persisted is not null
+                        ? persisted
+                        : new Nexus.Service.Persistence.AnimateEffectState();
+                }
+                if (slot is null)
+                {
+                    continue;
+                }
+                var copy = new Nexus.Service.Persistence.AnimateEffectState
+                {
+                    Speed = slot.Speed,
+                    Intensity = slot.Intensity,
+                    Hue = slot.Hue,
+                    Colorize = slot.Colorize,
+                    Saturation = slot.Saturation,
+                    Contrast = slot.Contrast,
+                    Params = slot.Params is null
+                        ? new()
+                        : new System.Collections.Generic.Dictionary<string, float>(slot.Params),
+                };
+                next[key] = new PinnedLook(copy, HashSlot(copy));
+            }
+        });
+        var audio = false;
+        foreach (var key in next.Keys)
+        {
+            audio |= ShaderLibrary.IsAudioEffect(key);
+        }
+        lock (_mediaLoadLock)
+        {
+            // An older snapshot never publishes over a newer one.
+            if (mediaSeq < _pinnedLooksSeq)
+            {
                 return;
             }
-            var next = new System.Collections.Generic.Dictionary<string, PinnedLook>(System.StringComparer.Ordinal);
-            var mediaWanted = false;
-            var mediaId = "";
-            long mediaSeq = 0;
-            _store.Update(s =>
-            {
-                // Read in the same locked snapshot; the sequence orders snapshots.
-                mediaSeq = System.Threading.Interlocked.Increment(ref _mediaSeq);
-                mediaId = s.Lighting.LastMediaId ?? "";
-                foreach (var mp in s.Lighting.DevicePins.Values)
-                {
-                    if (mp?.Kind == Nexus.Service.Persistence.DevicePinKinds.Media)
-                    {
-                        mediaWanted = true;
-                        break;
-                    }
-                }
-                foreach (var pin in s.Lighting.DevicePins.Values)
-                {
-                    var key = pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate ? pin.Effect : null;
-                    if (string.IsNullOrEmpty(key) || next.ContainsKey(key))
-                    {
-                        continue;
-                    }
-                    var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, key);
-                    if (slot is null && ShaderLibrary.IsSweepEffect(key))
-                    {
-                        // Simple mode's sweeps have no preset bundle: use what simple
-                        // mode last persisted for them, else the plain defaults.
-                        slot = s.Lighting.Animate.States.TryGetValue(key, out var persisted) && persisted is not null
-                            ? persisted
-                            : new Nexus.Service.Persistence.AnimateEffectState();
-                    }
-                    if (slot is null)
-                    {
-                        continue;
-                    }
-                    var copy = new Nexus.Service.Persistence.AnimateEffectState
-                    {
-                        Speed = slot.Speed,
-                        Intensity = slot.Intensity,
-                        Hue = slot.Hue,
-                        Colorize = slot.Colorize,
-                        Saturation = slot.Saturation,
-                        Contrast = slot.Contrast,
-                        Params = slot.Params is null
-                            ? new()
-                            : new System.Collections.Generic.Dictionary<string, float>(slot.Params),
-                    };
-                    next[key] = new PinnedLook(copy, HashSlot(copy));
-                }
-            });
-            var audio = false;
-            foreach (var key in next.Keys)
-            {
-                audio |= ShaderLibrary.IsAudioEffect(key);
-            }
+            _pinnedLooksSeq = mediaSeq;
             _pinnedLooks = next;
             _pinnedAudio = audio;
-            LoadPinnedMedia(mediaWanted, mediaId, mediaSeq);
-            ReconcileAudioCapture();
         }
-        finally
-        {
-            _refreshingLooks = false;
-        }
+        LoadPinnedMedia(mediaWanted, mediaId, mediaSeq);
+        ReconcileAudioCapture();
     }
 
     // The loaded flag changes the tag when a retried load succeeds for the same id.
@@ -928,8 +932,9 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             // A monitor change since the instance was built needs a new capture.
             // One read, so the tag always names the monitor the instance captures.
-            var monitor = _mirrorMonitor;
-            var mirrorTag = "m|" + monitor;
+            var sel = _mirrorSel;
+            var monitor = sel.Monitor;
+            var mirrorTag = sel.Tag;
             if (existing is not null && mirrorTag == _builtMirrorTag)
             {
                 return existing;
@@ -977,7 +982,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     {
         // One read, so the tag always names the item the instance plays.
         var snapshot = _pinnedMedia;
-        var tag = snapshot?.Tag ?? MediaTag("");
+        var tag = snapshot?.Tag ?? EmptyMediaTag;
         if (existing is not null && tag == _builtMediaTag)
         {
             return existing;
