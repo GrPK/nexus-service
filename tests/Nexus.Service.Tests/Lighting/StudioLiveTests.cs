@@ -394,25 +394,104 @@ public sealed class StudioLiveTests : IDisposable
     }
 
     [Fact]
-    public void Preset_activation_ends_the_session_without_touching_the_engine_so_its_own_start_replaces_the_preview()
+    public void A_handed_off_preview_is_replaced_by_the_modes_own_start_and_the_held_effect_is_released()
     {
         var prior = new FakeEffect("prior");
         _engine.SetEffect(prior);
         _provider.StartStudioLive(Body());
-        var live = _engine.CurrentEffect;
 
-        _provider.EndStudioLiveBeforeSyncChange(restore: false);
-
+        _provider.DetachStudioLive();
         Assert.False(_provider.StudioLiveActive);
-        Assert.Same(live, _engine.CurrentEffect);
         Assert.Equal(_config.Load().Lighting.Sync, _provider.GetSync());
+        Assert.False(prior.Disposed);
         _provider.StartAnimate(Animate("plasma"));
+        _provider.FinishStudioLiveHandoff();
+
         Assert.Equal("plasma", _engine.CurrentEffectName);
         Assert.True(prior.Disposed);
     }
 
+    // The mode a preset names starts no effect: the preview must not be left running.
+    [Theory]
+    [InlineData("music")]
+    [InlineData("gif")]
+    [InlineData("media")]
+    [InlineData("")]
+    public void A_handed_off_preview_is_put_back_when_the_mode_starts_no_effect(string mode)
+    {
+        _provider.StartAnimate(Animate("rainbow"));
+        var before = _engine.CurrentEffect;
+        _provider.StartStudioLive(Body());
+
+        _provider.DetachStudioLive();
+        _config.Update(c => c.Lighting.Sync = mode);
+        switch (mode)
+        {
+            case "music":
+                _provider.StartMusic(new MusicHeadlessStart());
+                break;
+            case "media":
+                Assert.False(_provider.StartMedia("missing"));
+                break;
+        }
+        _provider.FinishStudioLiveHandoff();
+
+        Assert.Same(before, _engine.CurrentEffect);
+        Assert.NotEqual(LightingProvider.StudioLiveKey, _engine.CurrentEffectName);
+    }
+
     [Fact]
-    public void An_unannounced_sync_write_restores_synchronously_when_the_preview_still_runs()
+    public void Finishing_with_nothing_detached_is_a_no_op()
+    {
+        _provider.FinishStudioLiveHandoff();
+
+        Assert.False(_provider.StudioLiveActive);
+    }
+
+    [Fact]
+    public void A_new_session_never_adopts_a_handed_off_preview_as_the_lighting_to_restore()
+    {
+        _provider.StartStudioLive(Body());
+        _provider.DetachStudioLive();
+
+        _provider.StartStudioLive(Body(CustomFrags.Frag(0.9f)));
+        _provider.StopStudioLive();
+
+        Assert.Null(_engine.CurrentEffect);
+        _provider.FinishStudioLiveHandoff();
+        Assert.Null(_engine.CurrentEffect);
+    }
+
+    [Fact]
+    public void A_profile_switch_hands_the_preview_off_before_its_settings_load_and_leaves_nothing_running()
+    {
+        var pm = new ProfileManager(_config);
+        pm.Initialize();
+        pm.CreateProfile("Other");
+        var first = pm.GetManifest().Profiles[0].Id;
+        var loading = 0;
+        pm.ProfileLoading += () =>
+        {
+            loading++;
+            _provider.DetachStudioLive();
+        };
+        var prior = new FakeEffect("prior");
+        _engine.SetEffect(prior);
+        _provider.StartStudioLive(Body());
+
+        pm.SwitchProfile(first);
+        // What AppBootstrap.ReapplyAfterProfileSwitch does: stop the engine, restart the profile's mode, settle the handoff.
+        _engine.Stop();
+        _provider.FinishStudioLiveHandoff();
+
+        Assert.Equal(1, loading);
+        Assert.False(_provider.StudioLiveActive);
+        Assert.Null(_engine.CurrentEffect);
+        Assert.True(prior.Disposed);
+    }
+
+    [Fact]
+    public void An_unannounced_sync_write_ends_the_session_and_restores_off_the_writers_thread()
     {
         _provider.StartAnimate(Animate("rainbow"));
         var before = _engine.CurrentEffect;
@@ -421,6 +500,7 @@ public sealed class StudioLiveTests : IDisposable
         _config.Update(c => c.Lighting.Sync = "unknown-writer");
 
         Assert.False(_provider.StudioLiveActive);
+        WaitFor(() => ReferenceEquals(_engine.CurrentEffect, before));
         Assert.Same(before, _engine.CurrentEffect);
     }
 

@@ -119,6 +119,15 @@ public interface ILightingProvider
     /// </summary>
     bool EndStudioLiveBeforeSyncChange(bool restore) => false;
 
+    /// <summary>
+    /// A caller is about to change the saved mode and start the mode's own effect (preset activation, profile switch).
+    /// Ends a live session but leaves the preview running and keeps the snapshot, until <see cref="FinishStudioLiveHandoff"/>.
+    /// </summary>
+    void DetachStudioLive() { }
+
+    /// <summary>Completes <see cref="DetachStudioLive"/>: restores the replaced lighting if the engine still runs the preview, otherwise releases it.</summary>
+    void FinishStudioLiveHandoff() { }
+
     /// <summary>True while a live session runs.</summary>
     bool StudioLiveActive => false;
 }

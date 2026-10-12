@@ -39,63 +39,71 @@ public static partial class DevicesRoutes
         var reControlled = uncontrolled is null
             ? new List<string>()
             : s.Devices.UncontrolledLightingDevices.FindAll(x => !uncontrolled.Contains(x));
-        // A preset look that names a mode starts its own effect below, which replaces a live Shader Studio preview;
-        // end the session first and touch nothing, so no restore, bridge shutdown or blackout runs mid-activation.
-        if (look is not null && !string.IsNullOrEmpty(look.Sync))
-        {
-            lighting.EndStudioLiveBeforeSyncChange(restore: false);
-        }
-        store.Update(settings =>
-        {
-            settings.Lighting.DeviceLayouts.Clear();
-            foreach (var kv in layouts)
-            {
-                settings.Lighting.DeviceLayouts[kv.Key] = kv.Value;
-            }
-            settings.Lighting.ActiveLayoutPresetId = id;
-            if (disabled is not null)
-            {
-                settings.Devices.DisabledLightingDevices = new List<string>(disabled);
-            }
-            if (uncontrolled is not null)
-            {
-                // Replaced, not mutated: the frame writers read this list
-                // lock-free and must never observe a torn state.
-                settings.Devices.UncontrolledLightingDevices = new List<string>(uncontrolled);
-            }
-            if (look is not null)
-            {
-                Nexus.Service.Lighting.LightingPresetLooks.Apply(settings.Lighting, look);
-            }
-            if (staticLooks is not null)
-            {
-                // Replaced wholesale: StaticDeviceEffectTracker re-hydrates
-                // off the store's OnChanged, so writing this is what repaints
-                // the devices - no separate replay.
-                settings.Lighting.StaticDeviceLooks = staticLooks;
-            }
-            if (devicePrefs is not null)
-            {
-                settings.Devices.LightingDevicePrefs = devicePrefs;
-            }
-            if (sceneView is not null)
-            {
-                // LightingSceneService rebuilds the engine projection off the store change.
-                settings.Lighting.SceneView = sceneView;
-            }
-        });
-        if (uncontrolled is not null)
-        {
-            bridge?.RequestTopologyRefresh();
-            foreach (var reEnabled in reControlled)
-            {
-                smart.RestoreStatic(reEnabled);
-            }
-        }
-        MirrorLayoutsToEngine(layouts, lightingProvider, engine);
+        // A look replaces the lighting mode, so a live Shader Studio preview is handed off: the session ends now, and
+        // once the look's own effect start has run, the replaced lighting returns only if the look started nothing
+        // (music, gif, a media look with no media), so the preview is never left running.
         if (look is not null)
         {
-            EngageLook(look, store, lighting);
+            lighting.DetachStudioLive();
+        }
+        try
+        {
+            store.Update(settings =>
+            {
+                settings.Lighting.DeviceLayouts.Clear();
+                foreach (var kv in layouts)
+                {
+                    settings.Lighting.DeviceLayouts[kv.Key] = kv.Value;
+                }
+                settings.Lighting.ActiveLayoutPresetId = id;
+                if (disabled is not null)
+                {
+                    settings.Devices.DisabledLightingDevices = new List<string>(disabled);
+                }
+                if (uncontrolled is not null)
+                {
+                    // Replaced, not mutated: the frame writers read this list
+                    // lock-free and must never observe a torn state.
+                    settings.Devices.UncontrolledLightingDevices = new List<string>(uncontrolled);
+                }
+                if (look is not null)
+                {
+                    Nexus.Service.Lighting.LightingPresetLooks.Apply(settings.Lighting, look);
+                }
+                if (staticLooks is not null)
+                {
+                    // Replaced wholesale: StaticDeviceEffectTracker re-hydrates
+                    // off the store's OnChanged, so writing this is what repaints
+                    // the devices - no separate replay.
+                    settings.Lighting.StaticDeviceLooks = staticLooks;
+                }
+                if (devicePrefs is not null)
+                {
+                    settings.Devices.LightingDevicePrefs = devicePrefs;
+                }
+                if (sceneView is not null)
+                {
+                    // LightingSceneService rebuilds the engine projection off the store change.
+                    settings.Lighting.SceneView = sceneView;
+                }
+            });
+            if (uncontrolled is not null)
+            {
+                bridge?.RequestTopologyRefresh();
+                foreach (var reEnabled in reControlled)
+                {
+                    smart.RestoreStatic(reEnabled);
+                }
+            }
+            MirrorLayoutsToEngine(layouts, lightingProvider, engine);
+            if (look is not null)
+            {
+                EngageLook(look, store, lighting);
+            }
+        }
+        finally
+        {
+            lighting.FinishStudioLiveHandoff();
         }
         Nexus.Service.Sockets.PanelTopics.BroadcastLighting(hub);
         return true;

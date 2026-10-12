@@ -135,13 +135,16 @@ public sealed partial class LightingProvider
             return Fail("lighting is held dark for sleep or lock");
         }
 
+        // An ended session's preview can still be running while its restore is queued; what it left behind is
+        // not the user's lighting, so it snapshots as Off.
+        var deadPreview = _engine.CurrentEffect is ShaderEffect { Name: StudioLiveKey };
         // Everything below the snapshot reads is read before the first change.
         var persistedSync = _store.Load().Lighting.Sync;
         var reportedSync = GetSync();
-        var reportedPaused = _engine.Paused;
-        var prevFrozen = _engine.Frozen;
-        var prevFullFrame = _engine.FullFrameSampling;
-        var prevStaticEnabled = _engine.StaticEffects?.Enabled ?? false;
+        var reportedPaused = !deadPreview && _engine.Paused;
+        var prevFrozen = !deadPreview && _engine.Frozen;
+        var prevFullFrame = !deadPreview && _engine.FullFrameSampling;
+        var prevStaticEnabled = !deadPreview && (_engine.StaticEffects?.Enabled ?? false);
         var rgbWasActive = _rgb?.IsActive ?? false;
 
         ShaderLibrary.RegisterCustom(StudioLiveId, frag);
@@ -178,7 +181,16 @@ public sealed partial class LightingProvider
         {
             EnsureRgbActive();
             _engine.FullFrameSampling = true;
-            started.PrevEffect = _engine.SetEffect(live, disposePrevious: false);
+            var replaced = _engine.SetEffect(live, disposePrevious: false);
+            if (replaced is ShaderEffect { Name: StudioLiveKey })
+            {
+                // Never adopt a dead preview as the lighting to restore.
+                try
+                { replaced.Dispose(); }
+                catch { }
+                replaced = null;
+            }
+            started.PrevEffect = replaced;
         }
         finally
         {
@@ -357,56 +369,85 @@ public sealed partial class LightingProvider
         }
     }
 
-    // A Sync write the callers that start no effect (music, SetSync, preset activation) did not announce first. The
-    // known callers end the session explicitly before they write; this only catches an unknown one.
-    // The preview no longer running: nothing to restore, abandon and log. Still running with an effect to put back:
-    // swap it back right here under the lock; that is a pointer swap with no blackout or bridge work, so it is safe
-    // on the writer's thread. Started from Off: stopping needs the blackout push and a bridge shutdown, which can
-    // block for seconds, so that restore goes to a pool thread (gated on the preview still running, no delay).
+    // A Sync write no caller announced first. The known callers (music, SetSync, preset activation, profile switch) end
+    // or hand off the session before they write; this only catches an unknown one. The session ends at once, and the
+    // preview is put back on a pool thread, gated on the engine still running it: the swap can block on a paused
+    // restore, can start or stop an audio-capture subprocess, and from Off needs the blackout push and a bridge
+    // shutdown, none of which belong on the writer's thread (which may hold a profile lock or be the render thread).
+    // A start that lands before the pool thread does snapshots the dead preview as Off.
     private void OnStudioStoreChanged()
     {
         if (_studio is null)
         {
             return;
         }
-        StudioSession? offRestore = null;
-        var ended = false;
+        StudioSession? deferred = null;
         lock (_studioLock)
         {
             if (_studio is { } s && !string.Equals(_store.Load().Lighting.Sync, s.PersistedSync, StringComparison.Ordinal))
             {
-                ended = true;
-                if (!EngineRunsLive(s))
-                {
-                    ServiceLog.Warn("[studio-live] saved mode changed under a live session; abandoned, the engine had moved on");
-                    EndStudioLocked(StudioEnd.Abandon);
-                }
-                else if (s.PrevEffect is not null)
-                {
-                    ServiceLog.Warn("[studio-live] saved mode changed under a live session; restored");
-                    EndStudioLocked(StudioEnd.Restore);
-                }
-                else
-                {
-                    ServiceLog.Warn("[studio-live] saved mode changed under a live session; restoring Off");
-                    offRestore = EndStudioLocked(StudioEnd.Defer);
-                }
+                ServiceLog.Warn("[studio-live] saved mode changed under a live session; ending it");
+                deferred = EndStudioLocked(StudioEnd.Defer);
             }
         }
-        if (!ended)
+        if (deferred is null)
         {
             return;
         }
         NotifyStudioEnded();
-        if (offRestore is not null)
+        _ = Task.Run(() =>
         {
-            _ = Task.Run(() =>
+            lock (_studioLock)
             {
-                lock (_studioLock)
-                {
-                    FinishStudio(offRestore, StudioEnd.Restore);
-                }
-            });
+                FinishStudio(deferred, StudioEnd.Restore);
+            }
+        });
+    }
+
+    private StudioSession? _studioHandoff;
+
+    /// <summary>
+    /// A caller is about to change the saved mode and then start the mode's own effect (preset activation, profile
+    /// switch). Ends the session but leaves the preview running and keeps the snapshot; the caller finishes with
+    /// <see cref="FinishStudioLiveHandoff"/> once its effect start has run.
+    /// </summary>
+    public void DetachStudioLive()
+    {
+        lock (_studioLock)
+        {
+            var s = EndStudioLocked(StudioEnd.Defer);
+            if (s is null)
+            {
+                return;
+            }
+            if (_studioHandoff is { } older)
+            {
+                FinishStudio(older, StudioEnd.Abandon);
+            }
+            _studioHandoff = s;
+        }
+        NotifyStudioEnded();
+    }
+
+    /// <summary>
+    /// Completes a <see cref="DetachStudioLive"/>: if the engine still runs the preview (the mode started no effect)
+    /// the replaced lighting goes back, otherwise the held effect is released. No-op with nothing detached.
+    /// </summary>
+    public void FinishStudioLiveHandoff()
+    {
+        StudioSession? s;
+        lock (_studioLock)
+        {
+            s = _studioHandoff;
+            _studioHandoff = null;
+            if (s is not null)
+            {
+                FinishStudio(s, StudioEnd.Restore);
+            }
+        }
+        if (s is not null)
+        {
+            NotifyStudioEnded();
         }
     }
 

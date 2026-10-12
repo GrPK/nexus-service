@@ -837,8 +837,15 @@ public sealed partial class ProfileManager : IDisposable
         UpdateProfileFile(profileId, ProfileSharing.All, _store.Load());
     }
 
+    /// <summary>Raised, under the profile lock, just before a profile's settings replace the live ones. Handlers must be cheap.</summary>
+    public event Action? ProfileLoading;
+
     private void LoadProfileIntoSettings(string profileId)
     {
+        try
+        { ProfileLoading?.Invoke(); }
+        catch (Exception ex) { Console.Error.WriteLine($"[profiles] loading handler failed: {ex.Message}"); }
+
         // Profile JSONs only carry per-profile data (Lighting, Cooling,
         // Device, and the Theme + Dashboard subsets of Ui). Keeb is now
         // profile-scoped via the Device category (ApplyCategory below).
