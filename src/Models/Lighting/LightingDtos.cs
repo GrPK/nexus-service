@@ -24,6 +24,9 @@ public class CurrentSyncResponse : ApiResponse
     /// <summary>One of: none, animate, music, screen, gif.</summary>
     public string Sync { get; set; } = "none";
     public bool Paused { get; set; }
+
+    /// <summary>True while a Shader Studio live session drives the LEDs. Sync and Paused then report the state before the session, which is what a client should keep and save.</summary>
+    public bool StudioLive { get; set; }
 }
 
 /// <summary>POST body for /lighting/pause. Freezes the active effect's rendered

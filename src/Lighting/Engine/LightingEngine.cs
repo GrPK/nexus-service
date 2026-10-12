@@ -533,11 +533,18 @@ public sealed class LightingEngine : IDisposable
 
     public void InvalidateFrozenFrame() => Interlocked.Increment(ref _frozenEpoch);
 
-    public void SetEffect(IEffect effect)
+    public void SetEffect(IEffect effect) => SetEffect(effect, disposePrevious: true);
+
+    /// <summary>
+    /// Replace the running effect. With <paramref name="disposePrevious"/> false the outgoing
+    /// effect is handed back alive, so a caller can put the very same instance back later.
+    /// </summary>
+    public IEffect? SetEffect(IEffect effect, bool disposePrevious)
     {
+        IEffect? old;
         lock (_lock)
         {
-            var old = _currentEffect;
+            old = _currentEffect;
             _currentEffect = effect;
             _paused = false;
             _frozen = false;
@@ -545,9 +552,12 @@ public sealed class LightingEngine : IDisposable
             // never lands: it always ends in a lit device, never a dark one.
             ReleaseBlackoutState();
             Interlocked.Increment(ref _frozenEpoch);
-            try
-            { old?.Dispose(); }
-            catch { }
+            if (disposePrevious)
+            {
+                try
+                { old?.Dispose(); }
+                catch { }
+            }
             if (_loopTask is null || _loopTask.IsCompleted)
             {
                 _cts?.Dispose();
@@ -560,6 +570,7 @@ public sealed class LightingEngine : IDisposable
         }
         // Handler may start/stop an audio-capture subprocess; must not run under the engine lock.
         OnEffectChanged?.Invoke();
+        return old;
     }
 
     /// <summary>

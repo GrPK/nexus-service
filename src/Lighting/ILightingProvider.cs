@@ -101,4 +101,20 @@ public interface ILightingProvider
     /// and move the running animate effect to rainbow if it was the one.
     /// </summary>
     void DropCustomEffect(string key) { }
+
+    /// <summary>
+    /// Shader Studio live preview: run <paramref name="body"/>'s fragment on every device until
+    /// <see cref="StopStudioLive"/> or a 15 s lease lapse, touching no saved setting. The caller
+    /// has already validated and compile-checked the fragment.
+    /// </summary>
+    StudioLiveResult StartStudioLive(StudioLiveBody body) => new(false, "studio live is not supported", 0, System.Array.Empty<string>());
+
+    /// <summary>Ends a live session and restores the lighting it replaced. Idempotent; true when a session was running.</summary>
+    bool StopStudioLive() => false;
+
+    /// <summary>True while a live session runs.</summary>
+    bool StudioLiveActive => false;
 }
+
+/// <summary>Outcome of <see cref="ILightingProvider.StartStudioLive"/>.</summary>
+public readonly record struct StudioLiveResult(bool Ok, string Message, int DevicesForced, System.Collections.Generic.IReadOnlyList<string> Skipped);

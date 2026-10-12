@@ -29,7 +29,7 @@ namespace Nexus.Service.Lighting;
 /// New effect modes plug in by adding an interface method, a route, and a Start*
 /// implementation that calls _engine.SetEffect.
 /// </summary>
-public sealed class LightingProvider : ILightingProvider, IDisposable
+public sealed partial class LightingProvider : ILightingProvider, IDisposable
 {
     /// <summary>Cap on the stop-path OpenRGB push. Bounds the per-device queueing only: a socket send already in flight does not observe cancellation, so a daemon that stops draining can still overrun this.</summary>
     private static readonly TimeSpan StopBlackoutBudget = TimeSpan.FromSeconds(2);
@@ -85,8 +85,9 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     private readonly FeatureGates _gates;
 
-    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null)
+    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null, MultiplexHub? panelHub = null)
     {
+        _panelHub = panelHub;
         _gates = gates ?? FeatureGates.AllEnabled;
         _store = store;
         _engine = engine;
@@ -110,6 +111,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
         _engine.OnFrame += frame => _ = _hub.BroadcastBinaryAsync(frame);
         _engine.OnEffectChanged += ReconcileAudioCapture;
+        _engine.OnEffectChanged += OnStudioEffectChanged;
+        _store.OnChanged += OnStudioStoreChanged;
         _scanner?.OnScanComplete = OnGameScanComplete;
         // A store that was unreadable at boot registers its sources late; a custom effect
         // restored meanwhile is running the rainbow stand-in until this rebuilds it.
@@ -145,6 +148,11 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     // classify on.
     public string GetSync()
     {
+        // A live Shader Studio session is a preview: clients keep seeing what ran before it.
+        if (_studio is { } studio)
+        {
+            return studio.ReportedSync;
+        }
         if (_engine.CurrentEffectName == "none")
         {
             return _store.Load().Lighting.Sync;
@@ -154,7 +162,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     public void SetSync(string sync) => _store.Update(s => s.Lighting.Sync = sync);
 
-    public bool IsPaused => _engine.Paused;
+    public bool IsPaused => _studio?.ReportedPaused ?? _engine.Paused;
 
     public void SetPaused(bool paused) => _engine.SetPaused(paused);
 
@@ -318,8 +326,13 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             return;
         }
-        EnsureRgbActive();
         var name = (body.Effect ?? "rainbow").ToLowerInvariant();
+        // Reserved for the live preview; saving it would persist a key no later boot can resolve.
+        if (name == StudioLiveKey)
+        {
+            return;
+        }
+        EnsureRgbActive();
         // The static catalog lives in Static mode now. Callers that predate it -
         // restored settings written before the split, Stream Deck rgbEffect
         // Deck rgbEffect buttons, MCP scenarios, set_static_color - still name one
@@ -1453,6 +1466,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     public void Dispose()
     {
+        _studioTimer?.Dispose();
         _rgb?.Dispose();
         _engine.Dispose();
     }
