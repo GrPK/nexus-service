@@ -51,6 +51,14 @@ public class DeviceControlPolicyTests
     }
 
     [Fact]
+    public void Asiahorse_Umbra_DefaultsOn_AndNamesItsAppWithoutWhitelistingIt()
+    {
+        Assert.True(DeviceControlPolicy.DefaultOn("asiahorse-umbra"));
+        Assert.Equal("asiahorse-umbra", DeviceControlPolicy.ConflictAppFor("asiahorse-umbra"));
+        Assert.DoesNotContain("asiahorse-umbra", Nexus.Service.Conflicts.ConflictAppCatalog.DefaultWhitelistedIds());
+    }
+
+    [Fact]
     public void ConflictAppFor_UnmappedHandler_ReturnsNull()
     {
         Assert.Null(DeviceControlPolicy.ConflictAppFor("keeb"));

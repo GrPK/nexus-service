@@ -91,6 +91,7 @@ public class UmbraConnectionWorkerTests
     [Fact]
     public async Task Turning_nexus_control_on_connects_without_waiting_for_the_retry_interval()
     {
+        _gate.SetEnabled(UmbraConnectionWorker.HandlerId, false);
         Assert.False(_gate.IsEnabled(UmbraConnectionWorker.HandlerId));
         await _worker.StartAsync(CancellationToken.None);
         try

@@ -36,7 +36,6 @@ public static class DeviceControlPolicy
         ["lianli-hydroshift2"] = "lian-li-l-connect",
         ["lianli-hydroshift2-curve"] = "lian-li-l-connect",
         ["lianli-galahad2-lcd"] = "lian-li-l-connect",
-        ["asiahorse-umbra"] = "asiahorse-umbra",
         ["corsair"] = "icue",
         ["corsair-link-lcd"] = "icue",
     };
@@ -66,6 +65,7 @@ public static class DeviceControlPolicy
         ["nzxt-kraken"] = "nzxt-cam",
         ["zmatrices-lcd"] = "zmatrices",
         ["streamdeck"] = StreamDeckHandler.ElgatoConflictAppId,
+        ["asiahorse-umbra"] = "asiahorse-umbra",
     };
 
     /// <summary>Waits while its app runs, whitelisted or not: the LINK hub shares its file handles across hosts, so Nexus frames land in iCUE's open profile files and are stored (fw 4.1.656).</summary>
