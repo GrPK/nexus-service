@@ -149,13 +149,17 @@ public class UmbraRouteLogicTests
     [Theory]
     [InlineData(-1, null, null, null, false)]
     [InlineData(10, null, null, null, false)]
-    [InlineData(0, 0, "forward", 1, true)]
-    [InlineData(9, 120, "reverse", 10, true)]
+    [InlineData(0, null, "forward", 1, true)]
+    [InlineData(0, 0, null, null, true)]
+    [InlineData(9, 120, null, null, true)]
+    [InlineData(9, null, "reverse", 10, true)]
     [InlineData(2, 121, null, null, false)]
     [InlineData(2, -1, null, null, false)]
     [InlineData(2, null, "sideways", null, false)]
     [InlineData(2, null, null, 0, false)]
     [InlineData(2, null, null, 11, false)]
+    [InlineData(2, 24, "forward", null, false)]
+    [InlineData(2, 24, null, 3, false)]
     public void Port_requests_are_range_checked(int index, int? ledCount, string? direction, int? order, bool valid)
     {
         var error = AsiahorseUmbraRouteLogic.ValidatePort(index, new UmbraPortRequest { LedCount = ledCount, Direction = direction, Order = order });
@@ -166,9 +170,9 @@ public class UmbraRouteLogicTests
     [Fact]
     public void Port_writes_use_zero_based_order_and_numeric_direction()
     {
-        var writes = AsiahorseUmbraRouteLogic.PortWrites(new UmbraPortRequest { LedCount = 24, Direction = "reverse", Order = 4 }).ToArray();
+        var writes = AsiahorseUmbraRouteLogic.PortWrites(new UmbraPortRequest { Direction = "reverse", Order = 4 }).ToArray();
 
-        Assert.Equal(new[] { (UmbraPortField.LedCount, 24), (UmbraPortField.Direction, 0), (UmbraPortField.Order, 3) }, writes);
+        Assert.Equal(new[] { (UmbraPortField.Direction, 0), (UmbraPortField.Order, 3) }, writes);
     }
 
     // ── Applying a patch ──

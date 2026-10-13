@@ -69,27 +69,10 @@ public static partial class DevicesRoutes
             {
                 return unavailable;
             }
-            var error = AsiahorseUmbraRouteLogic.ValidatePort(index, body);
-            if (error is not null)
+            var (status, portError) = await AsiahorseUmbraRouteLogic.SetPortAsync(hub, index, body, UmbraReconnectTimeout, ct).ConfigureAwait(false);
+            if (portError is not null)
             {
-                return UmbraError(error, StatusCodes.Status400BadRequest);
-            }
-            foreach (var (field, value) in AsiahorseUmbraRouteLogic.PortWrites(body))
-            {
-                if (field != UmbraPortField.LedCount && !hub.WritePort(index, field, value))
-                {
-                    return UmbraError("the device did not accept the port setting", StatusCodes.Status500InternalServerError);
-                }
-            }
-            // The count only takes effect at the next boot, so it restarts the controller and waits for the reconnect.
-            if (body.LedCount is not null)
-            {
-                var restart = await hub.RestartAsync(UmbraReconnectTimeout, ct, UmbraProtocol.EncodeSetPort(index, UmbraPortField.LedCount, body.LedCount.Value)).ConfigureAwait(false);
-                if (RestartFailure(restart) is { } failure)
-                {
-                    return failure;
-                }
-                hub.RefreshPorts();
+                return UmbraError(portError, status);
             }
             return Changed(hub, store, cooling, lighting, mux);
         });
@@ -265,7 +248,11 @@ internal static class AsiahorseUmbraRouteLogic
         }
         if (body.LedCount is < 0 or > UmbraProtocol.MaxLedCount)
         {
-            return "ledCount must be 0 to 120";
+            return "ledCount must be 0 to 120 (0 uses the detected count)";
+        }
+        if (body.LedCount is not null && (body.Direction is not null || body.Order is not null))
+        {
+            return "ledCount restarts the controller and must be sent on its own";
         }
         if (body.Direction is not null && body.Direction is not (UmbraEffects.DirectionForward or UmbraEffects.DirectionReverse))
         {
@@ -276,6 +263,45 @@ internal static class AsiahorseUmbraRouteLogic
             return "order must be 1 to 10";
         }
         return null;
+    }
+
+    // A count takes effect only at the next boot, so it restarts the controller; direction and order apply at once.
+    internal static async Task<(int Status, string? Error)> SetPortAsync(
+        UmbraHub hub, int index, UmbraPortRequest body, TimeSpan timeout, CancellationToken ct)
+    {
+        var error = ValidatePort(index, body);
+        if (error is not null)
+        {
+            return (StatusCodes.Status400BadRequest, error);
+        }
+        foreach (var (field, value) in PortWrites(body))
+        {
+            if (!hub.WritePort(index, field, value))
+            {
+                return (StatusCodes.Status500InternalServerError, "the device did not accept the port setting");
+            }
+        }
+        if (body.LedCount is not { } count)
+        {
+            return (StatusCodes.Status200OK, null);
+        }
+        var restart = await hub.RestartAsync(timeout, ct, UmbraProtocol.EncodeSetPort(index, UmbraPortField.LedCount, count)).ConfigureAwait(false);
+        switch (restart)
+        {
+            case UmbraRestartResult.Busy:
+                return (StatusCodes.Status409Conflict, "a controller restart is already running");
+            case UmbraRestartResult.NoDevice:
+                return (StatusCodes.Status409Conflict, "Asiahorse Umbra is not connected");
+            case UmbraRestartResult.TimedOut:
+                return (StatusCodes.Status504GatewayTimeout, "the device did not reconnect");
+        }
+        hub.RefreshPorts();
+        // The firmware ignores a count at or below the detected one; clear it so it does not stay armed in flash.
+        if (count != 0 && hub.Snapshot.Ports[index].LedCount != count)
+        {
+            hub.WritePort(index, UmbraPortField.LedCount, 0);
+        }
+        return (StatusCodes.Status200OK, null);
     }
 
     internal static byte[][] ClearManualCounts()
@@ -290,10 +316,6 @@ internal static class AsiahorseUmbraRouteLogic
 
     internal static IEnumerable<(UmbraPortField Field, int Value)> PortWrites(UmbraPortRequest body)
     {
-        if (body.LedCount is not null)
-        {
-            yield return (UmbraPortField.LedCount, body.LedCount.Value);
-        }
         if (body.Direction is not null)
         {
             yield return (UmbraPortField.Direction, body.Direction == UmbraEffects.DirectionForward ? 1 : 0);

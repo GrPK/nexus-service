@@ -241,7 +241,7 @@ public sealed class UmbraHub : IDisposable
         }
     }
 
-    // Sends the restart (the vendor "Auto Detect LEDs") and completes when the re-enumerated device reconnects.
+    // Writes the before-frames, then the restart, under one lock, and completes when the re-enumerated device reconnects.
     public async Task<UmbraRestartResult> RestartAsync(TimeSpan timeout, CancellationToken ct, params byte[][] before)
     {
         var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -278,14 +278,7 @@ public sealed class UmbraHub : IDisposable
             {
                 return;
             }
-            lock (_lock)
-            {
-                if (ReferenceEquals(_reconnect, waiter))
-                {
-                    _reconnect = null;
-                    _isRestarting = false;
-                }
-            }
+            ClearRestart(waiter);
         }, TaskScheduler.Default);
         try
         {
@@ -294,7 +287,20 @@ public sealed class UmbraHub : IDisposable
         }
         catch (TimeoutException)
         {
+            ClearRestart(waiter);
             return UmbraRestartResult.TimedOut;
+        }
+    }
+
+    private void ClearRestart(TaskCompletionSource<bool> waiter)
+    {
+        lock (_lock)
+        {
+            if (ReferenceEquals(_reconnect, waiter))
+            {
+                _reconnect = null;
+                _isRestarting = false;
+            }
         }
     }
 
