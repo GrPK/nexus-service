@@ -127,6 +127,35 @@ if (!testHost)
     Nexus.Service.Platform.Linux.LinuxSession.AdoptActiveSessionEnv();
 #endif
 
+var url = ServiceLaunchIntent.ResolveServiceUrl(args);
+var servicePort = ServiceLaunchIntent.ResolveServicePort(url);
+Nexus.Service.Lifecycle.BootTimer.Mark("after URL resolve");
+
+// macOS has no cross-process named mutex, so a running instance is found by its
+// port, before the log opens (a second boot rotates the live log away). The
+// launchd agent (KeepAlive) waits for the port instead of crash-looping on bind.
+if (OperatingSystem.IsMacOS() && !testHost && IsNexusServing(servicePort))
+{
+    if (!serviceMode)
+    {
+        Console.WriteLine("[nexus-service] already running, opening dashboard window");
+        if (!suppressStartupWindow)
+            OpenExistingServiceWindow(servicePort);
+        return 0;
+    }
+    Console.WriteLine($"[nexus-service] another instance serves :{servicePort}; standing by");
+    // The port closes before the old process flushes its stores and releases
+    // devices, and another instance can bind while this one waits for it.
+    do
+    {
+        do
+            System.Threading.Thread.Sleep(5000);
+        while (IsNexusServing(servicePort));
+        WaitForSiblingInstancesToExit();
+    }
+    while (IsNexusServing(servicePort));
+}
+
 // Capture stdout / stderr to a rotating nexus-service.log file before anything else
 // writes to the console. Doesn't change Console behaviour - just tees output.
 // Skipped under the test host: the tee is process-global and outlives the
@@ -135,10 +164,6 @@ if (!testHost)
 if (!testHost)
     Nexus.Service.Platform.ServiceLog.Initialize();
 Nexus.Service.Lifecycle.BootTimer.Mark("after ServiceLog.Initialize");
-
-var url = ServiceLaunchIntent.ResolveServiceUrl(args);
-var servicePort = ServiceLaunchIntent.ResolveServicePort(url);
-Nexus.Service.Lifecycle.BootTimer.Mark("after URL resolve");
 
 // Single-instance guard - if another nexus-service is already running,
 // open or focus the dashboard window instead of spawning a second service.
@@ -848,7 +873,16 @@ if (serviceMode)
 }
 
 Nexus.Service.Lifecycle.BootTimer.Mark("calling app.Run() (host start begins)");
-app.Run();
+// Read before Run: the host disposes its services when Run returns or throws.
+var stopping = app.Lifetime.ApplicationStopping;
+try
+{
+    app.Run();
+}
+catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+{
+    // Stopped (SIGTERM, /service/stop) before the host finished starting: a clean exit, not a crash.
+}
 return 0;
 
 // ── Local functions ─────────────────────────────────────────────────────────
@@ -986,6 +1020,47 @@ static void FastWindowsUiTeardown(IServiceProvider sp)
     catch { }
 }
 #endif
+
+// Only a Nexus service counts: anything else on the port is not ours to wait for.
+static bool IsNexusServing(int servicePort)
+{
+    try
+    {
+        using var http = new System.Net.Http.HttpClient(new System.Net.Http.SocketsHttpHandler { UseProxy = false })
+        {
+            Timeout = TimeSpan.FromSeconds(2),
+        };
+        return http.GetStringAsync($"http://127.0.0.1:{servicePort}/ping").GetAwaiter().GetResult()
+            .Contains("\"nexus-service\"", StringComparison.Ordinal);
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+// Same bound the OTA swap and factory reset give the old process to exit.
+static void WaitForSiblingInstancesToExit()
+{
+    var self = Environment.ProcessPath;
+    if (string.IsNullOrEmpty(self))
+        return;
+    foreach (var proc in System.Diagnostics.Process.GetProcessesByName(Path.GetFileNameWithoutExtension(self)))
+    {
+        using (proc)
+        {
+            try
+            {
+                if (proc.Id != Environment.ProcessId && string.Equals(proc.MainModule?.FileName, self, StringComparison.Ordinal))
+                    Nexus.Service.Lifecycle.FactoryReset.WaitForProcessExit(proc.Id, TimeSpan.FromSeconds(30));
+            }
+            catch
+            {
+                // Exited, or not inspectable: nothing to wait for.
+            }
+        }
+    }
+}
 
 static void OpenExistingServiceWindow(int servicePort)
 {
