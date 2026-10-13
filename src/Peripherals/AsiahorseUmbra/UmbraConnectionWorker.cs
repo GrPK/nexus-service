@@ -7,6 +7,7 @@ using Nexus.Service.Devices;
 using Nexus.Service.Devices.Detection;
 using Nexus.Service.Lighting;
 using Nexus.Service.Peripherals.Hid;
+using Nexus.Service.Persistence;
 using Nexus.Service.Platform;
 
 namespace Nexus.Service.Peripherals.AsiahorseUmbra;
@@ -27,8 +28,11 @@ public sealed class UmbraConnectionWorker : BackgroundService
     private readonly AsiahorseUmbraCoolingProvider _cooling;
     private readonly DeviceControlGate _gate;
     private readonly HardwarePresence _presence;
+    private readonly IConfigStore _store;
+    // Released on a control change for this handler so a release stops the stream at once, not on the next poll.
+    private readonly SemaphoreSlim _gateChanged = new(0);
 
-    public UmbraConnectionWorker(IHidEnumerator hid, UmbraHub hub, AsiahorseUmbraLightingDeviceProvider lighting, AsiahorseUmbraCoolingProvider cooling, DeviceControlGate gate, HardwarePresence presence)
+    public UmbraConnectionWorker(IHidEnumerator hid, UmbraHub hub, AsiahorseUmbraLightingDeviceProvider lighting, AsiahorseUmbraCoolingProvider cooling, DeviceControlGate gate, HardwarePresence presence, IConfigStore store)
     {
         _hid = hid;
         _hub = hub;
@@ -36,6 +40,14 @@ public sealed class UmbraConnectionWorker : BackgroundService
         _cooling = cooling;
         _gate = gate;
         _presence = presence;
+        _store = store;
+        _gate.Changed += (handler, _) =>
+        {
+            if (string.Equals(handler, HandlerId, StringComparison.OrdinalIgnoreCase))
+            {
+                _gateChanged.Release();
+            }
+        };
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -59,6 +71,7 @@ public sealed class UmbraConnectionWorker : BackgroundService
 
                 _hub.Attach(device);
                 var started = false;
+                var reachable = true;
                 try
                 {
                     if (_hub.Connect())
@@ -67,7 +80,7 @@ public sealed class UmbraConnectionWorker : BackgroundService
                         ServiceLog.Info("[asiahorse-umbra] connected");
                         _cooling.OnConnected();
                         _lighting.OnHubStateUpdated();
-                        await PollAsync(stoppingToken).ConfigureAwait(false);
+                        reachable = await PollAsync(stoppingToken).ConfigureAwait(false);
                     }
                     else
                     {
@@ -76,7 +89,14 @@ public sealed class UmbraConnectionWorker : BackgroundService
                 }
                 finally
                 {
-                    _hub.Detach();
+                    if (started && reachable && !_hub.IsRestarting)
+                    {
+                        HandBack();
+                    }
+                    else
+                    {
+                        _hub.Detach();
+                    }
                     if (started)
                     {
                         ServiceLog.Info("[asiahorse-umbra] disconnected");
@@ -96,9 +116,14 @@ public sealed class UmbraConnectionWorker : BackgroundService
         }
     }
 
-    private async Task PollAsync(CancellationToken ct)
+    // True when the loop ends with the device still answering (control released or the service stopping).
+    private async Task<bool> PollAsync(CancellationToken ct)
     {
         var failures = 0;
+        while (_gateChanged.CurrentCount > 0)
+        {
+            _gateChanged.Wait(0);
+        }
         while (!ct.IsCancellationRequested && _gate.IsEnabled(HandlerId))
         {
             if (_hub.PollInfo())
@@ -111,10 +136,41 @@ public sealed class UmbraConnectionWorker : BackgroundService
                 failures++;
                 if (failures >= MaxConsecutiveFailures || _hub.IsRestarting)
                 {
-                    return;
+                    return false;
                 }
             }
-            await Task.Delay(_hub.IsRestarting ? RestartPollMs : InfoPollMs, ct).ConfigureAwait(false);
+            await _gateChanged.WaitAsync(_hub.IsRestarting ? RestartPollMs : InfoPollMs, ct).ConfigureAwait(false);
+        }
+        return true;
+    }
+
+    // Leaves the controller playing a firmware effect: the stored device effect when Nexus was streaming.
+    private void HandBack()
+    {
+        try
+        {
+            var settings = _store.Load();
+            var ls = settings.Devices.AsiahorseUmbra;
+            var plan = UmbraLightingPlan.SourceOf(ls) == UmbraLightingPlan.SourceNexus
+                ? new AsiahorseUmbraSettings
+                {
+                    Source = UmbraLightingPlan.SourceFirmware,
+                    LightOn = ls.LightOn,
+                    Group = ls.Group,
+                    Sync = ls.Sync,
+                    Merge = ls.Merge,
+                    Async = ls.Async,
+                    FanSyncMb = ls.FanSyncMb,
+                }
+                : ls;
+            var frames = UmbraLightingPlan.Build(plan, _hub.Snapshot.Ports, MasterBrightness.Effective(settings.Lighting));
+            _hub.ReleaseWithHandBack(frames);
+            ServiceLog.Info("[asiahorse-umbra] released to the firmware effect");
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Error($"[asiahorse-umbra] hand-back failed: {ex.Message}");
+            _hub.Detach();
         }
     }
 

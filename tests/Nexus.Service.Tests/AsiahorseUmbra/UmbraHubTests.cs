@@ -48,6 +48,24 @@ public class UmbraHubTests
     }
 
     [Fact]
+    public void ReleaseWithHandBack_writes_the_frames_then_drops_the_device()
+    {
+        var (hub, fake) = Connected();
+        using (hub)
+        {
+            fake.Writes.Clear();
+            var effect = UmbraProtocol.EncodeSyncEffect(new UmbraEffectBlock(1, 3, 1, 153, new byte[12]));
+
+            hub.ReleaseWithHandBack(new[] { UmbraProtocol.EncodeAuthority(true), effect });
+
+            Assert.Equal(new byte[] { 0xFD, 0x03 }, fake.Writes.Select(w => w[4]).ToArray());
+            Assert.False(hub.IsConnected);
+            Assert.False(hub.SendFrame(effect));
+            Assert.Equal(2, fake.Writes.Count);
+        }
+    }
+
+    [Fact]
     public void Connect_fails_when_the_device_does_not_answer()
     {
         var hub = new UmbraHub();
