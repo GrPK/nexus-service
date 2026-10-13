@@ -55,6 +55,26 @@ public class UmbraLightingFrameWriterTests
     }
 
     [Fact]
+    public void Nothing_streams_until_the_engine_has_a_frame_for_every_port()
+    {
+        var writer = Writer();
+        _engine.UpdateDevices(System.Array.Empty<DeviceFrame>());
+
+        writer.Tick();
+
+        Assert.DoesNotContain(_fake.Writes, IsStream);
+
+        _engine.UpdateDevices(new[] { _frame });
+        for (var i = 0; i < 6; i++)
+        {
+            Set(_frame, i, 0x10, 0x20, 0x30);
+        }
+        writer.Tick();
+
+        Assert.Equal(new byte[] { 0x10, 0x20, 0x30 }, _fake.Writes.Single(IsStream)[3..6]);
+    }
+
+    [Fact]
     public void An_unchanged_frame_is_not_resent_within_the_keepalive_window()
     {
         var writer = Writer();

@@ -160,8 +160,14 @@ public sealed class AsiahorseUmbraLightingFrameWriter : IHostedService, IDisposa
                 continue;
             }
             var id = AsiahorseUmbraLightingDeviceProvider.PortId(p);
+            var frame = NollieLightingFrameWriter.FindFrame(devices, id);
+            // The engine adds a reconnected port's frame a tick later; streaming before then flashes the fans black.
+            if (frame is null)
+            {
+                return;
+            }
             var mul = NollieLightingFrameWriter.ComputeBrightnessMul(id, disabled, uncontrolled, prefs, master, out var adjust);
-            NollieLightingFrameWriter.FillSlice(_buffer, offset, count, NollieLightingFrameWriter.FindFrame(devices, id), mul, adjust, false, 0, 0);
+            NollieLightingFrameWriter.FillSlice(_buffer, offset, count, frame, mul, adjust, false, 0, 0);
             offset += count;
         }
 
