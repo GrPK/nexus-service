@@ -1757,6 +1757,7 @@ public static class NexusServiceCollectionExtensions
         Nexus.Service.Peripherals.BulkPanels.BulkPanelHub hub,
         Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver driver)
     {
+        services.AddSingleton(driver);
         services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveMedia>();
         services.AddSingleton(sp =>
         {

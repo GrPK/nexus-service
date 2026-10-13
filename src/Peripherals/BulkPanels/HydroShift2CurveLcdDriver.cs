@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Peripherals.JpegPanels;
 using Nexus.Service.Peripherals.PixelFormats;
@@ -22,10 +23,14 @@ public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver
     /// <summary>The glass takes frames at ~7 MB/s whatever their content (measured), so frame size sets the frame rate.</summary>
     private const int JpegQuality = 70;
 
+    /// <summary>A booting display raises its own screen seconds in (measured), over any handshake sent before it.</summary>
+    private const long BootSettleMs = 12_000;
+
     /// <summary>Larger than one 512-byte reply, so the zero-length packet that ends it completes the same read.</summary>
     private readonly byte[] _reply = new byte[1024];
 
     private readonly Stopwatch _clock = new();
+    private readonly Func<long> _now;
     private uint _lastTimestamp;
     private BgraJpegEncoder? _jpeg;
     private byte[] _portrait = Array.Empty<byte>();
@@ -49,6 +54,26 @@ public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver
     private volatile bool _videoOwnsGlass;
     private volatile bool _retired;
     private bool _sessionUp;
+    private long _settledAt;
+    private int _resumed;
+
+    public HydroShift2CurveLcdDriver(Func<long>? now = null)
+    {
+        _now = now ?? (() => Environment.TickCount64);
+    }
+
+    /// <summary>A display that lost power in sleep reboots to its own screen behind a pipe that stays open.</summary>
+    public void OnSystemResumed()
+    {
+        Volatile.Write(ref _settledAt, _now() + BootSettleMs);
+        Volatile.Write(ref _resumed, 1);
+        ServiceLog.Info($"[{HandlerId}] resumed; handshake again once the display settles");
+    }
+
+    /// <summary>A resume is waiting on its handshake; the player holds off video until it runs.</summary>
+    public bool ResumePending => Volatile.Read(ref _resumed) == 1;
+
+    public bool GeometryStale => ResumePending && !VideoOwnsGlass && _now() >= Volatile.Read(ref _settledAt);
 
     /// <summary>Set at shutdown once the glass is let go: no reconnect may take it back.</summary>
     public void Retire() => _retired = true;
@@ -69,11 +94,12 @@ public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver
 
     public (int Width, int Height)? Connect(IBulkUsbPipe pipe, IHidDevice? hid)
     {
-        _sessionUp = false;
-        if (_retired)
+        // A refused renegotiate leaves the live session up, so the detach that follows still reboots.
+        if (_retired || _now() < Volatile.Read(ref _settledAt))
         {
             return null;
         }
+        _sessionUp = false;
         _clock.Restart();
         _lastTimestamp = 0;
 
@@ -99,6 +125,11 @@ public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver
         _jpeg?.Dispose();
         _jpeg = new BgraJpegEncoder(HydroShift2CurveProtocol.Height, HydroShift2CurveProtocol.Width, JpegQuality);
         _portrait = new byte[HydroShift2CurveProtocol.Width * HydroShift2CurveProtocol.Height * 4];
+        if (Interlocked.Exchange(ref _resumed, 0) == 1)
+        {
+            // The streamed panel only sends a backlight that changed, and the boot reset it.
+            SetBacklight(pipe, Brightness);
+        }
         ServiceLog.Info($"[{HandlerId}] firmware {Firmware ?? "unknown"}");
         _sessionUp = true;
         return (HydroShift2CurveProtocol.Width, HydroShift2CurveProtocol.Height);
@@ -177,7 +208,7 @@ public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver
     /// </summary>
     public void Disconnect(IBulkUsbPipe pipe, IHidDevice? hid)
     {
-        if (_retired && !_sessionUp)
+        if (!_sessionUp && (_retired || _now() < Volatile.Read(ref _settledAt)))
         {
             return;
         }
@@ -187,6 +218,7 @@ public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver
         {
             pipe.Write(HydroShift2Protocol.EncodeCommand(
                 HydroShift2CurveProtocol.CommandReboot, ReadOnlySpan<byte>.Empty, NextTimestamp()));
+            Volatile.Write(ref _settledAt, _now() + BootSettleMs);
         }
         _sessionUp = false;
         _jpeg?.Dispose();
