@@ -2109,6 +2109,8 @@ public class Slv3HubTests
         rx.Dead = false;
         discovery.TxPresent = true;
         discovery.RxPresent = true;
+        net.TxWedged = false;
+        net.TxMute = true;
         for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
         Assert.Equal(0, ResetFrames(rx));
         Assert.False(hub.EnsureConnected());
@@ -2118,7 +2120,7 @@ public class Slv3HubTests
     [Fact]
     public void A_tx_that_never_answers_on_connect_is_reset_through_the_rx_across_attempts()
     {
-        var net = new FakeSlv3Network { TxWedged = true };
+        var net = new FakeSlv3Network { TxMute = true };
         var rx = new FakeRxTransport(net);
         var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx) { ConfirmNewChains = false };
 
@@ -2134,18 +2136,159 @@ public class Slv3HubTests
     [Fact]
     public void A_connect_that_reads_the_master_mac_clears_the_tx_failure_streak()
     {
-        var net = new FakeSlv3Network { TxWedged = true };
+        var net = new FakeSlv3Network { TxMute = true };
         var rx = new FakeRxTransport(net);
         var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx) { ConfirmNewChains = false };
 
         for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
-        net.TxWedged = false;
+        net.TxMute = false;
         Assert.True(hub.EnsureConnected());
         hub.Disconnect();
 
-        net.TxWedged = true;
+        net.TxMute = true;
         for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
         Assert.Equal(0, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_tx_whose_every_connect_write_fails_is_reset_on_the_first_attempt()
+    {
+        var net = new FakeSlv3Network { TxWedged = true };
+        var rx = new FakeRxTransport(net);
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx) { ConfirmNewChains = false };
+
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+
+        Assert.True(hub.EnsureConnected());
+        Assert.Equal(Slv3LinkStatus.Ok, hub.State.LinkStatus);
+    }
+
+    [Fact]
+    public void A_tx_still_hung_after_its_first_reset_waits_for_the_full_streak()
+    {
+        var clock = new ManualClock();
+        var net = new FakeSlv3Network { TxWedged = true };
+        var rx = new FakeRxTransport(net);
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx, clock.NowMs) { ConfirmNewChains = false };
+
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+        net.TxWedged = true;
+
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            clock.AdvanceMs(10_000);
+            Assert.False(hub.EnsureConnected());
+        }
+        Assert.Equal(1, ResetFrames(rx));
+        clock.AdvanceMs(10_000);
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(2, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_re_enumerating_tx_whose_writes_fail_hard_waits_for_the_full_streak()
+    {
+        var net = new FakeSlv3Network { TxWedged = true };
+        var rx = new FakeRxTransport(net);
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) { Dead = true } : rx) { ConfirmNewChains = false };
+
+        for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
+        Assert.Equal(0, ResetFrames(rx));
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_tx_reset_the_rx_could_not_send_keeps_the_first_attempt_reset_available()
+    {
+        var clock = new ManualClock();
+        var net = new FakeSlv3Network { TxWedged = true };
+        var rx = new FakeRxTransport(net) { Dead = true };
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx, clock.NowMs) { ConfirmNewChains = false };
+
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(0, ResetFrames(rx));
+
+        rx.Dead = false;
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(0, ResetFrames(rx));
+        clock.AdvanceMs(10_000);
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_module_replugged_while_disconnected_gets_the_first_attempt_reset_again()
+    {
+        var clock = new ManualClock();
+        var net = new FakeSlv3Network { TxMute = true };
+        var rx = new FakeRxTransport(net);
+        var discovery = new ToggleDiscovery();
+        var hub = new Slv3Hub(discovery, port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx, clock.NowMs) { ConfirmNewChains = false };
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            clock.AdvanceMs(10_000);
+            Assert.False(hub.EnsureConnected());
+        }
+        Assert.Equal(1, ResetFrames(rx));
+
+        net.TxWedged = true;
+        clock.AdvanceMs(10_000);
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+
+        discovery.TxPresent = false;
+        discovery.RxPresent = false;
+        Assert.False(hub.EnsureConnected());
+        clock.AdvanceMs(5_000);
+        Assert.False(hub.EnsureConnected());
+        discovery.TxPresent = true;
+        discovery.RxPresent = true;
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+
+        discovery.TxPresent = false;
+        discovery.RxPresent = false;
+        Assert.False(hub.EnsureConnected());
+        clock.AdvanceMs(10_000);
+        Assert.False(hub.EnsureConnected());
+        discovery.TxPresent = true;
+        discovery.RxPresent = true;
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(2, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void An_absence_seen_before_connecting_does_not_shorten_the_live_links_grace()
+    {
+        var clock = new ManualClock();
+        var net = new FakeSlv3Network();
+        var rx = new FakeRxTransport(net);
+        var txs = new List<FakeTxTransport>();
+        var discovery = new ToggleDiscovery { TxPresent = false, RxPresent = false };
+        var hub = new Slv3Hub(discovery, port =>
+        {
+            if (port.Role != Slv3DongleRole.Tx) return rx;
+            var tx = new FakeTxTransport(net);
+            txs.Add(tx);
+            return tx;
+        }, clock.NowMs) { ConfirmNewChains = false };
+
+        Assert.False(hub.EnsureConnected());
+        clock.AdvanceMs(20_000);
+        discovery.TxPresent = true;
+        discovery.RxPresent = true;
+        Assert.True(hub.EnsureConnected());
+
+        txs[0].Dead = true;
+        rx.Dead = true;
+        discovery.TxPresent = false;
+        discovery.RxPresent = false;
+        Assert.True(hub.PollTick());
+        Assert.True(hub.IsConnected);
     }
 
     [Fact]
@@ -3137,6 +3280,8 @@ public class Slv3HubTests
         // A hung TX: every write on any of its handles times out while the handle
         // stays open. The RX's UsbResetAnother restarts it.
         public bool TxWedged { get; set; }
+        // A TX that takes writes and never replies; the RX's reset restarts it too.
+        public bool TxMute { get; set; }
     }
 
     // Models the TX dongle: records every USB frame sent, and applies an
@@ -3237,6 +3382,10 @@ public class Slv3HubTests
 
         public byte[] RfRead(int expectedLen)
         {
+            if (_net.TxMute)
+            {
+                return Array.Empty<byte>();
+            }
             var reply = new byte[64];
             reply[0] = Slv3Protocol.UsbGetMac;
             if (_lastGetMacChannel == MasterChannel)
@@ -3289,6 +3438,7 @@ public class Slv3HubTests
             if (copy.Length >= 1 && copy[0] == Slv3Protocol.UsbResetAnother)
             {
                 _net.TxWedged = false;
+                _net.TxMute = false;
             }
             return true;
         }

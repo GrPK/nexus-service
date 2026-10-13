@@ -326,8 +326,27 @@ public sealed class Slv3Hub : IDisposable
                 State.LinkStatus = txPort is null && rxPort is null ? Slv3LinkStatus.None
                     : txPort is null ? Slv3LinkStatus.TxMissing
                     : Slv3LinkStatus.RxMissing;
+                // A reset via the RX re-enumerates only the TX, so only a module
+                // with neither half listed for LinkAbsentDisconnectMs was
+                // unplugged and starts a fresh streak.
+                var nowMs = _nowMs();
+                if (txPort is not null || rxPort is not null)
+                {
+                    _bothAbsentSinceMs = 0;
+                }
+                else if (_bothAbsentSinceMs == 0)
+                {
+                    _bothAbsentSinceMs = nowMs;
+                }
+                else if (nowMs - _bothAbsentSinceMs >= LinkAbsentDisconnectMs)
+                {
+                    _txFails = 0;
+                    _txRecoveries = 0;
+                    _nextTxRecoveryMs = 0;
+                }
                 return false;
             }
+            _bothAbsentSinceMs = 0;
 
             try
             {
@@ -344,13 +363,25 @@ public sealed class Slv3Hub : IDisposable
                 return false;
             }
 
-            if (!MasterInitLocked())
+            if (!MasterInitLocked(out var anyWritten))
             {
                 State.LinkStatus = _probesSinceLastMac >= Slv3Protocol.ChannelScanOrder().Length
                     ? Slv3LinkStatus.NoResponse
                     : Slv3LinkStatus.Unknown;
-                ServiceLog.Warn("[lianli-wireless] GetMac failed on connect");
-                NoteTxFailureLocked(_nowMs());
+                ServiceLog.Warn($"[lianli-wireless] GetMac failed on connect{(anyWritten ? "" : " (every write failed)")}");
+                // A TX parked on another channel still takes writes, and a hard write
+                // error closes the handle of a TX that is re-enumerating, so writes
+                // that all timed out on a handle still open are a hung TX: the first
+                // reset of a streak goes out now instead of after TxFailsBeforeReset
+                // attempts.
+                if (!anyWritten && _tx is { IsOpen: true } && _txRecoveries == 0)
+                {
+                    ResetTxViaRxLocked(_nowMs(), "every GetMac write on connect failed");
+                }
+                else
+                {
+                    NoteTxFailureLocked(_nowMs());
+                }
                 DisconnectLocked();
                 return false;
             }
@@ -511,24 +542,39 @@ public sealed class Slv3Hub : IDisposable
     // L-Connect ResetTx: UsbResetAnother on the RX handle restarts the TX.
     private void NoteTxFailureLocked(long nowMs)
     {
-        if (++_txFails < TxFailsBeforeReset || nowMs < _nextTxRecoveryMs)
+        if (++_txFails >= TxFailsBeforeReset)
+        {
+            ResetTxViaRxLocked(nowMs, $"{TxFailsBeforeReset} consecutive TX failures");
+        }
+    }
+
+    private void ResetTxViaRxLocked(long nowMs, string reason)
+    {
+        if (nowMs < _nextTxRecoveryMs)
         {
             return;
         }
         _txFails = 0;
+        // An unsent reset still waits out the backoff but is not counted, so the
+        // first-attempt reset stays available and "answered after" counts only
+        // resets that went out.
+        if (_rx is not { IsOpen: true } || !_rx.RfSend(Slv3Protocol.BuildResetAnother()))
+        {
+            _nextTxRecoveryMs = nowMs + RecoveryBackoffFor(_txRecoveries + 1);
+            ServiceLog.Warn($"[lianli-wireless] {reason}, but the TX reset could not be written to the RX");
+            return;
+        }
         _txRecoveries++;
         _nextTxRecoveryMs = nowMs + RecoveryBackoffFor(_txRecoveries);
-        if (_rx is { IsOpen: true } && _rx.RfSend(Slv3Protocol.BuildResetAnother()))
-        {
-            ServiceLog.Warn($"[lianli-wireless] {TxFailsBeforeReset} consecutive TX failures, resetting TX via RX ({_txRecoveries})");
-        }
+        ServiceLog.Warn($"[lianli-wireless] {reason}, resetting TX via RX ({_txRecoveries})");
     }
 
     private static long RecoveryBackoffFor(int recoveries) =>
         Math.Min(RecoveryBackoffMs << Math.Min(recoveries - 1, 4), RecoveryBackoffMaxMs);
 
-    private bool MasterInitLocked()
+    private bool MasterInitLocked(out bool anyWritten)
     {
+        anyWritten = false;
         if (_tx is null)
         {
             return false;
@@ -542,11 +588,12 @@ public sealed class Slv3Hub : IDisposable
         // covering all 39 channels across a few attempts without starving the
         // routes and writer that share the lock.
         _probesSinceLastMac++;
-        if (TryGetMacOnChannelLocked(_channel))
+        if (TryGetMacOnChannelLocked(_channel, out var probe))
         {
             _probesSinceLastMac = 0;
             return true;
         }
+        anyWritten = probe != TxProbe.WriteFailed;
         const int ScanProbesPerAttempt = 8;
         var order = Slv3Protocol.ChannelScanOrder();
         for (var probes = 0; probes < ScanProbesPerAttempt && probes < order.Length; _channelScanCursor++)
@@ -558,7 +605,7 @@ public sealed class Slv3Hub : IDisposable
             }
             probes++;
             _probesSinceLastMac++;
-            if (TryGetMacOnChannelLocked(channel))
+            if (TryGetMacOnChannelLocked(channel, out probe))
             {
                 ServiceLog.Info($"[lianli-wireless] master found on channel {channel} (scanned from {_channel})");
                 _channel = channel;
@@ -566,6 +613,7 @@ public sealed class Slv3Hub : IDisposable
                 _probesSinceLastMac = 0;
                 return true;
             }
+            anyWritten |= probe != TxProbe.WriteFailed;
         }
         return false;
     }
@@ -597,6 +645,10 @@ public sealed class Slv3Hub : IDisposable
         if (Slv3Protocol.MacIsZero(mac))
         {
             return false;
+        }
+        if (_txRecoveries > 0)
+        {
+            ServiceLog.Info($"[lianli-wireless] TX answered after {_txRecoveries} reset(s) via RX");
         }
         _txFails = 0;
         _txRecoveries = 0;
