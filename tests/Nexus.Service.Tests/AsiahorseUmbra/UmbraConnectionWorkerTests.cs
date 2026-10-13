@@ -95,7 +95,7 @@ public class UmbraConnectionWorkerTests
         await _worker.StartAsync(CancellationToken.None);
         try
         {
-            // The worker is parked in its five second retry wait; the control change must wake it.
+            // The worker is parked in its retry wait; the control change must wake it.
             _gate.SetEnabled(UmbraConnectionWorker.HandlerId, true);
 
             var deadline = DateTime.UtcNow.AddSeconds(3);
@@ -109,6 +109,7 @@ public class UmbraConnectionWorkerTests
         finally
         {
             await _worker.StopAsync(CancellationToken.None);
+            _hub.Dispose();
         }
     }
 

@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Nexus.Service.Lighting;
 using Nexus.Service.Lighting.Engine;
@@ -194,5 +195,32 @@ public class UmbraLightingFrameWriterTests
         writer.Tick();
 
         Assert.Equal(UmbraProtocol.EncodeAuthority(true), _fake.Writes[0]);
+    }
+
+    [Fact]
+    public void A_port_without_an_engine_frame_streams_black_without_freezing_the_others()
+    {
+        _fake.Ports[0][0] = 2;
+        var writer = Writer();
+        Set(_frame, 0, 9, 0, 0);
+        _hub.RefreshPorts();
+
+        writer.Tick();
+
+        var stream = _fake.Writes.Single(IsStream);
+        Assert.Equal(new byte[] { 0, 0, 0, 0, 0, 0 }, stream[3..9]);
+        Assert.Equal(9, stream[3 + 2 * 3]);
+    }
+
+    [Fact]
+    public void Nothing_streams_while_the_engine_has_no_port_frame()
+    {
+        var writer = Writer();
+        _engine.UpdateDevices(Array.Empty<DeviceFrame>());
+        _fake.Writes.Clear();
+
+        writer.Tick();
+
+        Assert.DoesNotContain(_fake.Writes, IsStream);
     }
 }

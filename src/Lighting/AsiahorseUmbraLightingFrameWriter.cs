@@ -152,6 +152,7 @@ public sealed class AsiahorseUmbraLightingFrameWriter : IHostedService, IDisposa
         }
 
         var offset = 0;
+        var anyFrame = false;
         for (var p = 0; p < ports.Length; p++)
         {
             var count = ports[p].LedCount;
@@ -161,14 +162,19 @@ public sealed class AsiahorseUmbraLightingFrameWriter : IHostedService, IDisposa
             }
             var id = AsiahorseUmbraLightingDeviceProvider.PortId(p);
             var frame = NollieLightingFrameWriter.FindFrame(devices, id);
-            // The engine adds a reconnected port's frame a tick later; streaming before then flashes the fans black.
-            if (frame is null)
+            // A port the engine has no frame for yet streams black for its own slice only.
+            if (frame is not null)
             {
-                return;
+                anyFrame = true;
+                var mul = NollieLightingFrameWriter.ComputeBrightnessMul(id, disabled, uncontrolled, prefs, master, out var adjust);
+                NollieLightingFrameWriter.FillSlice(_buffer, offset, count, frame, mul, adjust, false, 0, 0);
             }
-            var mul = NollieLightingFrameWriter.ComputeBrightnessMul(id, disabled, uncontrolled, prefs, master, out var adjust);
-            NollieLightingFrameWriter.FillSlice(_buffer, offset, count, frame, mul, adjust, false, 0, 0);
             offset += count;
+        }
+        // Before the engine has any port frame (just reconnected) a send would flash every fan black.
+        if (!anyFrame)
+        {
+            return;
         }
 
         var changed = !_buffer.AsSpan().SequenceEqual(_lastSent);

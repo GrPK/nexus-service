@@ -256,9 +256,9 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
     public IReadOnlyList<DeviceFrame> BuildFrames(int startingIndex)
     {
         var settings = _store.Load();
+        // The cache survives a disconnect so a reconnect reuses frames that already hold rendered colors.
         if (!PublishesZones(settings))
         {
-            _frameCache.Clear();
             return Array.Empty<DeviceFrame>();
         }
         var layouts = settings.Lighting.DeviceLayouts;

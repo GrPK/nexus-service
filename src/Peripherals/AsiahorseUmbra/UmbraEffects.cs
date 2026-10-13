@@ -151,7 +151,8 @@ public static class UmbraEffects
     public static byte ScaleBrightness(int level, float master)
     {
         var cap = (int)Math.Round(Math.Clamp(master, 0f, 1f) * 255f);
-        var quantized = cap >= LevelStep ? cap / LevelStep * LevelStep : BrightnessFloor;
+        var nearest = (int)Math.Round(cap / (double)LevelStep) * LevelStep;
+        var quantized = nearest >= LevelStep ? nearest : BrightnessFloor;
         return (byte)Math.Min((int)BrightnessByte(level), quantized);
     }
 

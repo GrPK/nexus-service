@@ -77,6 +77,21 @@ public class UmbraProviderTests
     }
 
     [Fact]
+    public void A_reconnect_reuses_the_frames_that_already_hold_rendered_colors()
+    {
+        Connect((0, 8));
+        var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
+        var before = Assert.Single(provider.BuildFrames(0));
+
+        _hub.Detach();
+        Assert.Empty(provider.BuildFrames(0));
+        _hub.Attach(new UmbraDeviceFake { Ports = { [0] = new[] { 8, 0, 1, 0, 0 } } });
+        Assert.True(_hub.Connect());
+
+        Assert.Same(before, Assert.Single(provider.BuildFrames(0)));
+    }
+
+    [Fact]
     public void A_port_resized_to_zero_gets_a_fresh_frame_when_it_returns()
     {
         Connect((0, 8), (1, 8));

@@ -178,9 +178,11 @@ public class UmbraLightingPlanTests
     [Theory]
     [InlineData(3, 1f, 153)]
     [InlineData(5, 1f, 255)]
-    [InlineData(5, 0.5f, 102)]
+    [InlineData(5, 0.5f, 153)]
+    [InlineData(5, 0.998f, 255)]
     [InlineData(1, 1f, 51)]
-    [InlineData(3, 0.1f, 50)]
+    [InlineData(3, 0.1f, 51)]
+    [InlineData(3, 0.05f, 50)]
     public void MasterBrightness_caps_the_firmware_level_and_never_drops_below_the_vendor_minimum(int level, float master, int expected)
     {
         Assert.Equal(expected, UmbraEffects.ScaleBrightness(level, master));

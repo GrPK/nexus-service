@@ -94,6 +94,7 @@ public sealed class UmbraHub : IDisposable
             {
                 return false;
             }
+            _rejectedModel = -1;
             _snapshot = new UmbraSnapshot(info.DeviceId, info.Firmware, info.BootMemory, info.SelfCheck, config.Ports, config.BrightnessCap, -1);
             _isConnected = true;
             _isRestarting = false;
@@ -257,17 +258,14 @@ public sealed class UmbraHub : IDisposable
             _reconnect = waiter;
             _isRestarting = true;
         }
-        try
+        // The restarting state outlives a cancelled caller: it ends on reconnect or when the timeout expires.
+        var expiry = waiter.Task.WaitAsync(timeout);
+        _ = expiry.ContinueWith(t =>
         {
-            await waiter.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
-            return UmbraRestartResult.Reconnected;
-        }
-        catch (TimeoutException)
-        {
-            return UmbraRestartResult.TimedOut;
-        }
-        finally
-        {
+            if (!t.IsFaulted)
+            {
+                return;
+            }
             lock (_lock)
             {
                 if (ReferenceEquals(_reconnect, waiter))
@@ -276,6 +274,15 @@ public sealed class UmbraHub : IDisposable
                     _isRestarting = false;
                 }
             }
+        }, TaskScheduler.Default);
+        try
+        {
+            await expiry.WaitAsync(ct).ConfigureAwait(false);
+            return UmbraRestartResult.Reconnected;
+        }
+        catch (TimeoutException)
+        {
+            return UmbraRestartResult.TimedOut;
         }
     }
 

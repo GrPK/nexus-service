@@ -217,19 +217,59 @@ public class UmbraHubTests
     }
 
     [Fact]
-    public async Task A_cancelled_restart_clears_the_restarting_state()
+    public async Task A_cancelled_restart_keeps_the_restarting_state_until_the_device_returns()
     {
         var (hub, _) = Connected();
         using (hub)
         {
             using var cts = new CancellationTokenSource();
-            var restart = hub.RestartAsync(TimeSpan.FromSeconds(5), cts.Token);
+            var restart = hub.RestartAsync(TimeSpan.FromSeconds(30), cts.Token);
             cts.Cancel();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => restart);
+            Assert.True(hub.IsRestarting);
+
+            hub.Detach();
+            hub.Attach(new UmbraDeviceFake());
+            Assert.True(hub.Connect());
+            Assert.False(hub.IsRestarting);
+        }
+    }
+
+    [Fact]
+    public async Task A_cancelled_restart_still_expires_when_the_device_never_returns()
+    {
+        var (hub, _) = Connected();
+        using (hub)
+        {
+            using var cts = new CancellationTokenSource();
+            var restart = hub.RestartAsync(TimeSpan.FromMilliseconds(100), cts.Token);
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => restart);
+
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            while (hub.IsRestarting && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10);
+            }
 
             Assert.False(hub.IsRestarting);
         }
+    }
+
+    [Fact]
+    public void Connect_refuses_a_bad_model_after_an_earlier_good_connect()
+    {
+        using var hub = new UmbraHub();
+        hub.Attach(new UmbraDeviceFake { ModelCode = 10 });
+        Assert.False(hub.Connect());
+        hub.Detach();
+        hub.Attach(new UmbraDeviceFake());
+        Assert.True(hub.Connect());
+        hub.Detach();
+        hub.Attach(new UmbraDeviceFake { ModelCode = 10 });
+
+        Assert.False(hub.Connect());
     }
 
     [Fact]
