@@ -29,7 +29,7 @@ runtime data directory).
 
 Fan curves, pump speed, and AIO control. The curve engine, calibration runner,
 and safety limits live in `Cooling/`; each hub or cooler family contributes an
-`ICoolingProvider` (Corsair LINK, Galahad II, Kraken, Lian Li, Q-series
+`ICoolingProvider` (Asiahorse Umbra, Corsair LINK, Galahad II, Kraken, Lian Li, Q-series
 coolers, SL wireless, SmartHub, NP50, MiniHub, plus the OS-level Windows, macOS,
 Linux hwmon, liquidctl and NVIDIA providers). `QSeries/` holds the transport to
 Q-series screens.
@@ -80,7 +80,10 @@ Q-series screens.
   iBUYPOWER AW5; Tryx; Nollie ARGB channel controllers (the 32-channel
   board's two Strimer connectors present as one port each, pre-wired with
   the Lian Li cable; what a board runs once Nexus lets go is set through
-  `/devices/nollie`, `Routes/NollieRoutes.cs`). The curated
+  `/devices/nollie`, `Routes/NollieRoutes.cs`); the Asiahorse Umbra V2 ARGB/PWM
+  controller (`Peripherals/AsiahorseUmbra/`, `Routes/AsiahorseUmbraRoutes.cs`),
+  whose LED zones and fan channel exist only in the modes that hand them to
+  Nexus. The curated
   supported-hardware catalogs sit behind `/peripherals/supported` and
   `/peripherals/all-supported`.
 - `Conflicts/` detects competing vendor software, tracks which app owns a

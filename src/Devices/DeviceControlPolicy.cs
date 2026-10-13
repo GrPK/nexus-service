@@ -36,6 +36,7 @@ public static class DeviceControlPolicy
         ["lianli-hydroshift2"] = "lian-li-l-connect",
         ["lianli-hydroshift2-curve"] = "lian-li-l-connect",
         ["lianli-galahad2-lcd"] = "lian-li-l-connect",
+        ["asiahorse-umbra"] = "asiahorse-umbra",
         ["corsair"] = "icue",
         ["corsair-link-lcd"] = "icue",
     };

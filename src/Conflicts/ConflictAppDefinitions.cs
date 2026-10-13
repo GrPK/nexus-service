@@ -426,6 +426,18 @@ public static class ConflictAppCatalog
             WindowsServiceNames = new[] { "LConnectServiceWatcher", "LConnectService" },
         },
 
+        // ── Asiahorse ──────────────────────────────────────────────────────
+        new()
+        {
+            // The vendor app holds the controller's HID handle and resets a device it does not know.
+            Id = "asiahorse-umbra",
+            DefaultWhitelisted = true,
+            Vendors = new[] { "Asiahorse" },
+            DisplayName = "AsiaHorse UMBRA",
+            Category = "lighting",
+            ProcessNames = new[] { "Sync_light" },
+        },
+
         // ── Tryx ───────────────────────────────────────────────────────────
         new()
         {
