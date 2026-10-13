@@ -54,8 +54,8 @@ internal static class UmbraLightingPlan
                         continue;
                     }
                     s.Async.TryGetValue(p.ToString(CultureInfo.InvariantCulture), out var state);
-                    var (info, values) = Current(UmbraEffects.GroupSync, state ?? new UmbraEffectGroupSettings());
-                    frames.Add(UmbraProtocol.EncodeAsyncEffect(p, UmbraEffects.ToBlock(UmbraEffects.GroupSync, info, values, master)));
+                    var (info, values) = Current(UmbraEffects.GroupAsync, state ?? new UmbraEffectGroupSettings());
+                    frames.Add(UmbraProtocol.EncodeAsyncEffect(p, UmbraEffects.ToBlock(UmbraEffects.GroupAsync, info, values, master)));
                 }
                 break;
             }

@@ -81,17 +81,17 @@ public static class UmbraEffects
     public static bool AllowedIn(string group, UmbraEffectInfo effect) =>
         group != GroupMerge || effect.InMerge;
 
-    // Vendor defaults per effect; every merge effect runs slower.
+    // Vendor defaults per effect; every merge effect runs at speed level 4.
     public static UmbraEffectValues Defaults(string group, UmbraEffectInfo effect)
     {
         var colors = new List<string>(DefaultColors);
-        if (effect.Key == "static")
+        if (effect.Key == "static" && group == GroupSync)
         {
             colors = new List<string> { DefaultColors[0], DefaultColors[0], DefaultColors[0], DefaultColors[0] };
         }
         return new UmbraEffectValues
         {
-            Speed = group == GroupMerge ? 2 : 3,
+            Speed = group == GroupMerge ? 4 : 3,
             Brightness = effect.Key == "gradientRainbow" ? 5 : 3,
             Direction = effect.Key == "fadeOut" ? DirectionReverse : DirectionForward,
             Colors = colors,
@@ -158,8 +158,8 @@ public static class UmbraEffects
         var colors = new byte[ColorSlots * 3];
         for (var i = 0; i < ColorSlots; i++)
         {
-            // Static plays color 1 in every slot.
-            var src = effect.Key == "static" ? values.Colors[0] : values.Colors[i];
+            // Sync Static plays color 1 in every slot; the vendor app sends async Static colors as stored.
+            var src = effect.Key == "static" && group == GroupSync ? values.Colors[0] : values.Colors[i];
             TryParseColor(src, out colors[i * 3], out colors[i * 3 + 1], out colors[i * 3 + 2]);
         }
         var id = group == GroupMerge ? effect.MergeId : effect.SyncId;

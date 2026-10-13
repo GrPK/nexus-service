@@ -178,7 +178,7 @@ internal static class AsiahorseUmbraRouteLogic
         {
             return "async.port must be 0 to 9";
         }
-        return ValidatePatch(patch, UmbraEffects.GroupSync);
+        return ValidatePatch(patch, UmbraEffects.GroupAsync);
     }
 
     private static string? ValidatePatch(UmbraEffectPatch? patch, string group)
@@ -282,7 +282,7 @@ internal static class AsiahorseUmbraRouteLogic
         {
             var key = async.Port.Value.ToString(CultureInfo.InvariantCulture);
             next.Async.TryGetValue(key, out var existing);
-            next.Async[key] = ApplyPatch(existing ?? new UmbraEffectGroupSettings(), async, UmbraEffects.GroupSync);
+            next.Async[key] = ApplyPatch(existing ?? new UmbraEffectGroupSettings(), async, UmbraEffects.GroupAsync);
         }
         return next;
     }
@@ -348,7 +348,7 @@ internal static class AsiahorseUmbraRouteLogic
                 continue;
             }
             s.Async.TryGetValue(i.ToString(CultureInfo.InvariantCulture), out var state);
-            var (info, values) = UmbraLightingPlan.Current(UmbraEffects.GroupSync, state ?? new UmbraEffectGroupSettings());
+            var (info, values) = UmbraLightingPlan.Current(UmbraEffects.GroupAsync, state ?? new UmbraEffectGroupSettings());
             async.Add(new UmbraAsyncEffectDto
             {
                 Port = i,

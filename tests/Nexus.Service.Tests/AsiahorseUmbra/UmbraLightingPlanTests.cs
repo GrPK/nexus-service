@@ -75,8 +75,8 @@ public class UmbraLightingPlanTests
 
         Assert.Equal(0xFE, frames[1][5]);
         Assert.Equal(0xFE, frames[1][6]);
-        // Merge runway is id 1, and merge effects default to speed 2.
-        Assert.Equal(new byte[] { 0x01, 0x04 }, frames[1][7..9]);
+        // Merge runway is id 1; merge effects default to speed level 4, wire byte 02 as the vendor app sends it.
+        Assert.Equal(new byte[] { 0x01, 0x02 }, frames[1][7..9]);
     }
 
     [Fact]
@@ -91,6 +91,21 @@ public class UmbraLightingPlanTests
         Assert.Equal(0, frames[1][6]);
         Assert.Equal(0xFD, frames[2][5]);
         Assert.Equal(2, frames[2][6]);
+    }
+
+    [Fact]
+    public void Async_static_sends_its_four_colors_unreplicated()
+    {
+        var s = new AsiahorseUmbraSettings { Source = "firmware", Group = "async" };
+        s.Async["0"] = new UmbraEffectGroupSettings { Effect = "static" };
+
+        var frames = UmbraLightingPlan.Build(s, Ports(6), 1f);
+
+        // Captured vendor frame for async Static: effect 0 in the segment slot, default colors as stored.
+        Assert.Equal(0x00, frames[1][13]);
+        Assert.Equal(
+            new byte[] { 0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00 },
+            frames[1][23..35]);
     }
 
     [Fact]
@@ -180,7 +195,7 @@ public class UmbraLightingPlanTests
 
         Assert.Equal(5, gradient.Brightness);
         Assert.Equal("reverse", fadeOut.Direction);
-        Assert.Equal(2, mergeTile.Speed);
+        Assert.Equal(4, mergeTile.Speed);
         Assert.All(staticFx.Colors, c => Assert.Equal("#ff0000", c));
         Assert.Equal(new[] { "#ff0000", "#00ff00", "#0000ff", "#ffff00" }, plain.Colors);
         Assert.Equal(3, plain.Speed);

@@ -231,14 +231,14 @@ public class UmbraRouteLogicTests
     }
 
     [Fact]
-    public void Merge_defaults_to_speed_two_until_edited()
+    public void Merge_defaults_to_speed_four_until_edited()
     {
         var next = AsiahorseUmbraRouteLogic.ApplyLighting(new AsiahorseUmbraSettings(), new UmbraLightingRequest
         {
             Merge = new UmbraEffectPatch { Effect = "tile" },
         });
 
-        Assert.Equal(2, next.Merge.Values["tile"].Speed);
+        Assert.Equal(4, next.Merge.Values["tile"].Speed);
     }
 
     // ── State ──
@@ -275,7 +275,7 @@ public class UmbraRouteLogicTests
         Assert.Equal(3, state.Lighting.Sync.Brightness);
         Assert.Equal("forward", state.Lighting.Sync.Direction);
         Assert.Equal(new[] { "#ff0000", "#00ff00", "#0000ff", "#ffff00" }, state.Lighting.Sync.Colors);
-        Assert.Equal(2, state.Lighting.Merge.Speed);
+        Assert.Equal(4, state.Lighting.Merge.Speed);
         var async = Assert.Single(state.Lighting.Async);
         Assert.Equal(9, async.Port);
         Assert.False(state.Fan.SyncMb);
