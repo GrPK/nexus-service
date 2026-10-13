@@ -92,8 +92,9 @@ public static class UmbraEffects
         return new UmbraEffectValues
         {
             Speed = group == GroupMerge ? 4 : 3,
-            Brightness = effect.Key == "gradientRainbow" ? 5 : 3,
-            Direction = effect.Key == "fadeOut" ? DirectionReverse : DirectionForward,
+            // Only the vendor's sync table brightens Gradient Rainbow and reverses Fade Out.
+            Brightness = effect.Key == "gradientRainbow" && group == GroupSync ? 5 : 3,
+            Direction = effect.Key == "fadeOut" && group == GroupSync ? DirectionReverse : DirectionForward,
             Colors = colors,
         };
     }

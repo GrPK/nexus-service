@@ -94,6 +94,17 @@ public class UmbraLightingPlanTests
     }
 
     [Fact]
+    public void Merge_and_async_keep_the_plain_defaults_for_fade_out_and_gradient()
+    {
+        // Captured: merge Fade Out and async Fade Out run forward; async Gradient Rainbow at brightness 153.
+        Assert.Equal("forward", UmbraEffects.Defaults("merge", UmbraEffects.Find("fadeOut")!).Direction);
+        Assert.Equal("forward", UmbraEffects.Defaults("async", UmbraEffects.Find("fadeOut")!).Direction);
+        Assert.Equal(3, UmbraEffects.Defaults("async", UmbraEffects.Find("gradientRainbow")!).Brightness);
+        Assert.Equal("reverse", UmbraEffects.Defaults("sync", UmbraEffects.Find("fadeOut")!).Direction);
+        Assert.Equal(5, UmbraEffects.Defaults("sync", UmbraEffects.Find("gradientRainbow")!).Brightness);
+    }
+
+    [Fact]
     public void Async_static_sends_its_four_colors_unreplicated()
     {
         var s = new AsiahorseUmbraSettings { Source = "firmware", Group = "async" };
