@@ -138,7 +138,7 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
             ParentDeviceId = DeviceId,
             ZoneIndex = 0,
             ZoneType = "linear",
-            ZoneResizable = true,
+            ZoneResizable = false,
             DeviceId = id,
             ZoneCustomizable = false,
         };
@@ -188,16 +188,8 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
         pref.Saturation = saturation;
     });
 
-    /// <summary>Writes the count to the device and publishes what it reports back; an unknown id is ignored.</summary>
-    public void SetZoneLedCount(string id, int count)
-    {
-        if (count < 0 || !TryParsePortId(id, out var port))
-        {
-            return;
-        }
-        _hub.WritePort(port, UmbraPortField.LedCount, Math.Min(count, UmbraProtocol.MaxLedCount));
-        OnHubStateUpdated();
-    }
+    // A count change restarts the controller, so it is set on the device page, not from a zone resize.
+    public void SetZoneLedCount(string id, int count) { }
 
     public void Identify(string id, int durationMs) { }
 
@@ -235,7 +227,7 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
             Name = rawName,
             LedCount = ledCount,
             FrameLedCount = ledCount,
-            Resizable = true,
+            Resizable = false,
             MaxLedCount = UmbraProtocol.MaxLedCount,
             ZoneType = "linear",
         });

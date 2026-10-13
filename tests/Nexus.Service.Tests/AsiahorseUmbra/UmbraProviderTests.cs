@@ -35,7 +35,7 @@ public class UmbraProviderTests
 
         Assert.Equal(new[] { "asiahorse-umbra:port:1", "asiahorse-umbra:port:5", "asiahorse-umbra:port:10" }, devices.Select(d => d.Id));
         Assert.Equal(new[] { 8, 12, 6 }, devices.Select(d => d.LedCount));
-        Assert.All(devices, d => Assert.True(d.ZoneResizable));
+        Assert.All(devices, d => Assert.False(d.ZoneResizable));
         Assert.All(devices, d => Assert.Equal("asiahorse-umbra", d.ParentDeviceId));
     }
 
@@ -98,15 +98,17 @@ public class UmbraProviderTests
         var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
         var before = provider.BuildFrames(0).Single(f => f.Id.EndsWith(":2"));
 
-        provider.SetZoneLedCount("asiahorse-umbra:port:2", 0);
+        _fake.Ports[1][0] = 0;
+        _hub.RefreshPorts();
         Assert.Single(provider.BuildFrames(0));
-        provider.SetZoneLedCount("asiahorse-umbra:port:2", 8);
+        _fake.Ports[1][0] = 8;
+        _hub.RefreshPorts();
 
         Assert.NotSame(before, provider.BuildFrames(0).Single(f => f.Id.EndsWith(":2")));
     }
 
     [Fact]
-    public void Structures_are_single_resizable_segments_that_cannot_be_partitioned()
+    public void Structures_are_single_fixed_segments_that_cannot_be_partitioned()
     {
         Connect((0, 8));
         var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
@@ -115,52 +117,22 @@ public class UmbraProviderTests
 
         Assert.False(structure.Partitionable);
         var segment = Assert.Single(structure.Segments);
-        Assert.True(segment.Resizable);
+        Assert.False(segment.Resizable);
         Assert.Equal(120, segment.MaxLedCount);
         Assert.Equal(8, segment.LedCount);
     }
 
     [Fact]
-    public void SetZoneLedCount_writes_the_device_and_rebuilds_the_zones()
+    public void SetZoneLedCount_writes_nothing_because_a_count_change_restarts_the_controller()
     {
         Connect((0, 8));
         var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
-        var changed = 0;
-        provider.DevicesChanged += () => changed++;
-        provider.OnHubStateUpdated();
-        changed = 0;
+        _fake.Writes.Clear();
 
         provider.SetZoneLedCount("asiahorse-umbra:port:1", 24);
 
-        Assert.Equal(24, _fake.Ports[0][0]);
-        Assert.Equal(24, Assert.Single(provider.GetAll().Devices).LedCount);
-        Assert.Equal(1, changed);
-    }
-
-    [Theory]
-    [InlineData("asiahorse-umbra:port:11", 5)]
-    [InlineData("asiahorse-umbra:port:0", 5)]
-    [InlineData("asiahorse-umbra:fan", 5)]
-    [InlineData("asiahorse-umbra:port:1", -1)]
-    public void SetZoneLedCount_ignores_an_unknown_id_or_a_negative_count(string id, int count)
-    {
-        Connect((0, 8));
-        var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
-
-        provider.SetZoneLedCount(id, count);
-
+        Assert.Empty(_fake.Writes);
         Assert.Equal(8, _fake.Ports[0][0]);
-    }
-
-    [Fact]
-    public void SetZoneLedCount_clamps_to_the_device_maximum()
-    {
-        Connect((0, 8));
-        var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
-
-        provider.SetZoneLedCount("asiahorse-umbra:port:1", 500);
-
-        Assert.Equal(120, _fake.Ports[0][0]);
     }
 
     [Fact]

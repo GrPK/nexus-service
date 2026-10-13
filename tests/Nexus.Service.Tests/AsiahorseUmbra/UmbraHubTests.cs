@@ -217,6 +217,72 @@ public class UmbraHubTests
     }
 
     [Fact]
+    public async Task Frames_given_to_RestartAsync_are_written_before_the_restart()
+    {
+        var (hub, fake) = Connected();
+        using (hub)
+        {
+            fake.Writes.Clear();
+
+            var restart = hub.RestartAsync(TimeSpan.FromSeconds(5), CancellationToken.None,
+                UmbraProtocol.EncodeSetPort(3, UmbraPortField.LedCount, 10));
+
+            Assert.Equal(new byte[] { 0x02, 0xFC }, fake.Writes.Select(w => w[4]).ToArray());
+            Assert.Equal(new byte[] { 3, 0, 10 }, fake.Writes[0][5..8]);
+            hub.Detach();
+            hub.Attach(new UmbraDeviceFake());
+            Assert.True(hub.Connect());
+            Assert.Equal(UmbraRestartResult.Reconnected, await restart);
+        }
+    }
+
+    [Fact]
+    public async Task A_restart_that_is_busy_writes_none_of_its_frames()
+    {
+        var (hub, fake) = Connected();
+        using (hub)
+        {
+            var first = hub.RestartAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+            fake.Writes.Clear();
+
+            var second = await hub.RestartAsync(TimeSpan.FromSeconds(5), CancellationToken.None,
+                UmbraProtocol.EncodeSetPort(3, UmbraPortField.LedCount, 10));
+
+            Assert.Equal(UmbraRestartResult.Busy, second);
+            Assert.Empty(fake.Writes);
+            hub.Detach();
+            hub.Attach(new UmbraDeviceFake());
+            Assert.True(hub.Connect());
+            await first;
+        }
+    }
+
+    [Fact]
+    public async Task Auto_detect_clears_every_manual_count_then_restarts()
+    {
+        var (hub, fake) = Connected();
+        using (hub)
+        {
+            fake.Writes.Clear();
+
+            var restart = hub.RestartAsync(TimeSpan.FromSeconds(5), CancellationToken.None,
+                Nexus.Service.Routes.AsiahorseUmbraRouteLogic.ClearManualCounts());
+
+            Assert.Equal(11, fake.Writes.Count);
+            for (var p = 0; p < 10; p++)
+            {
+                Assert.Equal(new byte[] { 0x02, (byte)p, 0x00, 0x00 }, fake.Writes[p][4..8]);
+            }
+            Assert.Equal(0xFC, fake.Writes[10][4]);
+            Assert.DoesNotContain(fake.Writes, w => w[4] is 0xFA or 0xF9 or 0xFF);
+            hub.Detach();
+            hub.Attach(new UmbraDeviceFake());
+            Assert.True(hub.Connect());
+            await restart;
+        }
+    }
+
+    [Fact]
     public async Task A_cancelled_restart_keeps_the_restarting_state_until_the_device_returns()
     {
         var (hub, _) = Connected();

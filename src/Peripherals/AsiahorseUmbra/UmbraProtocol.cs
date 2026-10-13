@@ -108,6 +108,7 @@ internal static class UmbraProtocol
 
     public static byte[] EncodePortConfigRequest() => Frame(CmdReadPorts, 0xFF);
 
+    // The LED-count write is deferred: it stores a manual count in flash, and the next boot uses it only when larger than the detected count; 0 clears it.
     public static byte[] EncodeSetPort(int port, UmbraPortField field, int value) =>
         Frame(CmdWritePort, (byte)port, (byte)field, (byte)value);
 

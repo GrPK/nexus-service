@@ -61,9 +61,9 @@ public static partial class DevicesRoutes
             return Changed(hub, store, cooling, lighting, mux);
         });
 
-        app.MapPut("/devices/asiahorse-umbra/ports/{index:int}", (
+        app.MapPut("/devices/asiahorse-umbra/ports/{index:int}", async (
             int index, UmbraPortRequest body, UmbraHub hub, IConfigStore store, AsiahorseUmbraCoolingProvider cooling,
-            AsiahorseUmbraLightingDeviceProvider lighting, MultiplexHub mux) =>
+            AsiahorseUmbraLightingDeviceProvider lighting, MultiplexHub mux, CancellationToken ct) =>
         {
             if (UmbraUnavailable(hub) is { } unavailable)
             {
@@ -76,10 +76,20 @@ public static partial class DevicesRoutes
             }
             foreach (var (field, value) in AsiahorseUmbraRouteLogic.PortWrites(body))
             {
-                if (!hub.WritePort(index, field, value))
+                if (field != UmbraPortField.LedCount && !hub.WritePort(index, field, value))
                 {
                     return UmbraError("the device did not accept the port setting", StatusCodes.Status500InternalServerError);
                 }
+            }
+            // The count only takes effect at the next boot, so it restarts the controller and waits for the reconnect.
+            if (body.LedCount is not null)
+            {
+                var restart = await hub.RestartAsync(UmbraReconnectTimeout, ct, UmbraProtocol.EncodeSetPort(index, UmbraPortField.LedCount, body.LedCount.Value)).ConfigureAwait(false);
+                if (RestartFailure(restart) is { } failure)
+                {
+                    return failure;
+                }
+                hub.RefreshPorts();
             }
             return Changed(hub, store, cooling, lighting, mux);
         });
@@ -92,18 +102,11 @@ public static partial class DevicesRoutes
             {
                 return unavailable;
             }
-            var restart = await hub.RestartAsync(UmbraReconnectTimeout, ct).ConfigureAwait(false);
-            if (restart == UmbraRestartResult.Busy)
+            // Clear every manual count first: the next boot would otherwise re-apply a stale larger one.
+            var restart = await hub.RestartAsync(UmbraReconnectTimeout, ct, AsiahorseUmbraRouteLogic.ClearManualCounts()).ConfigureAwait(false);
+            if (RestartFailure(restart) is { } failure)
             {
-                return UmbraError("an auto detect is already running", StatusCodes.Status409Conflict);
-            }
-            if (restart == UmbraRestartResult.NoDevice)
-            {
-                return UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict);
-            }
-            if (restart == UmbraRestartResult.TimedOut)
-            {
-                return UmbraError("the device did not reconnect", StatusCodes.Status504GatewayTimeout);
+                return failure;
             }
             hub.RefreshPorts();
             return Changed(hub, store, cooling, lighting, mux);
@@ -141,6 +144,14 @@ public static partial class DevicesRoutes
             return Changed(hub, store, cooling, lighting, mux);
         });
     }
+
+    private static IResult? RestartFailure(UmbraRestartResult restart) => restart switch
+    {
+        UmbraRestartResult.Busy => UmbraError("a controller restart is already running", StatusCodes.Status409Conflict),
+        UmbraRestartResult.NoDevice => UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict),
+        UmbraRestartResult.TimedOut => UmbraError("the device did not reconnect", StatusCodes.Status504GatewayTimeout),
+        _ => null,
+    };
 
     private static IResult? UmbraUnavailable(UmbraHub hub)
     {
@@ -265,6 +276,16 @@ internal static class AsiahorseUmbraRouteLogic
             return "order must be 1 to 10";
         }
         return null;
+    }
+
+    internal static byte[][] ClearManualCounts()
+    {
+        var frames = new byte[UmbraProtocol.PortCount][];
+        for (var p = 0; p < frames.Length; p++)
+        {
+            frames[p] = UmbraProtocol.EncodeSetPort(p, UmbraPortField.LedCount, 0);
+        }
+        return frames;
     }
 
     internal static IEnumerable<(UmbraPortField Field, int Value)> PortWrites(UmbraPortRequest body)

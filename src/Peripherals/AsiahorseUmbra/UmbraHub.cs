@@ -242,7 +242,7 @@ public sealed class UmbraHub : IDisposable
     }
 
     // Sends the restart (the vendor "Auto Detect LEDs") and completes when the re-enumerated device reconnects.
-    public async Task<UmbraRestartResult> RestartAsync(TimeSpan timeout, CancellationToken ct)
+    public async Task<UmbraRestartResult> RestartAsync(TimeSpan timeout, CancellationToken ct, params byte[][] before)
     {
         var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_lock)
@@ -251,7 +251,19 @@ public sealed class UmbraHub : IDisposable
             {
                 return UmbraRestartResult.Busy;
             }
-            if (_device is null || !_device.Write(UmbraProtocol.ToReport(UmbraProtocol.EncodeRestart())))
+            if (_device is null)
+            {
+                return UmbraRestartResult.NoDevice;
+            }
+            // Frames that must land before the restart, written under the same lock as the busy check.
+            foreach (var frame in before)
+            {
+                if (!_device.Write(UmbraProtocol.ToReport(frame)))
+                {
+                    return UmbraRestartResult.NoDevice;
+                }
+            }
+            if (!_device.Write(UmbraProtocol.ToReport(UmbraProtocol.EncodeRestart())))
             {
                 return UmbraRestartResult.NoDevice;
             }
