@@ -8,7 +8,7 @@ using Xunit;
 
 namespace Nexus.Service.Tests;
 
-/// <summary>Pins the handlers that opt out of having a page, the default the rest inherit, and the hop that carries the answer onto the wire.</summary>
+/// <summary>Pins the handlers that opt out of having a page, the panel-backed ones that keep it while disconnected, the default the rest inherit, and the hop onto the wire.</summary>
 public class DeviceHasPageTests
 {
     [Fact]
@@ -21,6 +21,22 @@ public class DeviceHasPageTests
     public void Aw5_HasNoPage()
     {
         Assert.False(((IDeviceHandler)new Aw5Handler()).HasPage);
+    }
+
+    [Fact]
+    public void BulkPanelCooler_HasAPage_EvenBeforeItsPanelConnects()
+    {
+        using var hub = new Nexus.Service.Peripherals.BulkPanels.BulkPanelHub(
+            new Nexus.Service.Peripherals.BulkPanels.HydroShift2LcdDriver());
+        Assert.True(((IDeviceHandler)new BulkPanelHandler(hub)).HasPage);
+    }
+
+    [Fact]
+    public void JpegPanelCooler_HasAPage_EvenBeforeItsPanelConnects()
+    {
+        using var hub = new Nexus.Service.Peripherals.JpegPanels.JpegPanelHub(
+            Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.HydroShiftLcd);
+        Assert.True(((IDeviceHandler)new JpegPanelHandler(hub)).HasPage);
     }
 
     [Fact]

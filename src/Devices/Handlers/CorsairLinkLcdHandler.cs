@@ -10,8 +10,8 @@ namespace Nexus.Service.Devices.Handlers;
 /// glass has its own Nexus Control switch: claiming the hub for fans and RGB must not
 /// silently replace whatever the vendor app is showing on someone's pump.
 ///
-/// <see cref="HasPage"/> is false: the panel record is this device's page, the way a
-/// streamed Kraken panel claims its cooler row.
+/// It keeps a page while unconnected, so its row stays listed; once connected the panel record
+/// carries that page, the way a streamed Kraken panel claims its cooler row.
 /// </summary>
 public sealed class CorsairLinkLcdHandler : IDeviceHandler
 {
@@ -27,7 +27,6 @@ public sealed class CorsairLinkLcdHandler : IDeviceHandler
     public string Id => CorsairLinkLcd.DeviceId;
     public string Name => "Corsair " + _hubs.LcdProductName;
     public string Category => "cooler";
-    public bool HasPage => false;
 
     public IReadOnlyList<UsbId> Identifiers { get; } = new[]
     {
