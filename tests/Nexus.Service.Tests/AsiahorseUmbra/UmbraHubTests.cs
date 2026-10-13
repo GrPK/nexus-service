@@ -178,7 +178,7 @@ public class UmbraHubTests
             hub.Attach(replacement);
             Assert.True(hub.Connect());
 
-            Assert.True(await restart);
+            Assert.Equal(UmbraRestartResult.Reconnected, await restart);
             Assert.False(hub.IsRestarting);
             Assert.True(hub.ConnectEpoch > epoch);
             Assert.Equal(12, hub.Snapshot.Ports[0].LedCount);
@@ -191,16 +191,64 @@ public class UmbraHubTests
         var (hub, _) = Connected();
         using (hub)
         {
-            Assert.False(await hub.RestartAsync(TimeSpan.FromMilliseconds(50), CancellationToken.None));
+            Assert.Equal(UmbraRestartResult.TimedOut, await hub.RestartAsync(TimeSpan.FromMilliseconds(50), CancellationToken.None));
             Assert.False(hub.IsRestarting);
         }
+    }
+
+    [Fact]
+    public async Task A_second_restart_while_one_is_pending_is_busy()
+    {
+        var (hub, fake) = Connected();
+        using (hub)
+        {
+            var first = hub.RestartAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+            fake.Writes.Clear();
+
+            Assert.Equal(UmbraRestartResult.Busy, await hub.RestartAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+
+            Assert.Empty(fake.Writes);
+            Assert.True(hub.IsRestarting);
+            hub.Detach();
+            hub.Attach(new UmbraDeviceFake());
+            Assert.True(hub.Connect());
+            Assert.Equal(UmbraRestartResult.Reconnected, await first);
+        }
+    }
+
+    [Fact]
+    public async Task A_cancelled_restart_clears_the_restarting_state()
+    {
+        var (hub, _) = Connected();
+        using (hub)
+        {
+            using var cts = new CancellationTokenSource();
+            var restart = hub.RestartAsync(TimeSpan.FromSeconds(5), cts.Token);
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => restart);
+
+            Assert.False(hub.IsRestarting);
+        }
+    }
+
+    [Fact]
+    public void Connect_refuses_a_model_code_other_than_the_umbra_v2()
+    {
+        var fake = new UmbraDeviceFake { ModelCode = 10 };
+        using var hub = new UmbraHub();
+        hub.Attach(fake);
+
+        Assert.False(hub.Connect());
+        Assert.False(hub.IsConnected);
+        Assert.Equal(0, hub.ConnectEpoch);
     }
 
     [Fact]
     public async Task RestartAsync_fails_without_a_connection()
     {
         using var hub = new UmbraHub();
-        Assert.False(await hub.RestartAsync(TimeSpan.FromMilliseconds(50), CancellationToken.None));
+        Assert.Equal(UmbraRestartResult.NoDevice, await hub.RestartAsync(TimeSpan.FromMilliseconds(50), CancellationToken.None));
     }
 
     [Fact]

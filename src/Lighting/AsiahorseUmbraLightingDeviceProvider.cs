@@ -295,6 +295,15 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
             _frameCache[id] = frame;
             frames.Add(frame);
         }
+        if (_frameCache.Count > frames.Count)
+        {
+            var live = new HashSet<string>(frames.Count, StringComparer.Ordinal);
+            foreach (var f in frames) live.Add(f.Id);
+            foreach (var k in new List<string>(_frameCache.Keys))
+            {
+                if (!live.Contains(k)) _frameCache.Remove(k);
+            }
+        }
         return frames;
     }
 

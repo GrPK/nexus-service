@@ -27,9 +27,9 @@ public static partial class DevicesRoutes
             UmbraLightingRequest body, UmbraHub hub, IConfigStore store, AsiahorseUmbraCoolingProvider cooling,
             AsiahorseUmbraLightingDeviceProvider lighting, MultiplexHub mux) =>
         {
-            if (!hub.IsConnected)
+            if (UmbraUnavailable(hub) is { } unavailable)
             {
-                return UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict);
+                return unavailable;
             }
             var error = AsiahorseUmbraRouteLogic.ValidateLighting(body);
             if (error is not null)
@@ -44,9 +44,9 @@ public static partial class DevicesRoutes
             UmbraFanRequest body, UmbraHub hub, IConfigStore store, AsiahorseUmbraCoolingProvider cooling,
             AsiahorseUmbraLightingDeviceProvider lighting, MultiplexHub mux) =>
         {
-            if (!hub.IsConnected)
+            if (UmbraUnavailable(hub) is { } unavailable)
             {
-                return UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict);
+                return unavailable;
             }
             if (body.SyncMb is null)
             {
@@ -65,9 +65,9 @@ public static partial class DevicesRoutes
             int index, UmbraPortRequest body, UmbraHub hub, IConfigStore store, AsiahorseUmbraCoolingProvider cooling,
             AsiahorseUmbraLightingDeviceProvider lighting, MultiplexHub mux) =>
         {
-            if (!hub.IsConnected)
+            if (UmbraUnavailable(hub) is { } unavailable)
             {
-                return UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict);
+                return unavailable;
             }
             var error = AsiahorseUmbraRouteLogic.ValidatePort(index, body);
             if (error is not null)
@@ -88,11 +88,20 @@ public static partial class DevicesRoutes
             UmbraHub hub, IConfigStore store, AsiahorseUmbraCoolingProvider cooling,
             AsiahorseUmbraLightingDeviceProvider lighting, MultiplexHub mux, CancellationToken ct) =>
         {
-            if (!hub.IsConnected)
+            if (UmbraUnavailable(hub) is { } unavailable)
+            {
+                return unavailable;
+            }
+            var restart = await hub.RestartAsync(UmbraReconnectTimeout, ct).ConfigureAwait(false);
+            if (restart == UmbraRestartResult.Busy)
+            {
+                return UmbraError("an auto detect is already running", StatusCodes.Status409Conflict);
+            }
+            if (restart == UmbraRestartResult.NoDevice)
             {
                 return UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict);
             }
-            if (!await hub.RestartAsync(UmbraReconnectTimeout, ct).ConfigureAwait(false))
+            if (restart == UmbraRestartResult.TimedOut)
             {
                 return UmbraError("the device did not reconnect", StatusCodes.Status504GatewayTimeout);
             }
@@ -104,9 +113,9 @@ public static partial class DevicesRoutes
             UmbraBootRequest body, UmbraHub hub, IConfigStore store, AsiahorseUmbraCoolingProvider cooling,
             AsiahorseUmbraLightingDeviceProvider lighting, MultiplexHub mux) =>
         {
-            if (!hub.IsConnected)
+            if (UmbraUnavailable(hub) is { } unavailable)
             {
-                return UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict);
+                return unavailable;
             }
             if (body.Mode is not null && body.Mode is not ("memory" or "fixed"))
             {
@@ -131,6 +140,15 @@ public static partial class DevicesRoutes
             }
             return Changed(hub, store, cooling, lighting, mux);
         });
+    }
+
+    private static IResult? UmbraUnavailable(UmbraHub hub)
+    {
+        if (hub.IsRestarting)
+        {
+            return UmbraError("Asiahorse Umbra is restarting", StatusCodes.Status409Conflict);
+        }
+        return hub.IsConnected ? null : UmbraError("Asiahorse Umbra is not connected", StatusCodes.Status409Conflict);
     }
 
     private static IResult UmbraError(string message, int status) =>
@@ -273,9 +291,9 @@ internal static class AsiahorseUmbraRouteLogic
             Source = body.Source ?? current.Source,
             LightOn = body.LightOn ?? current.LightOn,
             Group = body.Group ?? current.Group,
-            Sync = ApplyPatch(current.Sync, body.Sync, UmbraEffects.GroupSync),
-            Merge = ApplyPatch(current.Merge, body.Merge, UmbraEffects.GroupMerge),
-            Async = new Dictionary<string, UmbraEffectGroupSettings>(current.Async),
+            Sync = ApplyPatch(current.Sync ?? new UmbraEffectGroupSettings(), body.Sync, UmbraEffects.GroupSync),
+            Merge = ApplyPatch(current.Merge ?? new UmbraEffectGroupSettings(), body.Merge, UmbraEffects.GroupMerge),
+            Async = current.Async is null ? new Dictionary<string, UmbraEffectGroupSettings>() : new Dictionary<string, UmbraEffectGroupSettings>(current.Async),
             FanSyncMb = current.FanSyncMb,
         };
         if (body.Async is { Port: not null } async)
@@ -300,7 +318,7 @@ internal static class AsiahorseUmbraRouteLogic
         {
             info = UmbraEffects.Find("rainbow")!;
         }
-        var selected = new UmbraEffectGroupSettings { Effect = info.Key, Values = new Dictionary<string, UmbraEffectValues>(current.Values) };
+        var selected = new UmbraEffectGroupSettings { Effect = info.Key, Values = current.Values is null ? new Dictionary<string, UmbraEffectValues>() : new Dictionary<string, UmbraEffectValues>(current.Values) };
         var values = UmbraEffects.Resolve(group, selected, info);
         if (patch.Speed is not null)
         {
@@ -347,8 +365,9 @@ internal static class AsiahorseUmbraRouteLogic
             {
                 continue;
             }
-            s.Async.TryGetValue(i.ToString(CultureInfo.InvariantCulture), out var state);
-            var (info, values) = UmbraLightingPlan.Current(UmbraEffects.GroupAsync, state ?? new UmbraEffectGroupSettings());
+            UmbraEffectGroupSettings? state = null;
+            s.Async?.TryGetValue(i.ToString(CultureInfo.InvariantCulture), out state);
+            var (info, values) = UmbraLightingPlan.Current(UmbraEffects.GroupAsync, state);
             async.Add(new UmbraAsyncEffectDto
             {
                 Port = i,

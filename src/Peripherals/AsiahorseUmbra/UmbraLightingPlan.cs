@@ -53,7 +53,8 @@ internal static class UmbraLightingPlan
                     {
                         continue;
                     }
-                    s.Async.TryGetValue(p.ToString(CultureInfo.InvariantCulture), out var state);
+                    UmbraEffectGroupSettings? state = null;
+                    s.Async?.TryGetValue(p.ToString(CultureInfo.InvariantCulture), out state);
                     var (info, values) = Current(UmbraEffects.GroupAsync, state ?? new UmbraEffectGroupSettings());
                     frames.Add(UmbraProtocol.EncodeAsyncEffect(p, UmbraEffects.ToBlock(UmbraEffects.GroupAsync, info, values, master)));
                 }
@@ -70,8 +71,9 @@ internal static class UmbraLightingPlan
     }
 
     // The selected effect of a group, falling back to rainbow when the stored key is unknown or not allowed in the group.
-    public static (UmbraEffectInfo Info, UmbraEffectValues Values) Current(string group, UmbraEffectGroupSettings state)
+    public static (UmbraEffectInfo Info, UmbraEffectValues Values) Current(string group, UmbraEffectGroupSettings? state)
     {
+        state ??= new UmbraEffectGroupSettings();
         var info = UmbraEffects.Find(state.Effect);
         if (info is null || !UmbraEffects.AllowedIn(group, info))
         {

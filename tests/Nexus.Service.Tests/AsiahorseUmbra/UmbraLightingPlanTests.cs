@@ -178,12 +178,32 @@ public class UmbraLightingPlanTests
     [Theory]
     [InlineData(3, 1f, 153)]
     [InlineData(5, 1f, 255)]
-    [InlineData(5, 0.5f, 128)]
+    [InlineData(5, 0.5f, 102)]
     [InlineData(1, 1f, 51)]
     [InlineData(3, 0.1f, 50)]
     public void MasterBrightness_caps_the_firmware_level_and_never_drops_below_the_vendor_minimum(int level, float master, int expected)
     {
         Assert.Equal(expected, UmbraEffects.ScaleBrightness(level, master));
+    }
+
+    [Fact]
+    public void A_continuous_master_ramp_commits_once_per_firmware_level()
+    {
+        var s = new AsiahorseUmbraSettings { Source = "firmware" };
+        s.Sync.Values["rainbow"] = new UmbraEffectValues { Brightness = 5 };
+        int? last = null;
+        var commits = 0;
+        for (var i = 1000; i >= 1; i--)
+        {
+            var sig = UmbraLightingPlan.Signature(UmbraLightingPlan.Build(s, Ports(8), i / 1000f));
+            if (sig != last)
+            {
+                commits++;
+                last = sig;
+            }
+        }
+
+        Assert.True(commits <= 6, $"commits {commits}");
     }
 
     [Theory]
@@ -230,5 +250,34 @@ public class UmbraLightingPlanTests
 
         Assert.Equal(UmbraLightingPlan.Signature(a), UmbraLightingPlan.Signature(a));
         Assert.NotEqual(UmbraLightingPlan.Signature(a), UmbraLightingPlan.Signature(b));
+    }
+
+    [Fact]
+    public void Null_collections_from_hand_edited_settings_do_not_throw()
+    {
+        var s = new AsiahorseUmbraSettings { Source = "firmware", Sync = null!, Merge = null!, Async = null! };
+
+        var sync = UmbraLightingPlan.Build(s, Ports(8), 1f);
+        s.Group = "merge";
+        var merge = UmbraLightingPlan.Build(s, Ports(8), 1f);
+        s.Group = "async";
+        var async = UmbraLightingPlan.Build(s, Ports(8), 1f);
+
+        Assert.Equal(2, sync.Length);
+        Assert.Equal(2, merge.Length);
+        Assert.Equal(2, async.Length);
+    }
+
+    [Fact]
+    public void Null_values_and_colors_fall_back_to_the_vendor_defaults()
+    {
+        var s = new AsiahorseUmbraSettings { Source = "firmware" };
+        s.Sync.Values = null!;
+        var viaNullValues = UmbraLightingPlan.Build(s, Ports(8), 1f);
+        s.Sync.Values = new() { ["rainbow"] = new UmbraEffectValues { Colors = null! } };
+        var viaNullColors = UmbraLightingPlan.Build(s, Ports(8), 1f);
+
+        Assert.Equal(viaNullValues[1], viaNullColors[1]);
+        Assert.Equal(new byte[] { 0xFF, 0x00, 0x00 }, viaNullColors[1][11..14]);
     }
 }

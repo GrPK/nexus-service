@@ -77,6 +77,20 @@ public class UmbraProviderTests
     }
 
     [Fact]
+    public void A_port_resized_to_zero_gets_a_fresh_frame_when_it_returns()
+    {
+        Connect((0, 8), (1, 8));
+        var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
+        var before = provider.BuildFrames(0).Single(f => f.Id.EndsWith(":2"));
+
+        provider.SetZoneLedCount("asiahorse-umbra:port:2", 0);
+        Assert.Single(provider.BuildFrames(0));
+        provider.SetZoneLedCount("asiahorse-umbra:port:2", 8);
+
+        Assert.NotSame(before, provider.BuildFrames(0).Single(f => f.Id.EndsWith(":2")));
+    }
+
+    [Fact]
     public void Structures_are_single_resizable_segments_that_cannot_be_partitioned()
     {
         Connect((0, 8));

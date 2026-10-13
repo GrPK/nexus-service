@@ -10,7 +10,7 @@ using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Lighting;
 
-/// <summary>Commits the persisted lighting source to the Umbra and, while it is "nexus", streams the engine's LEDs on change and at least once a second.</summary>
+/// <summary>Commits the persisted lighting source to the Umbra and, while it is "nexus", streams the engine's LEDs.</summary>
 public sealed class AsiahorseUmbraLightingFrameWriter : IHostedService, IDisposable
 {
     private const int TickPeriodMs = 16;

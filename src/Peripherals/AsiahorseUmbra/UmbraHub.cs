@@ -2,14 +2,23 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Nexus.Service.Peripherals.Hid;
+using Nexus.Service.Platform;
 
 namespace Nexus.Service.Peripherals.AsiahorseUmbra;
+
+public enum UmbraRestartResult
+{
+    Reconnected,
+    Busy,
+    NoDevice,
+    TimedOut,
+}
 
 public sealed class UmbraHub : IDisposable
 {
     private const int ConnectReadTimeoutMs = 1000;
     private const int RequestReadTimeoutMs = 300;
-    // A request skips unrelated input reports (echoes of earlier writes) up to this many reads.
+    // A request skips late replies to earlier timed-out requests, up to this many reads.
     private const int MaxReplyReads = 8;
 
     private enum ReplyStatus
@@ -23,6 +32,7 @@ public sealed class UmbraHub : IDisposable
     private IHidDevice? _device;
     private bool _disposed;
     private TaskCompletionSource<bool>? _reconnect;
+    private int _rejectedModel = -1;
 
     private volatile bool _isConnected;
     private volatile bool _isRestarting;
@@ -64,6 +74,15 @@ public sealed class UmbraHub : IDisposable
             var info = UmbraProtocol.DecodeInfo(infoReply);
             if (info is null)
             {
+                return false;
+            }
+            if (info.ModelCode != UmbraProtocol.ModelCode)
+            {
+                if (_rejectedModel != info.ModelCode)
+                {
+                    _rejectedModel = info.ModelCode;
+                    ServiceLog.Warn($"[asiahorse-umbra] unsupported model code {info.ModelCode}, not connecting");
+                }
                 return false;
             }
             if (Request(UmbraProtocol.EncodePortConfigRequest(), UmbraProtocol.CmdReadPorts, ConnectReadTimeoutMs, out var portReply) != ReplyStatus.Ok)
@@ -222,33 +241,41 @@ public sealed class UmbraHub : IDisposable
     }
 
     // Sends the restart (the vendor "Auto Detect LEDs") and completes when the re-enumerated device reconnects.
-    public async Task<bool> RestartAsync(TimeSpan timeout, CancellationToken ct)
+    public async Task<UmbraRestartResult> RestartAsync(TimeSpan timeout, CancellationToken ct)
     {
         var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_lock)
         {
+            if (_isRestarting)
+            {
+                return UmbraRestartResult.Busy;
+            }
             if (_device is null || !_device.Write(UmbraProtocol.ToReport(UmbraProtocol.EncodeRestart())))
             {
-                return false;
+                return UmbraRestartResult.NoDevice;
             }
             _reconnect = waiter;
             _isRestarting = true;
         }
         try
         {
-            return await waiter.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
+            await waiter.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
+            return UmbraRestartResult.Reconnected;
         }
         catch (TimeoutException)
+        {
+            return UmbraRestartResult.TimedOut;
+        }
+        finally
         {
             lock (_lock)
             {
                 if (ReferenceEquals(_reconnect, waiter))
                 {
                     _reconnect = null;
+                    _isRestarting = false;
                 }
-                _isRestarting = false;
             }
-            return false;
         }
     }
 

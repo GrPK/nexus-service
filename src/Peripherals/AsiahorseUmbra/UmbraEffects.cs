@@ -81,7 +81,6 @@ public static class UmbraEffects
     public static bool AllowedIn(string group, UmbraEffectInfo effect) =>
         group != GroupMerge || effect.InMerge;
 
-    // Vendor defaults per effect; every merge effect runs at speed level 4.
     public static UmbraEffectValues Defaults(string group, UmbraEffectInfo effect)
     {
         var colors = new List<string>(DefaultColors);
@@ -111,15 +110,17 @@ public static class UmbraEffects
             && byte.TryParse(hex.AsSpan(5, 2), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out b);
     }
 
-    public static byte BrightnessByte(int level) => (byte)(Math.Clamp(level, BrightnessMin, BrightnessMax) * 51);
+    private const int LevelStep = 51;
+    private const int BrightnessFloor = 50;
 
-    // UI 0..100 % in 20 % steps maps to byte 6 (slowest) .. 1 (fastest).
+    public static byte BrightnessByte(int level) => (byte)(Math.Clamp(level, BrightnessMin, BrightnessMax) * LevelStep);
+
     public static byte SpeedByte(int speed) => (byte)(6 - Math.Clamp(speed, 0, SpeedMax));
 
     // The current values of a group's selected effect, or the vendor defaults when none are stored.
     public static UmbraEffectValues Resolve(string group, UmbraEffectGroupSettings state, UmbraEffectInfo effect)
     {
-        if (state.Values.TryGetValue(effect.Key, out var stored))
+        if (state.Values is not null && state.Values.TryGetValue(effect.Key, out var stored) && stored is not null)
         {
             return Normalized(stored, group, effect);
         }
@@ -133,7 +134,7 @@ public static class UmbraEffects
         var colors = new List<string>(ColorSlots);
         for (var i = 0; i < ColorSlots; i++)
         {
-            var c = i < v.Colors.Count ? v.Colors[i] : fallback.Colors[i];
+            var c = v.Colors is not null && i < v.Colors.Count ? v.Colors[i] : fallback.Colors[i];
             colors.Add(TryParseColor(c, out _, out _, out _) ? c.ToLowerInvariant() : fallback.Colors[i]);
         }
         return new UmbraEffectValues
@@ -147,11 +148,11 @@ public static class UmbraEffects
 
     private const int ColorSlots = UmbraProtocol.ColorSlots;
 
-    // Master brightness caps the firmware level the way the other first-party writers do; the vendor slider bottoms out at 50.
     public static byte ScaleBrightness(int level, float master)
     {
-        var capped = Math.Min((int)BrightnessByte(level), (int)Math.Round(Math.Clamp(master, 0f, 1f) * 255f));
-        return (byte)Math.Max(capped, 50);
+        var cap = (int)Math.Round(Math.Clamp(master, 0f, 1f) * 255f);
+        var quantized = cap >= LevelStep ? cap / LevelStep * LevelStep : BrightnessFloor;
+        return (byte)Math.Min((int)BrightnessByte(level), quantized);
     }
 
     internal static UmbraEffectBlock ToBlock(string group, UmbraEffectInfo effect, UmbraEffectValues values, float master)

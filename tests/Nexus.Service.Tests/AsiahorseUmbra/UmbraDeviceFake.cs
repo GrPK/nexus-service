@@ -23,6 +23,8 @@ internal sealed class UmbraDeviceFake : IHidDevice
     // Per port: led count, multiplier, direction, order, type.
     public int[][] Ports { get; } = new int[UmbraProtocol.PortCount][];
 
+    public int ModelCode { get; set; } = 5;
+
     public bool BootMemory { get; set; } = true;
     public bool SelfCheck { get; set; } = true;
 
@@ -42,11 +44,12 @@ internal sealed class UmbraDeviceFake : IHidDevice
     public int UsagePage => 0xFF00;
     public int Usage => 0x01;
 
-    public static byte[] InfoReply(bool bootMemory = true, bool selfCheck = true)
+    public static byte[] InfoReply(bool bootMemory = true, bool selfCheck = true, int modelCode = 5)
     {
         var r = new byte[64];
         var head = new byte[] { 0x52, 0x42, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0xCD, 0xAB, 0x2F, 0x96, 0x48, 0xBC, 0x44, 0xFE, 0x01, 0x00, 0x06, 0x00, 0x00, 0x00 };
         head.CopyTo(r, 0);
+        r[8] = (byte)modelCode;
         r[23] = bootMemory ? (byte)0xFF : (byte)0x01;
         r[24] = selfCheck ? (byte)0xFF : (byte)0x01;
         return r;
@@ -83,7 +86,7 @@ internal sealed class UmbraDeviceFake : IHidDevice
         switch (frame[4])
         {
             case UmbraProtocol.CmdInfo:
-                Enqueue(InfoReply(BootMemory, SelfCheck));
+                Enqueue(InfoReply(BootMemory, SelfCheck, ModelCode));
                 break;
             case UmbraProtocol.CmdReadPorts:
                 Enqueue(PortReply(Ports));

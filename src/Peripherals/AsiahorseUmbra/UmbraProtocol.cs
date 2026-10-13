@@ -11,6 +11,8 @@ internal static class UmbraProtocol
     public const int VendorId = 0x1A86;
     public const int ProductId = 0xFE04;
     public const int FrameLength = 64;
+    // The vendor app pairs this model code with the product id.
+    public const int ModelCode = 5;
     public const int PortCount = 10;
     public const int MaxLedCount = 120;
     public const int MaxOrder = 10;

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -58,14 +59,14 @@ public sealed class UmbraConnectionWorker : BackgroundService
             {
                 if (!_gate.IsEnabled(HandlerId) || !_presence.UsbPresent(UmbraProtocol.VendorId, UmbraProtocol.ProductId))
                 {
-                    await Task.Delay(_hub.IsRestarting ? RestartPollMs : ConnectPollMs, stoppingToken).ConfigureAwait(false);
+                    await WaitAsync(RetryMs(), stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
                 var device = FindAndOpen();
                 if (device is null)
                 {
-                    await Task.Delay(_hub.IsRestarting ? RestartPollMs : ConnectPollMs, stoppingToken).ConfigureAwait(false);
+                    await WaitAsync(RetryMs(), stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -84,7 +85,7 @@ public sealed class UmbraConnectionWorker : BackgroundService
                     }
                     else
                     {
-                        await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
+                        await WaitAsync(RetryMs(), stoppingToken).ConfigureAwait(false);
                     }
                 }
                 finally
@@ -111,10 +112,16 @@ public sealed class UmbraConnectionWorker : BackgroundService
             catch (Exception ex)
             {
                 ServiceLog.Error($"[asiahorse-umbra] worker error: {ex.Message}");
-                await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
+                await WaitAsync(ConnectPollMs, stoppingToken).ConfigureAwait(false);
             }
         }
     }
+
+    private int RetryMs() => _hub.IsRestarting ? RestartPollMs : ConnectPollMs;
+
+    // Wakes early on a control change so turning Nexus Control back on connects at once.
+    private async Task WaitAsync(int ms, CancellationToken ct) =>
+        await _gateChanged.WaitAsync(ms, ct).ConfigureAwait(false);
 
     // True when the loop ends with the device still answering (control released or the service stopping).
     private async Task<bool> PollAsync(CancellationToken ct)
@@ -145,7 +152,7 @@ public sealed class UmbraConnectionWorker : BackgroundService
     }
 
     // Leaves the controller playing a firmware effect: the stored device effect when Nexus was streaming.
-    private void HandBack()
+    internal void HandBack()
     {
         try
         {
@@ -163,8 +170,13 @@ public sealed class UmbraConnectionWorker : BackgroundService
                     FanSyncMb = ls.FanSyncMb,
                 }
                 : ls;
-            var frames = UmbraLightingPlan.Build(plan, _hub.Snapshot.Ports, MasterBrightness.Effective(settings.Lighting));
-            _hub.ReleaseWithHandBack(frames);
+            var frames = new List<byte[]>(UmbraLightingPlan.Build(plan, _hub.Snapshot.Ports, MasterBrightness.Effective(settings.Lighting)));
+            // Fans stop following the software duty and go back to the PWM input header.
+            if (!ls.FanSyncMb)
+            {
+                frames.Add(UmbraProtocol.EncodeFanSync(true));
+            }
+            _hub.ReleaseWithHandBack(frames.ToArray());
             ServiceLog.Info("[asiahorse-umbra] released to the firmware effect");
         }
         catch (Exception ex)
