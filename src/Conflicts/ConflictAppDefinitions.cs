@@ -431,7 +431,6 @@ public static class ConflictAppCatalog
         {
             // The vendor app holds the controller's HID handle and resets a device it does not know.
             Id = "asiahorse-umbra",
-            DefaultWhitelisted = true,
             Vendors = new[] { "Asiahorse" },
             DisplayName = "AsiaHorse UMBRA",
             Category = "lighting",

@@ -1958,6 +1958,196 @@ public class Slv3HubTests
         Assert.Single(hub.State.Fans);
     }
 
+    private static (Slv3Hub Hub, FakeSlv3Network Net, FakeRxTransport Rx, List<FakeTxTransport> Txs) CreateConnectedHubKeepingTxs()
+    {
+        var net = new FakeSlv3Network();
+        var rx = new FakeRxTransport(net);
+        var txs = new List<FakeTxTransport>();
+        var hub = new Slv3Hub(new FakeDiscovery(), port =>
+        {
+            if (port.Role != Slv3DongleRole.Tx) return rx;
+            var tx = new FakeTxTransport(net);
+            txs.Add(tx);
+            return tx;
+        }) { ConfirmNewChains = false };
+        Assert.True(hub.EnsureConnected());
+        net.Fans.Add(new SimulatedFan { Mac = FanMac });
+        Assert.True(hub.DriveTick());
+        return (hub, net, rx, txs);
+    }
+
+    [Fact]
+    public void A_tx_that_times_out_every_write_is_closed_after_five_missed_probes_then_reset_through_the_rx()
+    {
+        var (hub, net, rx, txs) = CreateConnectedHubKeepingTxs();
+
+        net.TxWedged = true;
+        for (var i = 0; i < 4; i++) Assert.True(hub.DriveTick());
+        Assert.Single(txs);
+        Assert.True(hub.DriveTick());
+
+        for (var i = 0; i < 4; i++) Assert.True(hub.PollTick());
+        Assert.Equal(5, txs.Count);
+        Assert.Equal(0, ResetFrames(rx));
+        Assert.True(hub.PollTick());
+        Assert.Equal(1, ResetFrames(rx));
+
+        Assert.True(hub.PollTick());
+        Assert.True(hub.IsConnected);
+        Assert.Equal(Slv3LinkStatus.Ok, hub.State.LinkStatus);
+        Assert.Single(hub.State.Fans);
+        Assert.True(hub.DriveTick());
+        Assert.Equal(7, txs.Count);
+    }
+
+    [Fact]
+    public void Missed_getmac_probes_short_of_five_in_a_row_keep_the_tx_handle()
+    {
+        var (hub, net, rx, txs) = CreateConnectedHubKeepingTxs();
+
+        net.TxWedged = true;
+        for (var i = 0; i < 4; i++) Assert.True(hub.DriveTick());
+        net.TxWedged = false;
+        Assert.True(hub.DriveTick());
+        net.TxWedged = true;
+        for (var i = 0; i < 4; i++) Assert.True(hub.DriveTick());
+
+        Assert.Single(txs);
+        Assert.Equal(0, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_tx_that_answers_without_the_master_mac_keeps_its_handle()
+    {
+        var (hub, _, rx, txs) = CreateConnectedHubKeepingTxs();
+
+        txs[0].MasterChannel = 99;
+        for (var i = 0; i < 10; i++) Assert.True(hub.DriveTick());
+
+        Assert.Single(txs);
+        Assert.Equal(0, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_savecfg_due_when_the_probe_closes_the_tx_goes_out_on_the_reopened_tx()
+    {
+        var clock = new ManualClock();
+        var net = new FakeSlv3Network();
+        var rx = new FakeRxTransport(net);
+        var txs = new List<FakeTxTransport>();
+        var hub = new Slv3Hub(new FakeDiscovery(), port =>
+        {
+            if (port.Role != Slv3DongleRole.Tx) return rx;
+            var tx = new FakeTxTransport(net);
+            txs.Add(tx);
+            return tx;
+        }, clock.NowMs) { ConfirmNewChains = false };
+        Assert.True(hub.EnsureConnected());
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1 });
+        Assert.True(hub.DriveTick());
+        Assert.True(hub.Unbind(Convert.ToHexString(FanMac)));
+        Assert.True(hub.DriveTick());
+
+        net.TxWedged = true;
+        for (var i = 0; i < 4; i++)
+        {
+            clock.AdvanceMs(1_000);
+            Assert.True(hub.DriveTick());
+        }
+        clock.AdvanceMs(6_500);
+        Assert.True(hub.DriveTick());
+        Assert.Single(txs);
+
+        net.TxWedged = false;
+        Assert.True(hub.PollTick());
+        Assert.True(hub.DriveTick());
+        Assert.Equal(2, txs.Count);
+        Assert.Single(SaveCfgFrames(txs[1]));
+    }
+
+    [Fact]
+    public void A_master_on_the_last_scanned_channel_is_found_before_any_tx_reset()
+    {
+        var net = new FakeSlv3Network();
+        var rx = new FakeRxTransport(net);
+        var order = Slv3Protocol.ChannelScanOrder();
+        var tx = new FakeTxTransport(net) { MasterChannel = order[^1] };
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? tx : rx) { ConfirmNewChains = false };
+
+        var attempts = 0;
+        while (!hub.EnsureConnected() && ++attempts < order.Length) { }
+
+        Assert.True(hub.IsConnected);
+        Assert.Equal(0, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_replug_starts_the_tx_failure_streak_over()
+    {
+        var clock = new ManualClock();
+        var net = new FakeSlv3Network();
+        var rx = new FakeRxTransport(net);
+        var discovery = new ToggleDiscovery();
+        var hub = new Slv3Hub(discovery, port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx, clock.NowMs) { ConfirmNewChains = false };
+        Assert.True(hub.EnsureConnected());
+        net.Fans.Add(new SimulatedFan { Mac = FanMac });
+        Assert.True(hub.DriveTick());
+
+        net.TxWedged = true;
+        for (var i = 0; i < 5; i++) Assert.True(hub.DriveTick());
+        rx.Dead = true;
+        discovery.TxPresent = false;
+        discovery.RxPresent = false;
+        Assert.True(hub.PollTick());
+        clock.AdvanceMs(9_000);
+        Assert.True(hub.PollTick());
+        clock.AdvanceMs(1_000);
+        Assert.False(hub.PollTick());
+        hub.Disconnect();
+        Assert.Equal(0, ResetFrames(rx));
+
+        rx.Dead = false;
+        discovery.TxPresent = true;
+        discovery.RxPresent = true;
+        for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
+        Assert.Equal(0, ResetFrames(rx));
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+    }
+
+    [Fact]
+    public void A_tx_that_never_answers_on_connect_is_reset_through_the_rx_across_attempts()
+    {
+        var net = new FakeSlv3Network { TxWedged = true };
+        var rx = new FakeRxTransport(net);
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx) { ConfirmNewChains = false };
+
+        for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
+        Assert.Equal(0, ResetFrames(rx));
+        Assert.False(hub.EnsureConnected());
+        Assert.Equal(1, ResetFrames(rx));
+
+        Assert.True(hub.EnsureConnected());
+        Assert.Equal(Slv3LinkStatus.Ok, hub.State.LinkStatus);
+    }
+
+    [Fact]
+    public void A_connect_that_reads_the_master_mac_clears_the_tx_failure_streak()
+    {
+        var net = new FakeSlv3Network { TxWedged = true };
+        var rx = new FakeRxTransport(net);
+        var hub = new Slv3Hub(new FakeDiscovery(), port => port.Role == Slv3DongleRole.Tx ? new FakeTxTransport(net) : rx) { ConfirmNewChains = false };
+
+        for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
+        net.TxWedged = false;
+        Assert.True(hub.EnsureConnected());
+        hub.Disconnect();
+
+        net.TxWedged = true;
+        for (var attempt = 0; attempt < 4; attempt++) Assert.False(hub.EnsureConnected());
+        Assert.Equal(0, ResetFrames(rx));
+    }
+
     [Fact]
     public void A_good_reply_between_failure_streaks_clears_the_reset_backoff()
     {
@@ -2944,6 +3134,9 @@ public class Slv3HubTests
         // Off = a chain that never echoes (drift / lost-command tests).
         public bool EchoPwm { get; set; } = true;
         public bool EchoCmdSeq { get; set; } = true;
+        // A hung TX: every write on any of its handles times out while the handle
+        // stays open. The RX's UsbResetAnother restarts it.
+        public bool TxWedged { get; set; }
     }
 
     // Models the TX dongle: records every USB frame sent, and applies an
@@ -2983,6 +3176,10 @@ public class Slv3HubTests
             var copy = frame.ToArray();
             SentFrames.Add(copy);
             OnSend?.Invoke(copy);
+            if (_net.TxWedged)
+            {
+                return false;
+            }
             if (FailSaveCfg && copy.Length >= 6 && copy[0] == Slv3Protocol.UsbSendRf && copy[5] == Slv3Protocol.RfSaveCfg)
             {
                 return false;
@@ -3088,6 +3285,10 @@ public class Slv3HubTests
             if (FailSend && copy.Length >= 1 && copy[0] == Slv3Protocol.UsbSendRf)
             {
                 return false;
+            }
+            if (copy.Length >= 1 && copy[0] == Slv3Protocol.UsbResetAnother)
+            {
+                _net.TxWedged = false;
             }
             return true;
         }
