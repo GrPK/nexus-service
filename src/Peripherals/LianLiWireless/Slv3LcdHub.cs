@@ -24,13 +24,29 @@ public sealed class Slv3LcdHub : IDisposable
 
     private readonly Nexus.Service.Lighting.LcdLockSleepSet? _lockSleep;
 
+    /// <summary>After a failed write drops a screen's connection, it is reopened no sooner than this.</summary>
+    private const long ReopenBackoffMs = 1000;
+
+    private readonly Func<long> _nowMs;
+    private readonly Dictionary<string, long> _reopenAfter = new(StringComparer.OrdinalIgnoreCase);
+    // Screens whose last write failed, so a run of failures logs once.
+    private readonly HashSet<string> _failing = new(StringComparer.OrdinalIgnoreCase);
+    // Last brightness and rotation asked of each screen, replayed onto a reopened handle: the
+    // content loop only re-applies them when the screen leaves discovery, not after a drop.
+    private readonly Dictionary<string, byte> _brightness = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, byte> _rotation = new(StringComparer.OrdinalIgnoreCase);
+    // Screens whose handle a failed write dropped; only their next open replays the above.
+    private readonly HashSet<string> _dropped = new(StringComparer.OrdinalIgnoreCase);
+
     public Slv3LcdHub(
         ISlv3LcdDiscovery discovery,
         Func<Slv3LcdPortInfo, ISlv3LcdTransport> transportFactory,
-        Nexus.Service.Lighting.LcdLockState? lockState = null)
+        Nexus.Service.Lighting.LcdLockState? lockState = null,
+        Func<long>? nowMs = null)
     {
         _discovery = discovery;
         _transportFactory = transportFactory;
+        _nowMs = nowMs ?? (() => Environment.TickCount64);
         if (lockState is not null)
         {
             _lockSleep = new Nexus.Service.Lighting.LcdLockSleepSet(lockState);
@@ -80,14 +96,9 @@ public sealed class Slv3LcdHub : IDisposable
 
     public bool PushImageToSerial(string serial, byte[] jpeg)
     {
-        var transport = Resolve(serial);
-        if (transport is null)
-        {
-            return false;
-        }
         try
         {
-            return transport.PushImage(jpeg);
+            return Write(serial, "push", transport => transport.PushImage(jpeg));
         }
         catch (ArgumentException ex)
         {
@@ -102,14 +113,94 @@ public sealed class Slv3LcdHub : IDisposable
 
     public bool SetBrightness(string serial, byte value)
     {
-        var transport = Resolve(serial);
-        return transport is not null && transport.SetBrightness(value);
+        lock (_lock)
+        {
+            _brightness[serial] = value;
+        }
+        return Write(serial, "brightness", transport => transport.SetBrightness(value));
     }
 
     public bool SetRotation(string serial, byte value)
     {
+        lock (_lock)
+        {
+            _rotation[serial] = value;
+        }
+        return Write(serial, "rotation", transport => transport.SetRotation(value));
+    }
+
+    /// <summary>Serials with an open connection, including any opened since the last published <see cref="Screens"/>.</summary>
+    internal IReadOnlyList<string> OpenSerials()
+    {
+        lock (_lock)
+        {
+            return new List<string>(_open.Keys);
+        }
+    }
+
+    /// <summary>Closes a screen's connection so its next use opens a fresh one.</summary>
+    internal void Forget(string serial, string reason)
+    {
+        ISlv3LcdTransport? transport;
+        lock (_lock)
+        {
+            _open.Remove(serial, out transport);
+            _reopenAfter.Remove(serial);
+            _failing.Remove(serial);
+            _dropped.Remove(serial);
+        }
+        if (transport is not null)
+        {
+            ServiceLog.Info($"[lianli-wireless-lcd] closed {serial} ({reason})");
+            transport.Dispose();
+        }
+    }
+
+    private bool Write(string serial, string what, Func<ISlv3LcdTransport, bool> write)
+    {
         var transport = Resolve(serial);
-        return transport is not null && transport.SetRotation(value);
+        if (transport is null)
+        {
+            return false;
+        }
+        if (write(transport))
+        {
+            lock (_lock)
+            {
+                _failing.Remove(serial);
+            }
+            return true;
+        }
+        Drop(serial, transport, what);
+        return false;
+    }
+
+    /// <summary>
+    /// A handle to an unplugged screen stays valid while every write fails, so a failed write
+    /// drops the connection and the next call reopens the screen once the backoff passes.
+    /// </summary>
+    private void Drop(string serial, ISlv3LcdTransport transport, string what)
+    {
+        bool dropped;
+        lock (_lock)
+        {
+            // Another thread already replaced or closed it: nothing of ours failed.
+            dropped = _open.TryGetValue(serial, out var current) && ReferenceEquals(current, transport) && _open.Remove(serial);
+            if (dropped)
+            {
+                _dropped.Add(serial);
+                _reopenAfter[serial] = _nowMs() + ReopenBackoffMs;
+                if (_failing.Add(serial))
+                {
+                    ServiceLog.Warn($"[lianli-wireless-lcd] {what} failed for {serial}; reopening");
+                }
+            }
+        }
+        // Outside the hub lock: Dispose waits out a write another thread has in flight.
+        if (dropped)
+        {
+            transport.Dispose();
+        }
     }
 
     /// <summary>Queries GetPosIndex(201) for the fan-position GroupIndex. False if the screen is unresolvable or does not ack.</summary>
@@ -131,6 +222,9 @@ public sealed class Slv3LcdHub : IDisposable
         {
             return null;
         }
+        ISlv3LcdTransport transport;
+        byte? replayBrightness = null;
+        byte? replayRotation = null;
         lock (_lock)
         {
             if (_open.TryGetValue(serial, out var existing))
@@ -143,25 +237,48 @@ public sealed class Slv3LcdHub : IDisposable
                 _open.Remove(serial);
             }
 
+            if (_reopenAfter.TryGetValue(serial, out var reopenAt) && _nowMs() < reopenAt)
+            {
+                return null;
+            }
             var port = FindPort(serial);
             if (port is null)
             {
+                // Discovery enumerates the bus, so a gone screen is not looked up again at frame rate.
+                _reopenAfter[serial] = _nowMs() + ReopenBackoffMs;
                 return null;
             }
 
             try
             {
-                var transport = _transportFactory(port);
-                _open[serial] = transport;
-                ServiceLog.Info($"[lianli-wireless-lcd] opened {serial}");
-                return transport;
+                transport = _transportFactory(port);
             }
             catch (Exception ex)
             {
+                // A screen still re-enumerating can be listed before it opens; retry on the backoff, not per frame.
+                _reopenAfter[serial] = _nowMs() + ReopenBackoffMs;
                 ServiceLog.Error($"[lianli-wireless-lcd] open failed for {serial}: {ex.GetType().Name}: {ex.Message}");
                 return null;
             }
+            _open[serial] = transport;
+            _reopenAfter.Remove(serial);
+            ServiceLog.Info($"[lianli-wireless-lcd] opened {serial}");
+            if (_dropped.Remove(serial))
+            {
+                replayBrightness = _brightness.TryGetValue(serial, out var brightness) ? brightness : null;
+                replayRotation = _rotation.TryGetValue(serial, out var rotation) ? rotation : null;
+            }
         }
+        // Outside the hub lock: a write can wait out its timeout, and other screens must not stall behind it.
+        if (replayBrightness is { } level)
+        {
+            transport.SetBrightness(level);
+        }
+        if (replayRotation is { } turn)
+        {
+            transport.SetRotation(turn);
+        }
+        return transport;
     }
 
     private Slv3LcdPortInfo? FindPort(string serial)

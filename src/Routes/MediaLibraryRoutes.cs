@@ -242,7 +242,7 @@ public static class MediaLibraryRoutes
             return Results.Ok(new MediaPlayResponse());
         }).AllowPanel();
 
-        app.MapDelete("/media/{id}", (string id, MediaLibrary lib, MultiplexHub hub) =>
+        app.MapDelete("/media/{id}", (string id, MediaLibrary lib, MultiplexHub hub, Nexus.Service.Persistence.IConfigStore store) =>
         {
             if (!MediaLibrary.IsValidId(id))
                 return Results.BadRequest(new MediaPlayResponse { Error = true, Msg = "invalid media id" });
@@ -250,7 +250,33 @@ public static class MediaLibraryRoutes
             var deleted = lib.DeleteItem(id);
             if (deleted)
             {
+                // Media pins read the selected item; a deleted one must not linger.
+                // Global Media keeps its own handling (the web plays the next or idles).
+                // Both conditions are checked under the store lock, so a play that
+                // lands meanwhile is not wiped.
+                // The unlocked pre-check keeps an unrelated delete from writing settings.
+                var current = store.Load().Lighting;
+                var cleared = false;
+                if (current.LastMediaId == id
+                    && !string.Equals(current.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    store.Update(s =>
+                    {
+                        if (s.Lighting.LastMediaId == id
+                            && !string.Equals(s.Lighting.Sync, "media", System.StringComparison.OrdinalIgnoreCase))
+                        {
+                            s.Lighting.LastMediaId = "";
+                            LightingPresetLooks.CaptureIntoActive(s);
+                            cleared = true;
+                        }
+                    });
+                }
                 PanelTopics.BroadcastMediaLibrary(hub);
+                if (cleared)
+                {
+                    // Clearing the selection changes what media-pinned devices show.
+                    PanelTopics.BroadcastLighting(hub);
+                }
             }
 
             return deleted
@@ -324,7 +350,7 @@ public static class MediaLibraryRoutes
             return Results.File(thumbPath, "image/jpeg");
         }).AllowPanel();
 
-        app.MapPost("/media/{id}/play", (string id, ILightingProvider lighting, MultiplexHub hub, FeatureGates gates) =>
+        app.MapPost("/media/{id}/play", (string id, [Microsoft.AspNetCore.Mvc.FromBody] Nexus.Service.Models.Media.MediaPlayBody? body, ILightingProvider lighting, MultiplexHub hub, FeatureGates gates) =>
         {
             if (!gates.Lighting)
             {
@@ -335,7 +361,7 @@ public static class MediaLibraryRoutes
                 return Results.BadRequest(new MediaPlayResponse { Error = true, Msg = "invalid media id" });
             }
 
-            var ok = lighting.StartMedia(id);
+            var ok = lighting.StartMedia(id, body?.KeepMode == true);
             if (ok)
             {
                 PanelTopics.BroadcastLighting(hub);

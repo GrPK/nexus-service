@@ -137,13 +137,13 @@ public class AuthRequestPolicyTests
         app.MapDevicesEndpoints();
 
         AssertPanelAllowedRoute(app, "GET", "/devices/lighting-devices/all");
-        AssertPanelAllowedRoute(app, "GET", "/devices/lighting-devices/static-looks");
+        AssertPanelAllowedRoute(app, "GET", "/devices/lighting-devices/pins");
         AssertPanelAllowedRoute(app, "GET", "/devices/lighting-devices/{id}/led-map");
         AssertPanelAllowedRoute(app, "POST", "/devices/lighting-devices/power");
         AssertPanelAllowedRoute(app, "POST", "/devices/lighting-devices/controlled");
         AssertPanelAllowedRoute(app, "POST", "/devices/lighting-devices/brightness");
         AssertPanelAllowedRoute(app, "POST", "/devices/lighting-devices/color");
-        AssertPanelAllowedRoute(app, "POST", "/devices/lighting-devices/static-lock");
+        AssertPanelAllowedRoute(app, "POST", "/devices/lighting-devices/pins");
         AssertPanelAllowedRoute(app, "POST", "/devices/lighting-devices/identify");
         // Read + activate only, for a Deck widget key bound to a lighting
         // preset. Creating, renaming and deleting presets stay desktop-only.

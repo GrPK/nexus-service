@@ -202,6 +202,11 @@ public sealed class Slv3LcdTransport : ISlv3LcdTransport
         var buffer = Slv3LcdProtocol.BuildPushJpgBuffer(timestamp, jpeg);
         lock (_ioLock)
         {
+            // The hub can drop this transport from another thread; Dispose frees the handles under this lock.
+            if (_disposed)
+            {
+                return false;
+            }
             var ok = WriteOverlappedLocked(buffer);
             if (ok && !_loggedFirstPush)
             {
@@ -230,6 +235,10 @@ public sealed class Slv3LcdTransport : ISlv3LcdTransport
         var header = Slv3LcdProtocol.BuildArgCommandHeader(Slv3LcdProtocol.CmdType.GetPosIndex, timestamp, 0);
         lock (_ioLock)
         {
+            if (_disposed)
+            {
+                return false;
+            }
             // Discard acks queued before this query so the next frame is ours.
             while (_rxQueue.TryTake(out _))
             {
@@ -257,7 +266,7 @@ public sealed class Slv3LcdTransport : ISlv3LcdTransport
         var header = Slv3LcdProtocol.BuildArgCommandHeader(cmd, timestamp, value);
         lock (_ioLock)
         {
-            return WriteOverlappedLocked(header);
+            return !_disposed && WriteOverlappedLocked(header);
         }
     }
 
@@ -274,9 +283,9 @@ public sealed class Slv3LcdTransport : ISlv3LcdTransport
         _draining = false;
         Slv3WinUsbInterop.WinUsb_AbortPipe(_winUsbHandle, Slv3LcdProtocol.ReadPipeId);
         _drainThread?.Join();
-        _rxQueue.Dispose();
         lock (_ioLock)
         {
+            _rxQueue.Dispose();
             if (_winUsbHandle != IntPtr.Zero)
             {
                 Slv3WinUsbInterop.WinUsb_Free(_winUsbHandle);

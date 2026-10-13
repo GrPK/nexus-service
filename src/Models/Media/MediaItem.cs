@@ -34,6 +34,13 @@ public sealed class MediaPlayResponse
     public string Msg { get; set; } = "Ok";
 }
 
+/// <summary>Optional body of POST /media/{id}/play.</summary>
+public sealed class MediaPlayBody
+{
+    /// <summary>True changes the shared media item without switching the global lighting mode.</summary>
+    public bool KeepMode { get; set; }
+}
+
 public sealed class MediaCurrentResponse
 {
     public string? MediaId { get; set; }

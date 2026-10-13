@@ -10,6 +10,9 @@ public sealed class StreamedPanelRecord
 {
     public string PanelDeviceId { get; set; } = "";
 
+    /// <summary>The record belongs to one screen of a multi-screen device, so no other panel's allocation may reuse it.</summary>
+    public bool MultiInstance { get; set; }
+
     /// <summary>Overrides the discovery's default profile kind when set.</summary>
     public string? ProfileKind { get; set; }
 

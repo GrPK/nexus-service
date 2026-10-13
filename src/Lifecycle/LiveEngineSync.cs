@@ -113,6 +113,9 @@ public static class LiveEngineSync
                     lighting.StartStatic(new StaticHeadlessStart
                     {
                         Effect = key,
+                        // A persisted color that does not parse (an imported profile or cloud pull)
+                        // must not make StartStatic throw; the effect alone still restores.
+                        Color = Nexus.Service.Lighting.StaticColorHex.TryParse(s.Static.Color, out _, out _, out _) ? s.Static.Color : null,
                         Intensity = look.Intensity,
                         Hue = look.Hue,
                         Colorize = look.Colorize,

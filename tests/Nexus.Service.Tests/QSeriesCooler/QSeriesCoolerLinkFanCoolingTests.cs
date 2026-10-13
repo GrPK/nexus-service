@@ -377,7 +377,7 @@ public class QSeriesCoolerLinkFanCoolingTests
             s.Cooling.ManualSpeeds[legacy] = 55;
             s.Cooling.CustomManualSpeeds[legacy] = 45;
             s.Cooling.FanOffsets[legacy] = 5;
-            s.Cooling.FanLockOverrides[legacy] = true;
+            s.Cooling.FanPinOverrides[legacy] = true;
             s.Cooling.FanRoles[legacy] = Nexus.Service.Models.Cooling.FanRoleKind.Gpu;
             s.Cooling.CustomFanCurveAssignments[legacy] = "curve1";
             s.Cooling.UncontrolledFanChannels.Add(legacy);
@@ -406,7 +406,7 @@ public class QSeriesCoolerLinkFanCoolingTests
         Assert.DoesNotContain(legacy, cooling.ManualSpeeds.Keys);
         Assert.DoesNotContain(legacy, cooling.CustomManualSpeeds.Keys);
         Assert.DoesNotContain(legacy, cooling.FanOffsets.Keys);
-        Assert.DoesNotContain(legacy, cooling.FanLockOverrides.Keys);
+        Assert.DoesNotContain(legacy, cooling.FanPinOverrides.Keys);
         Assert.DoesNotContain(legacy, cooling.FanRoles.Keys);
         Assert.DoesNotContain(legacy, cooling.CustomFanCurveAssignments.Keys);
         Assert.DoesNotContain(legacy, cooling.UncontrolledFanChannels);
@@ -424,7 +424,7 @@ public class QSeriesCoolerLinkFanCoolingTests
             Assert.Equal(55, cooling.ManualSpeeds[id]);
             Assert.Equal(45, cooling.CustomManualSpeeds[id]);
             Assert.Equal(5, cooling.FanOffsets[id]);
-            Assert.True(cooling.FanLockOverrides[id]);
+            Assert.True(cooling.FanPinOverrides[id]);
             Assert.Equal(Nexus.Service.Models.Cooling.FanRoleKind.Gpu, cooling.FanRoles[id]);
             Assert.Equal("curve1", cooling.CustomFanCurveAssignments[id]);
             Assert.Contains(id, cooling.UncontrolledFanChannels);

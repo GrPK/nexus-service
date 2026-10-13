@@ -38,6 +38,7 @@ public static partial class DevicesRoutes
         MapCorsairLcdEndpoints(app);
         MapStrimerEndpoints(app);
         MapNollieEndpoints(app);
+        MapAsiahorseUmbraEndpoints(app);
     }
 
     /// <summary>

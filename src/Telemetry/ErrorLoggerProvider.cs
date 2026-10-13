@@ -53,6 +53,12 @@ internal sealed class ErrorLoggerProvider : ILoggerProvider
                 return;
             if (t_inLog || IsMarked(exception))
                 return;
+            // A peer's malformed TLS handshake: SChannel returns a status SslStream cannot map, and Kestrel logs it at Error.
+            if (_category.StartsWith("Microsoft.AspNetCore.Server.Kestrel", StringComparison.Ordinal)
+                && exception.GetType().FullName == "System.Net.InternalException")
+            {
+                return;
+            }
             t_inLog = true;
             try
             {

@@ -174,6 +174,25 @@ public sealed record JpegPanelModel(
         Surface: Models.Panel.PanelSurfaces.LcdSquare)
     { Handshake = new AsRockLcdHandshake() };
 
+    /// <summary>
+    /// Wired UNI FAN TL LCD: one HID device per fan screen, so it stays out of <see cref="All"/>
+    /// and <see cref="TlLcdPanels"/> copies this row per screen with its own handshake. Its handler
+    /// id names the screens' panel family; the screens follow the Uni Fan TL's switch.
+    /// </summary>
+    public static readonly JpegPanelModel TlLcd = new(
+        HandlerId: "lianli-tl-lcd",
+        Name: "Lian Li Uni Fan TL LCD",
+        VendorId: 0x04FC,
+        ProductIds: new[] { 0x7393 },
+        Width: 400,
+        Height: 400,
+        Circular: true,
+        ReportLength: 512,
+        HeaderStyle: JpegPanelHeaderStyle.LianLiSequenced,
+        Selector: TlLcdHandshake.CmdSyncJpeg,
+        Surface: Models.Panel.PanelSurfaces.LcdRound)
+    { Fps = 25 };
+
     public static readonly JpegPanelModel[] All =
     {
         GalahadIiLcd,

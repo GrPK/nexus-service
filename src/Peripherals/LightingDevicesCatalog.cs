@@ -278,6 +278,10 @@ public static class LightingDevicesCatalog
         Native("Lian Li", "Strimer Wireless",       "light",    "-",      "-"),
         Native("Lian Li", "SL-LCD",                 "light",    "0x1CBE", "0x0005", screen: true),
         Native("Lian Li", "TL-LCD",                 "light",    "0x1CBE", "0x0006", screen: true),
+        Native("Lian Li", "Uni Fan TL LCD",         "light",    "0x04FC", "0x7393", screen: true),
+
+        // Asiahorse - VID/PID from src/Peripherals/AsiahorseUmbra/UmbraProtocol.cs. ARGB + PWM controller.
+        Native("Asiahorse", "Umbra V2",             "fan",      "0x1A86", "0xFE04"),
 
         // Nollie - VID/PIDs from src/Peripherals/Nollie/NollieProtocol.cs. ARGB
         // channel controllers; the channel count is the marketed model number.

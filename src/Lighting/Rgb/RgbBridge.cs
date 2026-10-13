@@ -203,7 +203,7 @@ public sealed class RgbBridge : IDisposable
     // Replaced wholesale (never mutated) so OnFrame reads it without
     // synchronization.
     private HashSet<string> _bridgeFrameIds = new(StringComparer.Ordinal);
-    // Touched only inside RefreshDevicesAsync, which _refreshSemaphore serializes.
+    // Written by RefreshDevicesAsync (serialized by _refreshSemaphore); Deactivate resets it.
     private string _frameIdSignature = "";
 
     /// <summary>Raised under the refresh lock when the engine's frame set changes (a device or zone appears, goes away, or gains its LEDs); handlers must not block.</summary>
@@ -458,6 +458,8 @@ public sealed class RgbBridge : IDisposable
             cts = _refreshCts;
             _refreshCts = null;
             _devices = Array.Empty<RgbDevice>();
+            // Views counted the emptied list on the restart broadcast; the first refresh after Activate must re-announce even an unchanged set.
+            _frameIdSignature = "";
             _directModeApplied = new();
             _drivableLatched.Clear();
             _loggedDeviceSignatures.Clear();
@@ -1376,7 +1378,9 @@ public sealed class RgbBridge : IDisposable
             var setKeys = new string[frames.Length];
             for (var i = 0; i < frames.Length; i++)
             {
-                setKeys[i] = frames[i].LedCount > 0 ? frames[i].Id : frames[i].Id + "#0";
+                // The frame index rides in the key: clients map ids to frame bytes
+                // through it, so a reorder with the same ids must notify too.
+                setKeys[i] = (frames[i].LedCount > 0 ? frames[i].Id : frames[i].Id + "#0") + "@" + frames[i].Index;
             }
             Array.Sort(setKeys, StringComparer.Ordinal);
             var signature = string.Join('\n', setKeys);

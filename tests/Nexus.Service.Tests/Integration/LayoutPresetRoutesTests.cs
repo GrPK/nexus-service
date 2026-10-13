@@ -694,15 +694,15 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
 
     // ---- Per-device Static assignments ----
 
-    private static StaticDeviceLook Look(string effect, string color, int slot = 0) =>
-        new() { Effect = effect, Color = color, Slot = slot };
+    private static DevicePin Look(string effect, string color, int slot = 0) =>
+        new() { Kind = DevicePinKinds.Static, Effect = effect, Color = color, Slot = slot };
 
     [Fact]
-    public async Task Create_captures_static_device_looks_into_preset()
+    public async Task Create_captures_device_pins_into_preset()
     {
         Store.Update(s =>
         {
-            s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#ff0000", 2);
+            s.Lighting.DevicePins["dev-a"] = Look("flat", "#ff0000", 2);
             s.Devices.LightingDevicePrefs["dev-a"] = new LightingDevicePreference { Brightness = 42, Hue = 0.25f, Saturation = 0.5f };
         });
 
@@ -712,8 +712,8 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
         var preset = Store.Load().Lighting.LayoutPresets[0];
-        Assert.Equal("#ff0000", preset.StaticDeviceLooks!["dev-a"].Color);
-        Assert.Equal(2, preset.StaticDeviceLooks["dev-a"].Slot);
+        Assert.Equal("#ff0000", preset.DevicePins!["dev-a"].Color);
+        Assert.Equal(2, preset.DevicePins["dev-a"].Slot);
         Assert.Equal(42, preset.DevicePrefs!["dev-a"].Brightness);
         Assert.Equal(0.25f, preset.DevicePrefs["dev-a"].Hue);
     }
@@ -780,9 +780,9 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
     }
 
     [Fact]
-    public async Task Activate_restores_static_device_looks_over_the_live_ones()
+    public async Task Activate_restores_device_pins_over_the_live_ones()
     {
-        Store.Update(s => s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#00ff00"));
+        Store.Update(s => s.Lighting.DevicePins["dev-a"] = Look("flat", "#00ff00"));
         var createRes = await _client.PostAsync(
             "/devices/lighting-devices/layout-presets",
             Json("""{"name":"Green"}"""));
@@ -792,22 +792,22 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
         // Drift away from what the preset captured, then load it back.
         Store.Update(s =>
         {
-            s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#0000ff");
-            s.Lighting.StaticDeviceLooks["dev-b"] = Look("flat", "#ffffff");
+            s.Lighting.DevicePins["dev-a"] = Look("flat", "#0000ff");
+            s.Lighting.DevicePins["dev-b"] = Look("flat", "#ffffff");
         });
 
         var res = await _client.PostAsync(
             $"/devices/lighting-devices/layout-presets/{id}/activate", Json("{}"));
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
-        var looks = Store.Load().Lighting.StaticDeviceLooks;
+        var looks = Store.Load().Lighting.DevicePins;
         Assert.Equal("#00ff00", looks["dev-a"].Color);
         // Replaced wholesale, so a device the preset never knew about is gone.
         Assert.False(looks.ContainsKey("dev-b"));
     }
 
     [Fact]
-    public async Task Activate_leaves_looks_alone_on_a_preset_saved_before_they_existed()
+    public async Task Activate_leaves_pins_alone_on_a_preset_saved_before_they_existed()
     {
         var createRes = await _client.PostAsync(
             "/devices/lighting-devices/layout-presets",
@@ -816,109 +816,17 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
         var id = createDoc.RootElement.GetProperty("preset").GetProperty("id").GetString()!;
         Store.Update(s =>
         {
-            s.Lighting.LayoutPresets.Find(x => x.Id == id)!.StaticDeviceLooks = null;
-            s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#123456");
+            s.Lighting.LayoutPresets.Find(x => x.Id == id)!.DevicePins = null;
+            s.Lighting.DevicePins["dev-a"] = Look("flat", "#123456");
         });
 
         await _client.PostAsync($"/devices/lighting-devices/layout-presets/{id}/activate", Json("{}"));
 
-        Assert.Equal("#123456", Store.Load().Lighting.StaticDeviceLooks["dev-a"].Color);
+        Assert.Equal("#123456", Store.Load().Lighting.DevicePins["dev-a"].Color);
     }
 
     [Fact]
-    public async Task Static_looks_route_returns_every_assignment_with_its_slot()
-    {
-        Store.Update(s =>
-        {
-            s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#ff00ff", 3);
-            // An empty effect is a cleared device and must not be listed.
-            s.Lighting.StaticDeviceLooks["dev-b"] = Look("", "");
-        });
-
-        var res = await _client.GetAsync("/devices/lighting-devices/static-looks");
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
-        var looks = doc.RootElement.GetProperty("looks");
-        Assert.Equal("#ff00ff", looks.GetProperty("dev-a").GetProperty("color").GetString());
-        Assert.Equal(3, looks.GetProperty("dev-a").GetProperty("slot").GetInt32());
-        Assert.False(looks.TryGetProperty("dev-b", out _));
-    }
-
-    [Fact]
-    public async Task Static_lock_route_locks_a_look_and_the_colour_route_then_refuses_it()
-    {
-        await _client.PostAsync(
-            "/devices/lighting-devices/color",
-            Json("""{"id":"dev-a","hue":0.5,"saturation":1,"effect":"flat","color":"#abcdef"}"""));
-
-        var lockRes = await _client.PostAsync(
-            "/devices/lighting-devices/static-lock",
-            Json("""{"id":"dev-a","locked":true}"""));
-        Assert.Equal(HttpStatusCode.OK, lockRes.StatusCode);
-        Assert.True(Store.Load().Lighting.StaticDeviceLooks["dev-a"].Locked);
-
-        var res = await _client.GetAsync("/devices/lighting-devices/static-looks");
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
-        Assert.True(doc.RootElement.GetProperty("looks").GetProperty("dev-a").GetProperty("locked").GetBoolean());
-
-        // Locked: a new pick is refused and the stored look is untouched.
-        var repick = await _client.PostAsync(
-            "/devices/lighting-devices/color",
-            Json("""{"id":"dev-a","hue":0.1,"saturation":1,"effect":"flat","color":"#000000"}"""));
-        Assert.Equal(HttpStatusCode.Conflict, repick.StatusCode);
-        Assert.Equal("#abcdef", Store.Load().Lighting.StaticDeviceLooks["dev-a"].Color);
-
-        // Unlocked: the same pick lands.
-        await _client.PostAsync(
-            "/devices/lighting-devices/static-lock",
-            Json("""{"id":"dev-a","locked":false}"""));
-        var again = await _client.PostAsync(
-            "/devices/lighting-devices/color",
-            Json("""{"id":"dev-a","hue":0.1,"saturation":1,"effect":"flat","color":"#000000"}"""));
-        Assert.Equal(HttpStatusCode.OK, again.StatusCode);
-        Assert.Equal("#000000", Store.Load().Lighting.StaticDeviceLooks["dev-a"].Color);
-    }
-
-    [Fact]
-    public async Task Static_lock_route_needs_a_look_to_lock()
-    {
-        var res = await _client.PostAsync(
-            "/devices/lighting-devices/static-lock",
-            Json("""{"id":"dev-none","locked":true}"""));
-        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
-    }
-
-    [Fact]
-    public async Task A_preset_round_trips_the_lock()
-    {
-        await _client.PostAsync(
-            "/devices/lighting-devices/color",
-            Json("""{"id":"dev-a","hue":0.5,"saturation":1,"effect":"flat","color":"#abcdef"}"""));
-        await _client.PostAsync(
-            "/devices/lighting-devices/static-lock",
-            Json("""{"id":"dev-a","locked":true}"""));
-        var createRes = await _client.PostAsync(
-            "/devices/lighting-devices/layout-presets",
-            Json("""{"name":"Locked"}"""));
-        using var createDoc = JsonDocument.Parse(await createRes.Content.ReadAsStringAsync());
-        var id = createDoc.RootElement.GetProperty("preset").GetProperty("id").GetString()!;
-        Assert.True(Store.Load().Lighting.LayoutPresets.Find(p => p.Id == id)!.StaticDeviceLooks!["dev-a"].Locked);
-
-        // A second preset takes the live state, so unlocking there leaves the
-        // first one's lock alone; activating the first brings the lock back.
-        await _client.PostAsync(
-            "/devices/lighting-devices/layout-presets",
-            Json("""{"name":"Open"}"""));
-        await _client.PostAsync(
-            "/devices/lighting-devices/static-lock",
-            Json("""{"id":"dev-a","locked":false}"""));
-        Assert.False(Store.Load().Lighting.StaticDeviceLooks["dev-a"].Locked);
-        await _client.PostAsync($"/devices/lighting-devices/layout-presets/{id}/activate", Json("{}"));
-        Assert.True(Store.Load().Lighting.StaticDeviceLooks["dev-a"].Locked);
-    }
-
-    [Fact]
-    public async Task Colour_post_mirrors_the_assignment_into_the_active_preset()
+    public async Task Pin_post_mirrors_the_pin_into_the_active_preset()
     {
         var createRes = await _client.PostAsync(
             "/devices/lighting-devices/layout-presets",
@@ -927,19 +835,19 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
         var id = createDoc.RootElement.GetProperty("preset").GetProperty("id").GetString()!;
 
         var res = await _client.PostAsync(
-            "/devices/lighting-devices/color",
-            Json("""{"id":"dev-a","hue":0.5,"saturation":1,"effect":"flat","color":"#abcdef","slot":1}"""));
+            "/devices/lighting-devices/pins",
+            Json("""{"ids":["dev-a"],"pin":{"kind":"static","effect":"flat","color":"#abcdef","slot":1}}"""));
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
         var preset = Store.Load().Lighting.LayoutPresets.Find(p => p.Id == id)!;
-        Assert.Equal("#abcdef", preset.StaticDeviceLooks!["dev-a"].Color);
-        Assert.Equal(1, preset.StaticDeviceLooks["dev-a"].Slot);
+        Assert.Equal("#abcdef", preset.DevicePins!["dev-a"].Color);
+        Assert.Equal(1, preset.DevicePins["dev-a"].Slot);
     }
 
     [Fact]
     public async Task SaveCurrent_without_saveDeviceLooks_keeps_the_stored_assignments()
     {
-        Store.Update(s => s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#00ff00"));
+        Store.Update(s => s.Lighting.DevicePins["dev-a"] = Look("flat", "#00ff00"));
         var createRes = await _client.PostAsync(
             "/devices/lighting-devices/layout-presets",
             Json("""{"name":"Keep"}"""));
@@ -947,14 +855,14 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
         var id = createDoc.RootElement.GetProperty("preset").GetProperty("id").GetString()!;
 
         // The undo/redo reconcile: live colours now belong to another preset.
-        Store.Update(s => s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#0000ff"));
+        Store.Update(s => s.Lighting.DevicePins["dev-a"] = Look("flat", "#0000ff"));
         var putRes = await _client.PutAsync(
             $"/devices/lighting-devices/layout-presets/{id}",
             Json("""{"saveCurrent":true,"saveDeviceLooks":false}"""));
         Assert.Equal(HttpStatusCode.OK, putRes.StatusCode);
 
         var preset = Store.Load().Lighting.LayoutPresets.Find(p => p.Id == id)!;
-        Assert.Equal("#00ff00", preset.StaticDeviceLooks!["dev-a"].Color);
+        Assert.Equal("#00ff00", preset.DevicePins!["dev-a"].Color);
     }
 
     [Fact]
@@ -966,14 +874,14 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
         using var createDoc = JsonDocument.Parse(await createRes.Content.ReadAsStringAsync());
         var id = createDoc.RootElement.GetProperty("preset").GetProperty("id").GetString()!;
 
-        Store.Update(s => s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#0000ff"));
+        Store.Update(s => s.Lighting.DevicePins["dev-a"] = Look("flat", "#0000ff"));
         // No saveDeviceLooks in the body: an older client keeps the old behaviour.
         await _client.PutAsync(
             $"/devices/lighting-devices/layout-presets/{id}",
             Json("""{"saveCurrent":true}"""));
 
         var preset = Store.Load().Lighting.LayoutPresets.Find(p => p.Id == id)!;
-        Assert.Equal("#0000ff", preset.StaticDeviceLooks!["dev-a"].Color);
+        Assert.Equal("#0000ff", preset.DevicePins!["dev-a"].Color);
     }
 
     // ---- PUT apps (per-app auto-activation) ----
@@ -1162,7 +1070,7 @@ public sealed class LayoutPresetRoutesTests : IClassFixture<StubDeviceHostFactor
             Json("""{"apps":[{"id":"proc:chrome","name":"Chrome"}]}"""));
 
         // The usual "save the live look into this preset" path.
-        Store.Update(s => s.Lighting.StaticDeviceLooks["dev-a"] = Look("flat", "#00ff00"));
+        Store.Update(s => s.Lighting.DevicePins["dev-a"] = Look("flat", "#00ff00"));
         var res = await _client.PutAsync(
             $"/devices/lighting-devices/layout-presets/{id}",
             Json("""{"saveCurrent":true}"""));

@@ -182,6 +182,8 @@ public class ShaderParam
 public class StaticHeadlessStart
 {
     public string Effect { get; set; } = "";
+    /// <summary>"#rrggbb". When set the global static output is exactly that flat color for every unpinned device and the fields below are inert. Empty keeps the effect look.</summary>
+    public string? Color { get; set; }
     public float Intensity { get; set; }
     public float Hue { get; set; }
     public float Colorize { get; set; }
@@ -202,7 +204,8 @@ public class MusicHeadlessStart
 
 public class ScreenHeadlessStart
 {
-    public string Monitor { get; set; } = "";
+    /// <summary>Screen to mirror. Null keeps the persisted choice (a restore or Deck start); "" selects the default screen.</summary>
+    public string? Monitor { get; set; }
     public string Effect { get; set; } = "";
     public float Saturation { get; set; }
     public float Contrast { get; set; }
@@ -211,6 +214,8 @@ public class ScreenHeadlessStart
     public float Hue { get; set; }
     /// <summary>0 = pure hue rotate, 1 = grayscale + accent-tint. Matches the animate colorize semantics.</summary>
     public float Colorize { get; set; }
+    /// <summary>True applies the monitor to the shared capture without switching the global mode (unless it is already Mirror).</summary>
+    public bool KeepMode { get; set; }
 }
 
 /// <summary>
@@ -339,6 +344,8 @@ public class ScreenSyncOptions
 {
     public string[] Effects { get; set; } = System.Array.Empty<string>();
     public List<ScreenSyncMonitor> Monitors { get; set; } = new();
+    /// <summary>The persisted screen the global Mirror and every mirror pin capture; empty is the default screen.</summary>
+    public string SelectedMonitor { get; set; } = "";
 
     /// <summary>
     /// How the user chooses which screen to mirror. "app" - the client picks a
