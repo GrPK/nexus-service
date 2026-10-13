@@ -25,6 +25,21 @@ public sealed class AppCoolingStateDto
     [JsonPropertyName("sources")] public List<TemperatureSource> Sources { get; set; } = new();
 }
 
+/// <summary>One ROG Astral card's Level Sense calibration, for the levelsense.state action.</summary>
+public sealed class LevelSenseGpuStateDto
+{
+    [JsonPropertyName("gpuId")] public string GpuId { get; set; } = "";
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("calibrating")] public bool Calibrating { get; set; }
+    [JsonPropertyName("calibratedAtMs")] public long? CalibratedAtMs { get; set; }
+}
+
+/// <summary>Level Sense calibration of every card with a G-sensor.</summary>
+public sealed class LevelSenseStateDto
+{
+    [JsonPropertyName("gpus")] public List<LevelSenseGpuStateDto> Gpus { get; set; } = new();
+}
+
 /// <summary>One row in the screentime payload's <c>history</c> array.</summary>
 public sealed class ScreentimeHistoryEntryDto
 {

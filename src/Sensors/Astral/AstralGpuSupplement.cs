@@ -61,6 +61,7 @@ internal sealed class AstralGpuSupplement
     {
         public int AdapterIndex;
         public string HwIdentifier = "";
+        public string HwName = "";
         public bool HasSubSystemId;
         public uint SubSystemId;
         public DateTimeOffset NextProbeUtc;
@@ -123,6 +124,7 @@ internal sealed class AstralGpuSupplement
             {
                 return;
             }
+            state.HwName = hwName;
 
             var now = _timeProvider.GetUtcNow();
             if (now >= state.NextProbeUtc)
@@ -180,6 +182,39 @@ internal sealed class AstralGpuSupplement
             }
         }
         return started;
+    }
+
+    /// <summary>
+    /// Every GPU with a G-sensor: whether a calibration is being taken, and when
+    /// the saved one was taken (null before the first is saved).
+    /// </summary>
+    public IReadOnlyList<GpuLevelSenseState> GetLevelSenseStates()
+    {
+        var cards = new List<(string HwIdentifier, string Name, string Key, bool Calibrating)>();
+        lock (_lock)
+        {
+            foreach (var state in _states.Values)
+            {
+                if (state.LevelSense is { } levelSense)
+                {
+                    cards.Add((state.HwIdentifier,
+                        AstralAibVendors.EnrichName(state.HwName, state.SubSystemId, state.LastReadout.HasValue),
+                        LevelSenseKey(state.AdapterIndex, state.SubSystemId), levelSense.IsCalibrating));
+                }
+            }
+        }
+
+        // The store is read outside _lock, as everywhere else here.
+        var saved = _store?.Load().AstralLevelSense;
+        var result = new List<GpuLevelSenseState>(cards.Count);
+        foreach (var (hwIdentifier, name, key, calibrating) in cards)
+        {
+            long? calibratedAt = saved is not null && saved.TryGetValue(key, out var calibration) && calibration is not null
+                ? calibration.CalibratedAtMs
+                : null;
+            result.Add(new GpuLevelSenseState(hwIdentifier, name, calibrating, calibratedAt));
+        }
+        return result;
     }
 
     private bool TryGetState(string hwIdentifier, out GpuState state)

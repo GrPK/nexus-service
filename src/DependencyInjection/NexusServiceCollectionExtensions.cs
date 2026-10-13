@@ -2190,8 +2190,13 @@ public static class NexusServiceCollectionExtensions
             Nexus.Service.Widgets.AppActions.SystemSpecsActions.RegisterAll(registry);
             Nexus.Service.Widgets.AppActions.DeviceListActions.RegisterAll(registry);
             Nexus.Service.Widgets.AppActions.OpenUrlActions.RegisterAll(registry);
+            Nexus.Service.Widgets.AppActions.LevelSenseActions.RegisterAll(registry);
+            Nexus.Service.Widgets.AppActions.UnitsActions.RegisterAll(registry);
             return registry;
         });
+        // Lists hardware-specific device apps under Devices once their hardware
+        // is detected (AppPresence), and tells the web when that changes.
+        services.AddHostedService<Nexus.Service.Widgets.AppPresenceNotifier>();
         services.AddSingleton<Nexus.Service.Widgets.AppDispatchRateLimiter>();
         services.AddSingleton(sp => Nexus.Service.Widgets.AppDataStoreWiring.Create(
             sp.GetRequiredService<ProfileManager>(),

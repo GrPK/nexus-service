@@ -67,24 +67,28 @@ public static class AppRoutes
 #if DEV_TOOLS
         app.MapAppTelemetryEndpoints();
 #endif
-        app.MapGet("/apps-api/installed", (AppRegistry registry, OemInfo oemInfo, IConfigStore store) =>
+        app.MapGet("/apps-api/installed", (AppRegistry registry, OemInfo oemInfo, IConfigStore store, ISensorProvider sensors) =>
         {
             var response = new AppInstalledListingResponse();
             var autoInstalled = store.Load().AutoInstalledApps;
             foreach (var entry in registry.All())
             {
                 if (IsOemHidden(entry, oemInfo)) continue;
-                response.Apps.Add(BuildListing(entry, oemInfo, autoInstalled));
+                var listing = BuildListing(entry, oemInfo, autoInstalled);
+                AppPresence.Apply(listing, entry.Manifest, sensors);
+                response.Apps.Add(listing);
             }
             return Results.Json(response, AppJsonContext.Default.AppInstalledListingResponse);
         }).AllowPanel();
 
-        app.MapGet("/apps-api/installed/{id}", (string id, AppRegistry registry, OemInfo oemInfo, IConfigStore store) =>
+        app.MapGet("/apps-api/installed/{id}", (string id, AppRegistry registry, OemInfo oemInfo, IConfigStore store, ISensorProvider sensors) =>
         {
             if (!AppIds.IsValid(id)) return Results.NotFound();
             if (!registry.TryGet(id, out var entry)) return Results.NotFound();
             if (IsOemHidden(entry, oemInfo)) return Results.NotFound();
-            return Results.Json(BuildListing(entry, oemInfo, store.Load().AutoInstalledApps), AppJsonContext.Default.AppInstalledListing);
+            var listing = BuildListing(entry, oemInfo, store.Load().AutoInstalledApps);
+            AppPresence.Apply(listing, entry.Manifest, sensors);
+            return Results.Json(listing, AppJsonContext.Default.AppInstalledListing);
         }).AllowPanel();
 
         app.MapGet("/apps-api/instance/{instanceId}/settings",

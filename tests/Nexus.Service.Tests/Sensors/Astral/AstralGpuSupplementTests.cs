@@ -231,6 +231,30 @@ public class AstralGpuSupplementTests
     }
 
     [Fact]
+    public void GetLevelSenseStates_shows_a_calibration_in_progress_then_when_it_was_saved()
+    {
+        var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true, GSensorSucceeds = true };
+        var time = new ManualTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(1_000_000));
+        var store = new InMemoryConfigStore();
+        var supplement = new AstralGpuSupplement(client, time, TimeSpan.FromSeconds(1), store);
+        Assert.Empty(supplement.GetLevelSenseStates());
+
+        Poll(supplement, time);
+        var during = Assert.Single(supplement.GetLevelSenseStates());
+        Assert.Equal(HwIdentifier, during.GpuId);
+        Assert.True(during.Calibrating);
+        Assert.Null(during.CalibratedAtMs);
+
+        for (var i = 1; i < AstralLevelSense.CalibrationSamples; i++)
+        {
+            Poll(supplement, time);
+        }
+        var after = Assert.Single(supplement.GetLevelSenseStates());
+        Assert.False(after.Calibrating);
+        Assert.Equal(store.Load().AstralLevelSense[LevelSenseKey].CalibratedAtMs, after.CalibratedAtMs);
+    }
+
+    [Fact]
     public void RecalibrateLevelSense_skips_a_gpu_without_a_g_sensor()
     {
         var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true, GSensorSucceeds = false };

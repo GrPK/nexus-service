@@ -50,6 +50,13 @@ public interface ISensorProvider
     /// </summary>
     IReadOnlyList<string> RecalibrateGpuLevelSense(string? gpuId) => System.Array.Empty<string>();
 
+    /// <summary>
+    /// The Level Sense calibration of every GPU with a G-sensor: whether one is
+    /// being taken and when the one in use was taken. Empty when no GPU has a
+    /// G-sensor (only the Windows provider reads one).
+    /// </summary>
+    IReadOnlyList<GpuLevelSenseState> GetGpuLevelSenseStates() => System.Array.Empty<GpuLevelSenseState>();
+
     IReadOnlyList<HardwareSensor> GetMemorySensors();
     string GetMemoryTotalFormatted();
     /// <summary>

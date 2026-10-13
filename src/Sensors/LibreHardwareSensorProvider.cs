@@ -185,6 +185,8 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
     // GpuReadout.Id is the LHM identifier the supplement keys its cards by.
     public IReadOnlyList<string> RecalibrateGpuLevelSense(string? gpuId) => _astral.RecalibrateLevelSense(gpuId);
 
+    public IReadOnlyList<GpuLevelSenseState> GetGpuLevelSenseStates() => _astral.GetLevelSenseStates();
+
     // LHM's HardwareType is authoritative for vendor; NVIDIA is always discrete,
     // Intel client GPUs always integrated. AMD is the ambiguous one: a discrete
     // Radeon and an APU's integrated "Radeon Graphics" both report HardwareType
