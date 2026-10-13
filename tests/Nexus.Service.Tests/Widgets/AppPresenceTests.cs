@@ -18,9 +18,11 @@ public sealed class AppPresenceTests : IDisposable
     private sealed class Sensors : ISensorProvider
     {
         public List<GpuLevelSenseState> States { get; } = new();
+        public List<GpuPinCurrents> Cards { get; } = new();
         public int GpuReads { get; private set; }
 
         public IReadOnlyList<GpuLevelSenseState> GetGpuLevelSenseStates() => States;
+        public IReadOnlyList<GpuPinCurrents> ReadGpuPinCurrents() => Cards;
         public IReadOnlyList<GpuReadout> GetGpus()
         {
             GpuReads++;
@@ -109,6 +111,22 @@ public sealed class AppPresenceTests : IDisposable
 
         Assert.Equal("device", listing.Category);
         Assert.Equal("ROG Astral RTX 5090", listing.Name);
+    }
+
+    [Fact]
+    public void Apply_lists_any_rog_astral_card_for_an_app_that_requires_one()
+    {
+        var manifest = Manifest(AppPresence.Astral);
+        var listing = Listing(manifest);
+        var sensors = new Sensors();
+        AppPresence.Apply(listing, manifest, sensors);
+        Assert.Null(listing.Category);
+
+        sensors.Cards.Add(new GpuPinCurrents("/gpu-nvidia/0", "ASUS ROG Astral RTX 5080", new[] { 1f, 1f, 1f, 1f, 1f, 1f }, 42));
+        AppPresence.Apply(listing, manifest, sensors);
+
+        Assert.Equal("device", listing.Category);
+        Assert.Equal("ROG Astral RTX 5080", listing.Name);
     }
 
     [Fact]

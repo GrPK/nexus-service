@@ -57,6 +57,14 @@ public interface ISensorProvider
     /// </summary>
     IReadOnlyList<GpuLevelSenseState> GetGpuLevelSenseStates() => System.Array.Empty<GpuLevelSenseState>();
 
+    /// <summary>
+    /// The 12V-2x6 pin currents of every ROG Astral card, reading a card again
+    /// when its last reading is a second old, without a full sensor update.
+    /// Empty when there is none (only the Windows provider reads one) or before
+    /// <see cref="GetGpus"/> has first found the card.
+    /// </summary>
+    IReadOnlyList<GpuPinCurrents> ReadGpuPinCurrents() => System.Array.Empty<GpuPinCurrents>();
+
     IReadOnlyList<HardwareSensor> GetMemorySensors();
     string GetMemoryTotalFormatted();
     /// <summary>

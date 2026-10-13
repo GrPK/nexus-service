@@ -14,7 +14,7 @@ namespace Nexus.Service.Widgets;
 /// Tells the web (apps/changed) when hardware an installed app requires
 /// (<see cref="AppPresence"/>) appears or goes, so a device app shows up under
 /// Devices without a reload. While an app waits for hardware that only a GPU
-/// read can find (a ROG Astral G-sensor is probed as the GPUs are read), it reads
+/// read can find (a ROG Astral card is probed as the GPUs are read), it reads
 /// the GPUs itself now and then, in case nothing else does.
 /// </summary>
 public sealed class AppPresenceNotifier : BackgroundService
@@ -76,7 +76,7 @@ public sealed class AppPresenceNotifier : BackgroundService
         foreach (var requirement in requirements)
         {
             var present = AppPresence.Check(requirement, _sensors).Present;
-            if (!present && requirement == AppPresence.LevelSense && ProbeDue())
+            if (!present && AppPresence.FoundByGpuRead(requirement) && ProbeDue())
             {
                 _sensors.GetGpus();
                 present = AppPresence.Check(requirement, _sensors).Present;

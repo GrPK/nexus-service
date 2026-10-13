@@ -67,6 +67,7 @@ internal sealed class AstralGpuSupplement
         public DateTimeOffset NextProbeUtc;
         public bool LoggedFirstAttempt;
         public AstralTelemetryParser.AstralReadout? LastReadout;
+        public DateTimeOffset LastReadoutUtc;
         public bool LoggedFirstGSensorAttempt;
         public int GSensorMisses;
         public AstralLevelSense? LevelSense;
@@ -129,9 +130,7 @@ internal sealed class AstralGpuSupplement
             var now = _timeProvider.GetUtcNow();
             if (now >= state.NextProbeUtc)
             {
-                state.NextProbeUtc = now + _probeInterval;
-                Probe(state, state.AdapterIndex);
-                toSave = ProbeGSensor(state, now);
+                toSave = ProbeNow(state, now);
             }
 
             if (state.LastReadout is { } readout)
@@ -150,6 +149,58 @@ internal sealed class AstralGpuSupplement
         {
             SaveCalibration(save);
         }
+    }
+
+    /// <summary>
+    /// The latest 12V-2x6 pin currents of every card a probe has confirmed as an
+    /// Astral, probing first each card whose reading is due. Probes share the
+    /// <see cref="_probeInterval"/> with <see cref="AppendSensors"/>, so a watcher
+    /// gets a fresh reading each second without a full LibreHardwareMonitor
+    /// update and the card is never read more often. A card is only known once a
+    /// GPU list has passed through <see cref="AppendSensors"/>.
+    /// </summary>
+    public IReadOnlyList<GpuPinCurrents> ReadPinCurrents()
+    {
+        LoadSavedCalibrations();
+
+        var result = new List<GpuPinCurrents>();
+        var toSave = new List<CalibrationToSave>();
+        lock (_lock)
+        {
+            var now = _timeProvider.GetUtcNow();
+            foreach (var state in _states.Values)
+            {
+                if (state.LastReadout is null)
+                {
+                    continue;
+                }
+                if (now >= state.NextProbeUtc && ProbeNow(state, now) is { } save)
+                {
+                    toSave.Add(save);
+                }
+                if (state.LastReadout is not { } readout)
+                {
+                    continue;
+                }
+
+                var amps = new float[readout.Pins.Length];
+                for (var i = 0; i < amps.Length; i++)
+                {
+                    amps[i] = readout.Pins[i].CurrentAmps;
+                }
+                result.Add(new GpuPinCurrents(
+                    state.HwIdentifier,
+                    AstralAibVendors.EnrichName(state.HwName, state.SubSystemId, true),
+                    amps,
+                    state.LastReadoutUtc.ToUnixTimeMilliseconds()));
+            }
+        }
+
+        foreach (var save in toSave)
+        {
+            SaveCalibration(save);
+        }
+        return result;
     }
 
     /// <summary>
@@ -241,7 +292,17 @@ internal sealed class AstralGpuSupplement
         return state.HasSubSystemId;
     }
 
-    private void Probe(GpuState state, int adapterIndex)
+    // Reads the card's power monitor and G-sensor and books the next probe.
+    // Returns a calibration this reading completed, for the caller to save once
+    // it has left _lock.
+    private CalibrationToSave? ProbeNow(GpuState state, DateTimeOffset now)
+    {
+        state.NextProbeUtc = now + _probeInterval;
+        Probe(state, state.AdapterIndex, now);
+        return ProbeGSensor(state, now);
+    }
+
+    private void Probe(GpuState state, int adapterIndex, DateTimeOffset now)
     {
         var ok = _client.TryReadAstralBlock(adapterIndex, out var block);
         AstralTelemetryParser.AstralReadout? readout = null;
@@ -266,6 +327,7 @@ internal sealed class AstralGpuSupplement
         if (ok)
         {
             state.LastReadout = readout;
+            state.LastReadoutUtc = now;
         }
     }
 

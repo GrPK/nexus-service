@@ -18,6 +18,12 @@ public static class AppPresence
     /// <summary>A ROG Astral card with a G-sensor (Level Sense).</summary>
     public const string LevelSense = "gpu.levelsense";
 
+    /// <summary>A ROG Astral card: its 12V-2x6 power monitor answered (Power Detector).</summary>
+    public const string Astral = "gpu.astral";
+
+    /// <summary>Requirements only a GPU read can find: the card is probed as the GPUs are read.</summary>
+    public static bool FoundByGpuRead(string? requires) =>
+        string.Equals(requires, LevelSense, StringComparison.Ordinal) || string.Equals(requires, Astral, StringComparison.Ordinal);
 
     /// <summary>
     /// Whether the hardware an app requires is present, and its name; unknown
@@ -25,12 +31,17 @@ public static class AppPresence
     /// </summary>
     public static (bool Present, string? DeviceName) Check(string? requires, ISensorProvider sensors)
     {
-        if (!string.Equals(requires, LevelSense, StringComparison.Ordinal))
+        if (string.Equals(requires, LevelSense, StringComparison.Ordinal))
         {
-            return (false, null);
+            var states = sensors.GetGpuLevelSenseStates();
+            return states.Count == 0 ? (false, null) : (true, ShortName(states[0].Name));
         }
-        var states = sensors.GetGpuLevelSenseStates();
-        return states.Count == 0 ? (false, null) : (true, ShortName(states[0].Name));
+        if (string.Equals(requires, Astral, StringComparison.Ordinal))
+        {
+            var cards = sensors.ReadGpuPinCurrents();
+            return cards.Count == 0 ? (false, null) : (true, ShortName(cards[0].Name));
+        }
+        return (false, null);
     }
 
     /// <summary>Applies <see cref="Check"/> to an app's listing; a no-op for apps that require nothing.</summary>

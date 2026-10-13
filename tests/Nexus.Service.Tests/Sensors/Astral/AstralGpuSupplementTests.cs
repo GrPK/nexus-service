@@ -255,6 +255,63 @@ public class AstralGpuSupplementTests
     }
 
     [Fact]
+    public void ReadPinCurrents_knows_a_card_only_after_the_gpus_were_read()
+    {
+        var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true };
+        var time = new ManualTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(1_000_000));
+        var supplement = new AstralGpuSupplement(client, time, TimeSpan.FromSeconds(1));
+        Assert.Empty(supplement.ReadPinCurrents());
+
+        var readAt = time.GetUtcNow().ToUnixTimeMilliseconds();
+        Poll(supplement, time);
+        var card = Assert.Single(supplement.ReadPinCurrents());
+
+        Assert.Equal(HwIdentifier, card.GpuId);
+        Assert.Contains("Astral", card.Name);
+        Assert.Equal(new[] { 12f, 12f, 12f, 12f, 12f, 12f }, card.PinAmps);
+        Assert.Equal(time.GetUtcNow().ToUnixTimeMilliseconds(), card.ReadAtMs);
+        Assert.Equal(2, client.ReadCalls);
+        Assert.True(card.ReadAtMs > readAt);
+    }
+
+    [Fact]
+    public void ReadPinCurrents_shares_the_probe_interval_with_the_gpu_list()
+    {
+        var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true };
+        var time = new ManualTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(1_000_000));
+        var supplement = new AstralGpuSupplement(client, time, TimeSpan.FromSeconds(1));
+        supplement.AppendSensors(HwIdentifier, HwIdentifier, HwName, new List<HardwareSensor>());
+
+        supplement.ReadPinCurrents();
+        Assert.Equal(1, client.ReadCalls);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        var card = Assert.Single(supplement.ReadPinCurrents());
+        Assert.Equal(2, client.ReadCalls);
+        Assert.Equal(time.GetUtcNow().ToUnixTimeMilliseconds(), card.ReadAtMs);
+
+        supplement.AppendSensors(HwIdentifier, HwIdentifier, HwName, new List<HardwareSensor>());
+        Assert.Equal(2, client.ReadCalls);
+    }
+
+    [Fact]
+    public void ReadPinCurrents_keeps_the_time_of_the_last_good_reading()
+    {
+        var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true };
+        var time = new ManualTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(1_000_000));
+        var supplement = new AstralGpuSupplement(client, time, TimeSpan.FromSeconds(1));
+        supplement.AppendSensors(HwIdentifier, HwIdentifier, HwName, new List<HardwareSensor>());
+        var goodAt = time.GetUtcNow().ToUnixTimeMilliseconds();
+
+        client.ReadSucceeds = false;
+        time.Advance(TimeSpan.FromSeconds(5));
+        var card = Assert.Single(supplement.ReadPinCurrents());
+
+        Assert.Equal(2, client.ReadCalls);
+        Assert.Equal(goodAt, card.ReadAtMs);
+    }
+
+    [Fact]
     public void RecalibrateLevelSense_skips_a_gpu_without_a_g_sensor()
     {
         var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true, GSensorSucceeds = false };

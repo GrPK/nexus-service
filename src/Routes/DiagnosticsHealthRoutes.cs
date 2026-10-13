@@ -18,6 +18,7 @@ using Nexus.Service.Diagnostics.Temperature;
 using Nexus.Service.Lifecycle;
 using Nexus.Service.Lighting;
 using Nexus.Service.Models;
+using Nexus.Service.Models.Sensors;
 using Nexus.Service.Monitoring.History;
 using Nexus.Service.Platform;
 using Nexus.Service.Sensors;
@@ -111,6 +112,19 @@ public static class DiagnosticsHealthRoutes
         // G-sensor recalibrates.
         app.MapPost("/diagnostics/gpu/level-sense/calibrate", (LevelSenseCalibrateBody? body, ISensorProvider sensors) =>
             new LevelSenseCalibrateResponse { Gpus = sensors.RecalibrateGpuLevelSense(body?.GpuId) });
+
+        // ROG Astral Power Detector (Windows only; elsewhere it reports unsupported):
+        // its state, a settings change, and cancelling a shutdown countdown.
+        app.MapGet("/diagnostics/gpu/power-detector", (IServiceProvider sp) =>
+            sp.GetService<Nexus.Service.Sensors.Astral.AstralPowerDetectorService>()?.GetState() ?? new PowerDetectorStateDto());
+
+        app.MapPost("/diagnostics/gpu/power-detector/config", (PowerDetectorConfigBody body, IServiceProvider sp) =>
+            sp.GetService<Nexus.Service.Sensors.Astral.AstralPowerDetectorService>() is { } detector
+                ? Results.Ok(detector.SetConfig(body))
+                : Results.NotFound());
+
+        app.MapPost("/diagnostics/gpu/power-detector/cancel", (IServiceProvider sp) =>
+            new PowerDetectorActionResponse { Ok = sp.GetService<Nexus.Service.Sensors.Astral.AstralPowerDetectorService>()?.Cancel() ?? false });
 
         app.MapGet("/diagnostics/cooling", (CoolingStallDetector cooling) => cooling.Snapshot()).AllowPanel();
 

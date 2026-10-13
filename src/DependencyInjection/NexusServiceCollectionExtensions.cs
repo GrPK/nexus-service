@@ -2192,11 +2192,19 @@ public static class NexusServiceCollectionExtensions
             Nexus.Service.Widgets.AppActions.OpenUrlActions.RegisterAll(registry);
             Nexus.Service.Widgets.AppActions.LevelSenseActions.RegisterAll(registry);
             Nexus.Service.Widgets.AppActions.UnitsActions.RegisterAll(registry);
+            Nexus.Service.Widgets.AppActions.PowerDetectorActions.RegisterAll(registry);
             return registry;
         });
         // Lists hardware-specific device apps under Devices once their hardware
         // is detected (AppPresence), and tells the web when that changes.
         services.AddHostedService<Nexus.Service.Widgets.AppPresenceNotifier>();
+        // ROG Astral Power Detector: watches the card's 12V-2x6 pins once a second
+        // and can shut the PC down. Windows only: the card is read over NVAPI.
+        if (OperatingSystem.IsWindows())
+        {
+            services.AddSingleton<Nexus.Service.Sensors.Astral.AstralPowerDetectorService>();
+            services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Sensors.Astral.AstralPowerDetectorService>());
+        }
         services.AddSingleton<Nexus.Service.Widgets.AppDispatchRateLimiter>();
         services.AddSingleton(sp => Nexus.Service.Widgets.AppDataStoreWiring.Create(
             sp.GetRequiredService<ProfileManager>(),

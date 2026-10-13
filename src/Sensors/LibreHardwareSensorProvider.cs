@@ -187,6 +187,8 @@ public sealed class LibreHardwareSensorProvider : ISensorProvider
 
     public IReadOnlyList<GpuLevelSenseState> GetGpuLevelSenseStates() => _astral.GetLevelSenseStates();
 
+    public IReadOnlyList<GpuPinCurrents> ReadGpuPinCurrents() => _astral.ReadPinCurrents();
+
     // LHM's HardwareType is authoritative for vendor; NVIDIA is always discrete,
     // Intel client GPUs always integrated. AMD is the ambiguous one: a discrete
     // Radeon and an APU's integrated "Radeon Graphics" both report HardwareType

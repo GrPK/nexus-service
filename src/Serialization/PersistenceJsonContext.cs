@@ -90,6 +90,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(SentrySettings))]
 [JsonSerializable(typeof(AstralLevelSenseCalibration))]
 [JsonSerializable(typeof(Dictionary<string, AstralLevelSenseCalibration>))]
+[JsonSerializable(typeof(AstralPowerDetectorSettings))]
 [JsonSerializable(typeof(PanelPhonePushTarget))]
 [JsonSerializable(typeof(PanelLayoutsDefaults))]
 [JsonSerializable(typeof(PanelLayoutDefault))]
