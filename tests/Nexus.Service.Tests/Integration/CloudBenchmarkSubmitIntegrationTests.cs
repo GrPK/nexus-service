@@ -121,4 +121,90 @@ public sealed class CloudBenchmarkSubmitIntegrationTests : IClassFixture<CloudBe
         Assert.Equal((HttpStatusCode)422, res.StatusCode);
         Assert.Equal("{\"code\":\"invalid_score\"}", await res.Content.ReadAsStringAsync());
     }
+    [Fact]
+    public async Task Delete_without_desktop_token_is_401()
+    {
+        var res = await _factory.CreateClient().DeleteAsync("/cloud/benchmarks/sub-1");
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Delete_signed_out_forwards_deviceId_body_and_relays_upstream_404()
+    {
+        _factory.Services.GetRequiredService<IConfigStore>().Update(s =>
+        {
+            s.Auth ??= new AuthSettings();
+            s.Auth.ActiveCloudAccountId = null;
+        });
+
+        System.Net.Http.HttpMethod? capturedMethod = null;
+        string? capturedPath = null;
+        string? capturedBody = null;
+        string? capturedToken = "not-called";
+        _factory.Api.OnSendRaw = (method, path, body, token) =>
+        {
+            capturedMethod = method;
+            capturedPath = path;
+            capturedBody = body;
+            capturedToken = token;
+            return CloudApiResult<CloudRawResponse>.Ok(
+                new CloudRawResponse { Body = "{\"statusCode\":404}", ContentType = "application/json" }, 404);
+        };
+
+        var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Delete, "/cloud/benchmarks/a b")
+        {
+            Content = new System.Net.Http.StringContent("{\"deviceId\":\"device-1234567890abcdef\"}", System.Text.Encoding.UTF8, "application/json"),
+        };
+        var res = await DesktopClient().SendAsync(req);
+
+        Assert.Equal(System.Net.Http.HttpMethod.Delete, capturedMethod);
+        Assert.Equal("/benchmarks/a%20b", capturedPath);
+        Assert.Equal("{\"deviceId\":\"device-1234567890abcdef\"}", capturedBody);
+        Assert.Null(capturedToken);
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Delete_signed_in_forwards_bearer_and_relays_upstream_204()
+    {
+        _factory.Services.GetRequiredService<IConfigStore>().Update(s =>
+        {
+            s.Auth ??= new AuthSettings();
+            s.Auth.CloudAccounts.Add(new CloudAccountRecord { AccountId = "acct-bench-del", RefreshToken = "refresh-del" });
+            s.Auth.ActiveCloudAccountId = "acct-bench-del";
+        });
+        _factory.Api.OnRefresh = _ => CloudApiResult<CloudAuthSession>.Ok(new CloudAuthSession
+        {
+            AccessToken = "access-bench-del",
+            RefreshToken = "refresh-del",
+            Account = new CloudAccountDto { Id = "acct-bench-del", Email = "x@example.com", Username = "x", EmailVerified = true },
+        });
+
+        string? capturedToken = null;
+        _factory.Api.OnSendRaw = (_, _, _, token) =>
+        {
+            capturedToken = token;
+            return CloudApiResult<CloudRawResponse>.Ok(new CloudRawResponse { Body = "", ContentType = "application/json" }, 204);
+        };
+
+        var res = await DesktopClient().DeleteAsync("/cloud/benchmarks/sub-1");
+
+        Assert.Equal("access-bench-del", capturedToken);
+        Assert.Equal(HttpStatusCode.NoContent, res.StatusCode);
+        Assert.Equal("", await res.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Delete_too_large_body_is_400_without_forwarding()
+    {
+        var calls = _factory.Api.SendRawCalls;
+        var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Delete, "/cloud/benchmarks/sub-1")
+        {
+            Content = new System.Net.Http.StringContent(new string('x', 8 * 1024), System.Text.Encoding.UTF8, "application/json"),
+        };
+        var res = await DesktopClient().SendAsync(req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal(calls, _factory.Api.SendRawCalls);
+    }
 }
