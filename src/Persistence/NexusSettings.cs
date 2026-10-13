@@ -1438,6 +1438,7 @@ public sealed class DevicesSettings
     public Dictionary<string, LianLiWirelessScreenSettings> TlLcdScreens { get; set; } = new();
     public StrimerLightingSettings StrimerLighting { get; set; } = new();
     public Galahad2LightingSettings Galahad2Lighting { get; set; } = new();
+    public AsiahorseUmbraSettings AsiahorseUmbra { get; set; } = new();
     public HydroShift2LightingSettings HydroShift2Lighting { get; set; } = new();
     public HydroShift2CurveSettings HydroShift2Curve { get; set; } = new();
     public CorsairSettings Corsair { get; set; } = new();
@@ -2012,6 +2013,36 @@ public sealed class Galahad2LightingSettings
     public int Brightness { get; set; } = 4;
     public string InnerColor { get; set; } = "#FFFFFF";
     public string OuterColor { get; set; } = "#FFFFFF";
+    public List<string> Colors { get; set; } = new();
+}
+
+public sealed class AsiahorseUmbraSettings
+{
+    /// <summary>"nexus" streams the lighting engine, "firmware" runs a device effect, "argbInput" passes the ARGB input header through.</summary>
+    public string Source { get; set; } = "nexus";
+    public bool LightOn { get; set; } = true;
+    /// <summary>"sync", "async" or "merge": which firmware effect group Source "firmware" plays.</summary>
+    public string Group { get; set; } = "sync";
+    public UmbraEffectGroupSettings Sync { get; set; } = new();
+    public UmbraEffectGroupSettings Merge { get; set; } = new();
+    /// <summary>Per-port effect state keyed by 0-based port index.</summary>
+    public Dictionary<string, UmbraEffectGroupSettings> Async { get; set; } = new();
+    /// <summary>True lets the fans follow the motherboard PWM header, which withholds the cooling channel.</summary>
+    public bool FanSyncMb { get; set; }
+}
+
+public sealed class UmbraEffectGroupSettings
+{
+    public string Effect { get; set; } = "rainbow";
+    /// <summary>Last values per effect key, so switching back restores them.</summary>
+    public Dictionary<string, UmbraEffectValues> Values { get; set; } = new();
+}
+
+public sealed class UmbraEffectValues
+{
+    public int Speed { get; set; } = 3;
+    public int Brightness { get; set; } = 3;
+    public string Direction { get; set; } = "forward";
     public List<string> Colors { get; set; } = new();
 }
 
