@@ -111,8 +111,9 @@ internal static class OnboardingRoutes
             return Results.Ok(new DashboardBannerDto { DismissedKey = key });
         }).LocalhostOnly();
 
-        // Replays the whole sequence. The two import latches are cleared as
-        // well, or the import step is silently skipped - they are per-app flags
+        // Replays the whole sequence. The import latches (two offered flags and
+        // the FanControl completed flag) are cleared as well, or the import
+        // step is silently skipped - they are per-app flags
         // the migration routes own, not onboarding ones. An app that is no
         // longer installed still will not be offered: that gate also requires
         // live detection.
@@ -127,6 +128,7 @@ internal static class OnboardingRoutes
                 s.ImmersiveSwipeOnboardingCompleted = false;
                 s.Nexus2MigrationOffered = false;
                 s.FanControlImportOffered = false;
+                s.FanControlImportCompleted = false;
             });
             // Re-close, or notifications keep firing through the replay.
             Nexus.Service.Notifications.NotificationGate.Initialize(onboardingComplete: false);

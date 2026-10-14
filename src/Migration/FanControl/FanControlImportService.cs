@@ -193,6 +193,23 @@ public sealed class FanControlImportService
         var derived = FanProfiles.DerivePresetFromCurves(_store, _fans);
         _store.Update(s => s.Cooling.ActivePreset = derived);
 
+        var appliedAny = response.CurvesImported > 0
+            || response.CalibrationsImported > 0
+            || response.NamesImported > 0
+            || response.OffsetsImported > 0
+            || response.ManualImported > 0;
+        if (appliedAny && !_store.Load().FanControlImportCompleted)
+        {
+            // Double-check under the store lock so two racing applies write once.
+            _store.Update(s =>
+            {
+                if (!s.FanControlImportCompleted)
+                {
+                    s.FanControlImportCompleted = true;
+                }
+            });
+        }
+
         return response;
     }
 
