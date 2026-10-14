@@ -104,7 +104,7 @@ public sealed class FanControlStatusDto
     public string? Version { get; set; }
     public string? InstallLocation { get; set; }
     public List<FanControlConfigDto> Configs { get; set; } = new();
-    /// <summary>True when the onboarding screen should offer the import: detected, importable, and not yet dismissed.</summary>
+    /// <summary>True when the onboarding screen should offer the import: detected, importable, not yet dismissed, and not yet imported.</summary>
     public bool Pending { get; set; }
     /// <summary>True once any category has been imported. Survives an uninstall.</summary>
     public bool Completed { get; set; }

@@ -387,9 +387,11 @@ public class FanControlImportEndToEndTests
     {
         var (import, _, store) = Build();
 
-        var result = import.Apply(null, Array.Empty<string>());
+        // A category the importer does not know passes the empty-selection
+        // guard and succeeds, yet imports nothing.
+        var result = import.Apply(null, new[] { "unknown-category" });
 
-        Assert.True(result.Error);
+        Assert.False(result.Error);
         Assert.False(store.Load().FanControlImportCompleted);
     }
 }
