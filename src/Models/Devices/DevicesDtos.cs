@@ -265,7 +265,8 @@ public class LightingDevice
     public List<string> ConflictAppIds { get; set; } = new();
     /// <summary>Id of the curated device handler whose Nexus Control gate claims this card's hardware (Lian Li / Corsair hubs). The conflict UI folds such cards into that handler's row, since turning the gate off disconnects the provider and drops the cards. Null for OpenRGB, smart-light and Hyte/iBUYPOWER cards.</summary>
     public string? ControlHandlerId { get; set; }
-    /// <summary>Set when the card's lighting is set on its device page rather than by the Lighting page: <see cref="ReasonFirmware"/> (an effect the device plays itself) or <see cref="ReasonArgbInput"/> (follows a motherboard ARGB header). The engine has no structure or frame for such a card. Null when the Lighting page drives it.</summary>
+    /// <summary>Set when the card's lighting is set on its device page rather than by the Lighting page: <see cref="ReasonFirmware"/> (an effect the device plays itself) or <see cref="ReasonArgbInput"/> (follows a motherboard ARGB header). The engine has no structure or frame for such a card. Null when the Lighting page drives it; omitted from the wire then, because the HTTP options write nulls and the web reads a present null as a device-page card.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? DevicePageReason { get; set; }
 
     public const string ReasonFirmware = "firmware";
