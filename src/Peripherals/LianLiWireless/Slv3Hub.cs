@@ -235,7 +235,6 @@ public sealed class Slv3Hub : IDisposable
     // shows it).
     private const int RgbHeaderRepeats = 4;
     private const int RgbHeaderGapMs = 20;
-    internal int HeaderGapMs { get; set; } = RgbHeaderGapMs;
 
     // Rolling-window uploads. The chain pauses playback while an upload
     // addressed to it is in flight, so the headers go back to back under one
@@ -257,7 +256,6 @@ public sealed class Slv3Hub : IDisposable
 
     // Seeded so a restart does not replay the index a chain last reported.
     private byte _effectCounter = (byte)Environment.TickCount64;
-    private readonly Dictionary<string, byte[]> _lastSentEffectIndex = new(StringComparer.Ordinal);
 
     // Device-list records span more than one page once enough chains are bound
     // (up to MaxSlot, plus non-fan devices), so the poll requests
@@ -2459,13 +2457,13 @@ public sealed class Slv3Hub : IDisposable
     /// <summary>
     /// <see cref="SendRgbAnimation"/> for one rolling playback window, re-sent
     /// every fraction of a second while the chain keeps playing: uploaded with
-    /// the window profile.
+    /// the window profile and a chain-safe effect index.
     /// </summary>
     public async Task<bool> SendRgbWindowAsync(
         string macHex, byte[] frames, int ledCount, int frameCount, double intervalTicks, int brightnessPercent)
     {
         var raw = Slv3RgbFrame.BuildFrameBuffer(frames, brightnessPercent);
-        if (!TryPrepareUpload(macHex, raw, ledCount, frameCount, intervalTicks, out var channel, out var rxType, out var packets, out var effectIndex))
+        if (!TryPrepareUpload(macHex, raw, ledCount, frameCount, intervalTicks, window: true, out var channel, out var rxType, out var packets, out _))
         {
             return false;
         }
@@ -2492,7 +2490,6 @@ public sealed class Slv3Hub : IDisposable
                     }
                 }
             }
-            NoteEffectIndexSentLocked(macHex, effectIndex);
             NoteConfigChangedLocked();
         }
         // The late passes' cost is booked at decision time so a concurrent
@@ -2532,11 +2529,9 @@ public sealed class Slv3Hub : IDisposable
     // A chain can misparse effect-index bytes as a bind target and re-bind off
     // our pipe, so the first three bytes are its own rx/channel/ordinal (a
     // misparse re-binds it in place). A chain ignores an upload carrying the
-    // index it already shows, so the counter skips the reported and the last
-    // sent value (the report lags an upload that landed after the poll).
+    // index it already reports, so the counter skips that value.
     private byte[] NextSafeEffectIndexLocked(Slv3DeviceRecord record)
     {
-        _lastSentEffectIndex.TryGetValue(Convert.ToHexString(record.Mac), out var lastSent);
         byte[] idx;
         do
         {
@@ -2547,21 +2542,12 @@ public sealed class Slv3Hub : IDisposable
             }
             idx = new byte[] { record.RxType, record.Channel, BindOrdinalLocked(record.Mac), _effectCounter };
         }
-        while ((record.EffectIndex is { Length: 4 } && idx.AsSpan().SequenceEqual(record.EffectIndex))
-            || (lastSent is not null && idx.AsSpan().SequenceEqual(lastSent)));
+        while (record.EffectIndex is { Length: 4 } && idx.AsSpan().SequenceEqual(record.EffectIndex));
         return idx;
     }
 
-    private void NoteEffectIndexSentLocked(string macHex, byte[] effectIndex)
-    {
-        if (TryParseMac(macHex, out var mac))
-        {
-            _lastSentEffectIndex[Convert.ToHexString(mac)] = effectIndex;
-        }
-    }
-
     private bool TryPrepareUpload(
-        string macHex, byte[] raw, int ledCount, int frameCount, double intervalMs,
+        string macHex, byte[] raw, int ledCount, int frameCount, double intervalMs, bool window,
         out byte channel, out byte rxType, out byte[][] packets, out byte[] effectIndex)
     {
         channel = 0;
@@ -2589,7 +2575,9 @@ public sealed class Slv3Hub : IDisposable
                 return false;
             }
 
-            effectIndex = NextSafeEffectIndexLocked(record);
+            effectIndex = window
+                ? NextSafeEffectIndexLocked(record)
+                : Slv3RgbFrame.BuildEffectIndex(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             packets = Slv3RgbFrame.BuildPackets(
                 record.Mac, _masterMac, effectIndex, compressed, ledCount, frameCount, intervalMs);
             channel = record.Channel;
@@ -2604,7 +2592,7 @@ public sealed class Slv3Hub : IDisposable
         string macHex, byte[] raw, int ledCount, int frameCount, double intervalMs, int dataPasses, out string effectIndexHex)
     {
         effectIndexHex = "";
-        if (!TryPrepareUpload(macHex, raw, ledCount, frameCount, intervalMs, out var channel, out var rxType, out var packets, out var effectIndex))
+        if (!TryPrepareUpload(macHex, raw, ledCount, frameCount, intervalMs, window: false, out var channel, out var rxType, out var packets, out var effectIndex))
         {
             return false;
         }
@@ -2616,7 +2604,7 @@ public sealed class Slv3Hub : IDisposable
         {
             if (i > 0)
             {
-                Thread.Sleep(HeaderGapMs);
+                Thread.Sleep(RgbHeaderGapMs);
             }
             if (!SendRfPayload(channel, rxType, packets[0]))
             {
@@ -2642,7 +2630,6 @@ public sealed class Slv3Hub : IDisposable
                     }
                 }
             }
-            NoteEffectIndexSentLocked(macHex, effectIndex);
             NoteConfigChangedLocked();
         }
 
