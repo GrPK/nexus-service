@@ -122,4 +122,24 @@ public sealed class DeckLayoutPolicyTests
 
         Assert.Equal(privileged, DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), null));
     }
+
+    [Theory]
+    [InlineData("steam://rungameid/730", true, false)]
+    [InlineData("steam://rungameid/731", false, true)]
+    [InlineData("C:\\\\Games\\\\a.exe", true, false)]
+    [InlineData("C:\\\\Games\\\\b.exe", false, true)]
+    public void LaunchApp_ListedDirectIdsStayUnprivileged(string appId, bool listed, bool privileged)
+    {
+        var previous = DeckLayoutPolicy.ListedAppResolver;
+        DeckLayoutPolicy.ListedAppResolver = id => listed;
+        try
+        {
+            var action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"" + appId + "\"}}";
+            Assert.Equal(privileged, DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), null));
+        }
+        finally
+        {
+            DeckLayoutPolicy.ListedAppResolver = previous;
+        }
+    }
 }

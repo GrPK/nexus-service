@@ -24,6 +24,14 @@ public static class DeckLayoutPolicy
         "openFile", "openFolder", "hotkey", "hotkeySwitch", "text", "playAudio",
     };
 
+    /// <summary>Reports whether the shortcuts provider lists an app id; set at startup. Unset or false makes a direct launchApp target privileged.</summary>
+    internal static Func<string, bool>? ListedAppResolver { get; set; }
+
+    private static bool IsPrivilegedLaunchApp(DeckAction action) =>
+        action.Type == "launchApp" &&
+        Nexus.Service.Activity.ShortcutTargets.IsDirectTarget(action.AppId) &&
+        !(ListedAppResolver?.Invoke(action.AppId!.Trim()) ?? false);
+
     /// <summary>The deck config a deck widget carries under <c>config.deck</c>, or null for any other widget.</summary>
     public static DeckConfig? ReadDeckConfig(PanelWidgetDto widget)
     {
@@ -162,8 +170,7 @@ public static class DeckLayoutPolicy
         {
             yield break;
         }
-        if (PrivilegedTypes.Contains(action.Type) ||
-            (action.Type == "launchApp" && Nexus.Service.Activity.ShortcutTargets.IsDirectTarget(action.AppId)))
+        if (PrivilegedTypes.Contains(action.Type) || IsPrivilegedLaunchApp(action))
         {
             yield return action;
             yield break;
