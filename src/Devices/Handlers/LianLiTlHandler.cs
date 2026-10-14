@@ -15,7 +15,8 @@ public sealed class LianLiTlHandler : IDeviceHandler
     }
 
     public string Id => "lianli-tl";
-    public string Name => "Lian Li Uni Fan TL";
+    public const string DisplayName = "Lian Li Uni Fan TL";
+    public string Name => DisplayName;
     public string Category => "hub";
 
     public IReadOnlyList<UsbId> Identifiers { get; }

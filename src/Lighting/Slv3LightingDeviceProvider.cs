@@ -154,27 +154,24 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
         if (!_hub.IsConnected) return resp;
         var settings = _store.Load();
         var slot = 0;
-        foreach (var structure in BuildStructures())
+        // Chains playing the motherboard input keep cards that only point at the device page, after the
+        // driven chains so their default slots still match BuildFrames.
+        foreach (var playsArgb in new[] { false, true })
         {
-            var iconType = IsStrimerStructure(structure) ? "ledstrip" : IsHydroShiftStructure(structure) ? "cooler" : "fan";
-            foreach (var zone in ZoneResolution.Resolve(structure, settings))
+            var reason = playsArgb ? LightingDevice.ReasonArgbInput : null;
+            foreach (var structure in BuildStructures(playsArgb))
             {
-                resp.Devices.Add(BuildCard(structure, zone, slot++, settings, iconType));
-            }
-        }
-        var chains = settings.Devices.LianLiWireless.Chains;
-        foreach (var fan in _hub.State.Fans)
-        {
-            if (fan.BoundToUs && PlaysMotherboardArgb(fan, chains))
-            {
-                resp.DevicePageDevices.Add(DevicePageLightingDevice.For("lianli-wireless", DevicePageLightingDevice.ReasonArgbInput));
-                break;
+                var iconType = IsStrimerStructure(structure) ? "ledstrip" : IsHydroShiftStructure(structure) ? "cooler" : "fan";
+                foreach (var zone in ZoneResolution.Resolve(structure, settings))
+                {
+                    resp.Devices.Add(BuildCard(structure, zone, slot++, settings, iconType, reason));
+                }
             }
         }
         return resp;
     }
 
-    private static LightingDevice BuildCard(DeviceStructure structure, ResolvedZone zone, int slot, NexusSettings settings, string iconType)
+    private static LightingDevice BuildCard(DeviceStructure structure, ResolvedZone zone, int slot, NexusSettings settings, string iconType, string? devicePageReason)
     {
         var disabled = settings.Devices.DisabledLightingDevices;
         var prefs = settings.Devices.LightingDevicePrefs;
@@ -212,6 +209,7 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
             ZoneResizable = false,
             DeviceId = structure.DeviceId,
             ZoneCustomizable = true,
+            DevicePageReason = devicePageReason,
         };
     }
 
@@ -370,16 +368,19 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
         return deviceId.StartsWith(prefix, StringComparison.Ordinal) ? deviceId[prefix.Length..] : "";
     }
 
-    /// <summary>Every currently-bound chain as a partitionable structure. Skips a chain with no LEDs to build.</summary>
-    internal List<DeviceStructure> BuildStructures()
+    /// <summary>Every currently-bound chain the engine drives, as a partitionable structure. Skips a chain with no LEDs to build.</summary>
+    internal List<DeviceStructure> BuildStructures() => BuildStructures(playsArgb: false);
+
+    /// <summary>The bound chains whose motherboard input choice equals <paramref name="playsArgb"/>; true yields the cards-only set the engine never drives.</summary>
+    private List<DeviceStructure> BuildStructures(bool playsArgb)
     {
         var structures = new List<DeviceStructure>();
         var chains = _store.Load().Devices.LianLiWireless.Chains;
         foreach (var fan in _hub.State.Fans)
         {
             if (!fan.BoundToUs) continue;
-            // A chain playing its motherboard ARGB input has no cards of its own.
-            if (PlaysMotherboardArgb(fan, chains)) continue;
+            // A chain playing its motherboard ARGB input is not engine driven.
+            if (PlaysMotherboardArgb(fan, chains) != playsArgb) continue;
             if (Slv3Protocol.IsStrimerDevType((byte)fan.DevType))
             {
                 var ledCount = StrimerLedCountFor((byte)fan.DevType);

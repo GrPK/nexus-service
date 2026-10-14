@@ -31,21 +31,21 @@ public class StrimerLightingDeviceProviderTests
         Connect();
         var result = _provider.GetAll();
         Assert.Equal(12, result.Devices.Count);
-        Assert.Empty(result.DevicePageDevices);
+        Assert.All(result.Devices, d => Assert.Null(d.DevicePageReason));
     }
 
     [Fact]
-    public void Argb_sync_lists_the_strimer_as_set_on_its_device_page()
+    public void Argb_sync_keeps_marked_cards_but_no_structures_or_frames()
     {
         Connect();
         _store.Update(s => s.Devices.StrimerLighting.ArgbSync = true);
 
         var result = _provider.GetAll();
 
-        Assert.Empty(result.Devices);
-        var entry = Assert.Single(result.DevicePageDevices);
-        Assert.Equal("strimer", entry.HandlerId);
-        Assert.Equal("argbInput", entry.Reason);
+        Assert.Equal(12, result.Devices.Count);
+        Assert.All(result.Devices, d => Assert.Equal("argbInput", d.DevicePageReason));
+        Assert.Empty(_provider.GetStructures());
+        Assert.Empty(_provider.BuildFrames(0));
     }
 
     [Fact]

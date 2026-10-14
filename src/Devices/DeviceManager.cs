@@ -29,10 +29,6 @@ public sealed class DeviceManager
     // read fresh each call so a plugin registered at runtime is detected).
     private IEnumerable<IDeviceHandler> AllHandlers => _handlers.Concat(_registry.Handlers);
 
-    /// <summary>The name /devices/all lists for a handler, without enumerating USB; null for an unknown id.</summary>
-    public string? NameOf(string handlerId) =>
-        AllHandlers.FirstOrDefault(h => string.Equals(h.Id, handlerId, StringComparison.OrdinalIgnoreCase))?.Name;
-
     /// <summary>
     /// Enumerates USB devices, checks each handler, and returns the full device list.
     /// </summary>

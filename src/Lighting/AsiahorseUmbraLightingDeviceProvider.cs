@@ -67,13 +67,12 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
 
     private string BuildSignature()
     {
-        var settings = _store.Load();
-        if (!PublishesZones(settings))
+        if (!_hub.IsConnected)
         {
-            // The source takes part: firmware and ARGB input list the device under different reasons.
-            return _hub.IsConnected ? UmbraLightingPlan.SourceOf(settings.Devices.AsiahorseUmbra) : "none";
+            return "none";
         }
-        var sb = new StringBuilder();
+        // The source takes part: a source change flips the cards' device page reason.
+        var sb = new StringBuilder(UmbraLightingPlan.SourceOf(_store.Load().Devices.AsiahorseUmbra)).Append(':');
         foreach (var p in _hub.Snapshot.Ports)
         {
             sb.Append(p.LedCount).Append(',');
@@ -89,31 +88,29 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
     public GetLightingDevicesResponse GetAll()
     {
         var resp = new GetLightingDevicesResponse { IsInit = true };
-        var settings = _store.Load();
-        if (!PublishesZones(settings))
+        if (!_hub.IsConnected)
         {
-            if (_hub.IsConnected)
-            {
-                var source = UmbraLightingPlan.SourceOf(settings.Devices.AsiahorseUmbra);
-                resp.DevicePageDevices.Add(DevicePageLightingDevice.For(DeviceId, source == UmbraLightingPlan.SourceArgbInput
-                    ? DevicePageLightingDevice.ReasonArgbInput
-                    : DevicePageLightingDevice.ReasonFirmware));
-            }
             return resp;
         }
+        var settings = _store.Load();
+        // Off the Nexus source the cards stay listed, but the device page sets the look.
+        var source = UmbraLightingPlan.SourceOf(settings.Devices.AsiahorseUmbra);
+        var reason = source == UmbraLightingPlan.SourceNexus ? null
+            : source == UmbraLightingPlan.SourceArgbInput ? LightingDevice.ReasonArgbInput
+            : LightingDevice.ReasonFirmware;
         var ports = _hub.Snapshot.Ports;
         var slot = 0;
         for (var p = 0; p < ports.Length; p++)
         {
             if (ports[p].LedCount > 0)
             {
-                resp.Devices.Add(BuildCard(BuildPortStructure(p, ports[p].LedCount), slot++, settings));
+                resp.Devices.Add(BuildCard(BuildPortStructure(p, ports[p].LedCount), slot++, settings, reason));
             }
         }
         return resp;
     }
 
-    private static LightingDevice BuildCard(DeviceStructure structure, int slot, NexusSettings settings)
+    private static LightingDevice BuildCard(DeviceStructure structure, int slot, NexusSettings settings, string? devicePageReason)
     {
         var id = structure.DeviceId;
         var disabled = settings.Devices.DisabledLightingDevices;
@@ -150,6 +147,7 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
             ZoneResizable = false,
             DeviceId = id,
             ZoneCustomizable = false,
+            DevicePageReason = devicePageReason,
         };
     }
 

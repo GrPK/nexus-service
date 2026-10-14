@@ -40,7 +40,8 @@ public sealed class MappingApplyService
     {
         foreach (var card in _devices.GetAll().Devices)
         {
-            if (card.Id == id)
+            // A device-page card has no engine frame, so a mapping cannot apply to it.
+            if (card.Id == id && card.DevicePageReason is null)
                 return card;
         }
         return null;

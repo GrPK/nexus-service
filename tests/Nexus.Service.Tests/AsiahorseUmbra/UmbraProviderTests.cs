@@ -37,24 +37,39 @@ public class UmbraProviderTests
         Assert.Equal(new[] { 8, 12, 6 }, devices.Select(d => d.LedCount));
         Assert.All(devices, d => Assert.False(d.ZoneResizable));
         Assert.All(devices, d => Assert.Equal("asiahorse-umbra", d.ParentDeviceId));
-        Assert.Empty(provider.GetAll().DevicePageDevices);
+        Assert.All(devices, d => Assert.Null(d.DevicePageReason));
     }
 
     [Theory]
     [InlineData("firmware")]
     [InlineData("argbInput")]
-    public void Other_sources_publish_no_zones_structures_or_frames(string source)
+    public void Other_sources_keep_marked_cards_but_no_structures_or_frames(string source)
     {
         Connect((0, 8));
         _store.Update(s => s.Devices.AsiahorseUmbra.Source = source);
         var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
 
-        Assert.Empty(provider.GetAll().Devices);
+        var card = Assert.Single(provider.GetAll().Devices);
+        Assert.Equal("asiahorse-umbra:port:1", card.Id);
+        Assert.Equal(source, card.DevicePageReason);
         Assert.Empty(provider.GetStructures());
         Assert.Empty(provider.BuildFrames(0));
-        var entry = Assert.Single(provider.GetAll().DevicePageDevices);
-        Assert.Equal("asiahorse-umbra", entry.HandlerId);
-        Assert.Equal(source, entry.Reason);
+    }
+
+    [Fact]
+    public void Port_led_count_changes_raise_DevicesChanged()
+    {
+        Connect((0, 8));
+        var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
+        var changed = 0;
+        provider.DevicesChanged += () => changed++;
+        provider.OnHubStateUpdated();
+        changed = 0;
+
+        Connect((0, 12));
+        provider.OnHubStateUpdated();
+
+        Assert.Equal(1, changed);
     }
 
     [Fact]
@@ -81,7 +96,6 @@ public class UmbraProviderTests
         var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
 
         Assert.Empty(provider.GetAll().Devices);
-        Assert.Empty(provider.GetAll().DevicePageDevices);
         Assert.Empty(provider.GetStructures());
         Assert.Empty(provider.BuildFrames(0));
     }
@@ -172,7 +186,7 @@ public class UmbraProviderTests
         provider.OnHubStateUpdated();
 
         Assert.Equal(1, changed);
-        Assert.Empty(provider.GetAll().Devices);
+        Assert.Equal("firmware", Assert.Single(provider.GetAll().Devices).DevicePageReason);
     }
 
     // ── Cooling channel ──

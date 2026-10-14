@@ -101,11 +101,49 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
         }
     }
 
-    /// <summary>The TL controller has no per-LED path, so while connected its look is always set on its device page.</summary>
-    internal static DevicePageLightingDevice? TlDevicePageEntry(bool connected, TlLightingSettings lighting) =>
-        !connected ? null : DevicePageLightingDevice.For("lianli-tl", lighting.ArgbSync
-            ? DevicePageLightingDevice.ReasonArgbInput
-            : DevicePageLightingDevice.ReasonFirmware);
+    /// <summary>
+    /// The TL controller has no per-LED path, so while connected it gets one card that only points at its device page.
+    /// The protocol carries no LED count, so the count is the fan total (at least 1), which keeps the page from reading
+    /// the card as a failed detection.
+    /// </summary>
+    internal static LightingDevice? BuildTlCard(bool connected, Peripherals.LianLiTl.TlHubSnapshot snapshot, NexusSettings settings)
+    {
+        if (!connected)
+        {
+            return null;
+        }
+        const string id = "lianli-tl";
+        var fans = 0;
+        foreach (var count in snapshot.PortFanCounts)
+        {
+            fans += count;
+        }
+        var ledCount = Math.Max(1, fans);
+        settings.Lighting.DeviceLayouts.TryGetValue(id, out var layout);
+        return new LightingDevice
+        {
+            Id = id,
+            DeviceId = id,
+            ParentDeviceId = id,
+            Name = Devices.Handlers.LianLiTlHandler.DisplayName,
+            Type = "ledstrip",
+            IconType = "fan",
+            LedsOn = true,
+            Brightness = 100,
+            Saturation = 1f,
+            LedCount = ledCount,
+            EnabledLedCount = ledCount,
+            CanvasX = layout?.X ?? 0f,
+            CanvasY = layout?.Y ?? 0f,
+            CanvasW = layout?.W ?? 80f,
+            CanvasH = layout?.H ?? 80f,
+            CanvasRotation = ((((layout?.Rotation ?? 0) % 360) + 360) % 360),
+            ZoneIndex = 0,
+            ZoneType = "linear",
+            ControlHandlerId = id,
+            DevicePageReason = settings.Devices.TlLighting.ArgbSync ? LightingDevice.ReasonArgbInput : LightingDevice.ReasonFirmware,
+        };
+    }
 
     public bool IsConnected => _openRgb.IsConnected || _np50.IsConnected || _miniHub.IsConnected || _smartHub.IsConnected || _cnvs.IsConnected || _qseries.IsConnected || _keeb.IsConnected || _ibp.IsConnected || _lianLi.IsConnected || _lianLiWireless.IsConnected || _corsair.IsConnected || _strimer.IsConnected || _galahad2.IsConnected || _nollie.IsConnected || _kraken.IsConnected || _hydroShift2.IsConnected || _hydroShift2Curve.IsConnected || _galahad2Lcd.IsConnected || _umbra.IsConnected || _smart.IsConnected;
 
@@ -263,7 +301,6 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             foreach (var card in lianLi.Devices) card.ControlHandlerId = card.ParentDeviceId;
             rgb.Devices.AddRange(lianLi.Devices);
         }
-        rgb.DevicePageDevices.AddRange(lianLi.DevicePageDevices);
         var lianLiWireless = _lianLiWireless.GetAll();
         if (lianLiWireless.Devices.Count > 0)
         {
@@ -271,7 +308,6 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             TagControlHandler(lianLiWireless.Devices, "lianli-wireless");
             rgb.Devices.AddRange(lianLiWireless.Devices);
         }
-        rgb.DevicePageDevices.AddRange(lianLiWireless.DevicePageDevices);
         var corsair = _corsair.GetAll();
         if (corsair.Devices.Count > 0)
         {
@@ -286,7 +322,6 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             TagControlHandler(strimer.Devices, "strimer");
             rgb.Devices.AddRange(strimer.Devices);
         }
-        rgb.DevicePageDevices.AddRange(strimer.DevicePageDevices);
         var galahad2 = _galahad2.GetAll();
         if (galahad2.Devices.Count > 0)
         {
@@ -329,10 +364,9 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             TagControlHandler(umbra.Devices, AsiahorseUmbraLightingDeviceProvider.DeviceId);
             rgb.Devices.AddRange(umbra.Devices);
         }
-        rgb.DevicePageDevices.AddRange(umbra.DevicePageDevices);
-        if (TlDevicePageEntry(_tl.IsConnected, _store.Load().Devices.TlLighting) is { } tl)
+        if (BuildTlCard(_tl.IsConnected, _tl.Snapshot, _store.Load()) is { } tlCard)
         {
-            rgb.DevicePageDevices.Add(tl);
+            rgb.Devices.Add(tlCard);
         }
         var smartLights = _smart.GetAll();
         if (smartLights.Devices.Count > 0)

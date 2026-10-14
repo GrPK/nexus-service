@@ -60,17 +60,4 @@ public class DeviceHasPageTests
         Assert.False(items.Single(i => i.Id == "fan-hub").HasPage);
         Assert.False(items.Single(i => i.Id == "aw5").HasPage);
     }
-
-    [Fact]
-    public void NameOf_ReturnsTheHandlerNameTheDeviceListShows()
-    {
-        var manager = new DeviceManager(
-            new IDeviceHandler[] { TestHandlers.Cnvs() },
-            new StubUsbEnumerator(),
-            new PluginProviderRegistry(),
-            new DeviceControlGate(new InMemoryConfigStore()));
-
-        Assert.Equal("HYTE CNVS", manager.NameOf("cnvs"));
-        Assert.Null(manager.NameOf("missing"));
-    }
 }

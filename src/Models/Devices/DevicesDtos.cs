@@ -265,6 +265,11 @@ public class LightingDevice
     public List<string> ConflictAppIds { get; set; } = new();
     /// <summary>Id of the curated device handler whose Nexus Control gate claims this card's hardware (Lian Li / Corsair hubs). The conflict UI folds such cards into that handler's row, since turning the gate off disconnects the provider and drops the cards. Null for OpenRGB, smart-light and Hyte/iBUYPOWER cards.</summary>
     public string? ControlHandlerId { get; set; }
+    /// <summary>Set when the card's lighting is set on its device page rather than by the Lighting page: <see cref="ReasonFirmware"/> (an effect the device plays itself) or <see cref="ReasonArgbInput"/> (follows a motherboard ARGB header). The engine has no structure or frame for such a card. Null when the Lighting page drives it.</summary>
+    public string? DevicePageReason { get; set; }
+
+    public const string ReasonFirmware = "firmware";
+    public const string ReasonArgbInput = "argbInput";
 }
 
 public class GetLightingDevicesResponse
@@ -275,24 +280,6 @@ public class GetLightingDevicesResponse
     public List<Nexus.Service.Persistence.DeviceGroup> Groups { get; set; } = new();
     /// <summary>Cards stacked on one canvas frame and one selection, riding the list the same way.</summary>
     public List<Nexus.Service.Persistence.DeviceGroup> Stacks { get; set; } = new();
-    /// <summary>Connected devices whose lighting is set on their device page, so they have no cards here.</summary>
-    public List<DevicePageLightingDevice> DevicePageDevices { get; set; } = new();
-}
-
-public class DevicePageLightingDevice
-{
-    public const string ReasonFirmware = "firmware";
-    public const string ReasonArgbInput = "argbInput";
-
-    /// <summary>Device handler id, which keys the device page.</summary>
-    public string HandlerId { get; set; } = "";
-    /// <summary>The handler's name, filled by the route.</summary>
-    public string Name { get; set; } = "";
-    /// <summary><see cref="ReasonFirmware"/> (an effect the device plays itself) or <see cref="ReasonArgbInput"/> (follows a motherboard ARGB header).</summary>
-    public string Reason { get; set; } = "";
-
-    public static DevicePageLightingDevice For(string handlerId, string reason) =>
-        new() { HandlerId = handlerId, Reason = reason };
 }
 
 /// <summary>Whole-list replace for the user-made groups; the client owns order and membership.</summary>
