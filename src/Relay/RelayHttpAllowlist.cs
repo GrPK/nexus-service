@@ -76,6 +76,7 @@ public static class RelayHttpAllowlist
         "/ws",
         "/lighting/output",
         "/system/open-path", // opens arbitrary local files - LAN-only, never relayed
+        "/system/launch-uri", // launches a steam:// URI in the user session - desktop-only, never relayed
         "/system/pick-path", // opens a native OS dialog on the host - desktop-only, never relayed
         "/devices/firmware/flash", // irreversible flash - brick risk over a lossy tunnel
         "/panel/phone/pair-qr", // mints pair tokens - the desktop dashboard only

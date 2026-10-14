@@ -163,6 +163,12 @@ public static class SystemRoutes
         app.MapPost("/system/open-path", (OpenPathBody body, Nexus.Service.Actions.SystemActions actions) =>
             actions.OpenPathAsync(body.Path ?? ""));
 
+        // Hands an http, https or steam URI to the user's session. Desktop-only
+        // (no AllowPanel, denied on the relay): /system/open-url is panel-reachable
+        // and stays http/https.
+        app.MapPost("/system/launch-uri", (OpenUrlRequest body, Nexus.Service.Actions.SystemActions actions) =>
+            actions.LaunchUriAsync(body.Url ?? ""));
+
         // Native OS file/folder picker for the deck action Browse button
         // (openFile/openFolder ActionFields). Desktop-tier only - no
         // AllowPanel, and deliberately absent from RelayHttpAllowlist.cs -
