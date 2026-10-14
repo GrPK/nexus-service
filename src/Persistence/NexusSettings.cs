@@ -147,6 +147,9 @@ public sealed class NexusSettings
     /// <summary>Key of the home-dashboard banner the user last closed or opened; a banner shows only while its key differs.</summary>
     public string DashboardBannerDismissed { get; set; } = "";
 
+    /// <summary>Ids of floating onboarding hints the user dismissed. Global, not profile-scoped; replaced as a whole list on write.</summary>
+    public List<string> DismissedOnboardingHints { get; set; } = new();
+
     /// <summary>True once at least one Nexus 2 personalization category has been
     /// imported through the migration screen. Install-scoped like
     /// <see cref="Nexus2MigrationOffered"/>: excluded from CloneSettings and

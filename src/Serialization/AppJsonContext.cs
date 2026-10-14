@@ -168,6 +168,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Routes.OnboardingConflictsStepBody))]
 [JsonSerializable(typeof(Nexus.Service.Routes.PanelSwipeOnboardingDto))]
 [JsonSerializable(typeof(Nexus.Service.Routes.DashboardBannerDto))]
+[JsonSerializable(typeof(Nexus.Service.Routes.OnboardingHintDismissBody))]
 [JsonSerializable(typeof(Nexus.Service.Routes.Nexus2MigrationStatusDto))]
 [JsonSerializable(typeof(Nexus.Service.Routes.Nexus2MigrationDismissResponse))]
 [JsonSerializable(typeof(Nexus.Service.Routes.Nexus2PreviewCategoryDto))]
