@@ -268,6 +268,72 @@ public sealed class Nexus2MigrationRoutesTests
         }
     }
 
+    private (WebApplicationFactory<Program> factory, HttpClient client) BootWithFanCurves(string fixture)
+    {
+        var (service, _, _) = Nexus.Service.Tests.Migration.FanCurveServices.Service(fixture);
+        var factory = new NexusAppFactory().WithWebHostBuilder(b =>
+            b.ConfigureTestServices(s =>
+            {
+                s.RemoveAll<INexus2Detector>();
+                s.AddSingleton<INexus2Detector>(_detector);
+                s.RemoveAll<Nexus2MigrationService>();
+                s.AddSingleton(service);
+            }));
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", factory.Services.GetRequiredService<TokenService>().Token);
+        return (factory, client);
+    }
+
+    [Fact]
+    public async Task Status_pending_without_a_panel_record_when_a_fan_curve_would_import()
+    {
+        var (factory, client) = BootWithFanCurves("n2-217-final.json");
+        using (factory)
+        {
+            _detector.Result = new Nexus2DetectionResult(true, true, "2.17.1", true);
+
+            using var doc = JsonDocument.Parse(await (await client.GetAsync("/migration/nexus2")).Content.ReadAsStringAsync());
+            Assert.False(doc.RootElement.GetProperty("deviceEligible").GetBoolean());
+            Assert.True(doc.RootElement.GetProperty("pending").GetBoolean());
+        }
+    }
+
+    [Theory]
+    [InlineData("n2-217-easy-mode.json")]
+    [InlineData("n2-216-seeded.json")]
+    public async Task Status_not_pending_without_a_panel_record_when_no_fan_curve_would_import(string fixture)
+    {
+        var (factory, client) = BootWithFanCurves(fixture);
+        using (factory)
+        {
+            _detector.Result = new Nexus2DetectionResult(true, true, "2.17.1", true);
+
+            using var doc = JsonDocument.Parse(await (await client.GetAsync("/migration/nexus2")).Content.ReadAsStringAsync());
+            Assert.False(doc.RootElement.GetProperty("pending").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public async Task Status_fan_curve_offer_still_respects_offered_and_detected()
+    {
+        var (factory, client) = BootWithFanCurves("n2-217-final.json");
+        using (factory)
+        {
+            var store = factory.Services.GetRequiredService<IConfigStore>();
+            _detector.Result = new Nexus2DetectionResult(false, true, null, true);
+            using (var doc = JsonDocument.Parse(await (await client.GetAsync("/migration/nexus2")).Content.ReadAsStringAsync()))
+            {
+                Assert.False(doc.RootElement.GetProperty("pending").GetBoolean());
+            }
+
+            _detector.Result = new Nexus2DetectionResult(true, true, "2.17.1", true);
+            store.Update(s => s.Nexus2MigrationOffered = true);
+            using var offered = JsonDocument.Parse(await (await client.GetAsync("/migration/nexus2")).Content.ReadAsStringAsync());
+            Assert.False(offered.RootElement.GetProperty("pending").GetBoolean());
+        }
+    }
+
     [Fact]
     public async Task Status_not_pending_once_offered()
     {
