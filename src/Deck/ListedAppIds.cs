@@ -4,69 +4,125 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Nexus.Service.Activity;
+using Nexus.Service.Platform;
 
 namespace Nexus.Service.Deck;
 
-/// <summary>
-/// In-process set of the ids the shortcuts provider lists, refreshed on a
-/// background thread so DeckLayoutPolicy never waits on the helper RPC. A cold
-/// or empty set reports nothing as listed, which makes direct launchApp targets
-/// privileged (fail closed). Matches Id only, never display Name.
-/// </summary>
-public sealed class ListedAppIds
+/// <summary>A lookup frozen to one loaded set. Converts to Func so one request judges stored and incoming keys against the same data.</summary>
+public sealed class ListedAppSnapshot
 {
-    private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan EmptyRetry = TimeSpan.FromSeconds(15);
+    private readonly HashSet<string>? _ids;
+    private readonly IShortcutsProvider _shortcuts;
+
+    internal ListedAppSnapshot(HashSet<string>? ids, IShortcutsProvider shortcuts)
+    {
+        _ids = ids;
+        _shortcuts = shortcuts;
+    }
+
+    /// <summary>False until the first successful load; a cold snapshot lists nothing and must not drive a persisted decision.</summary>
+    public bool IsLoaded => _ids is not null;
+
+    public bool Contains(string id)
+    {
+        if (_ids is null)
+        {
+            return false;
+        }
+        if (_ids.Contains(id))
+        {
+            return true;
+        }
+        // macOS resolves a bundle path outside the scanned folders in-process; the
+        // background refresh keeps the provider's app list warm, so this stays cheap.
+        return OperatingSystem.IsMacOS() && _shortcuts.GetById(id) is { } s &&
+            string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static implicit operator Func<string, bool>(ListedAppSnapshot snapshot) => snapshot.Contains;
+}
+
+/// <summary>
+/// In-process set of the ids the shortcuts provider lists, kept fresh by one
+/// background loop so DeckLayoutPolicy never waits on the helper RPC. A cold
+/// set lists nothing, which makes direct launchApp targets privileged (fail
+/// closed). Matches Id only, never display Name.
+/// </summary>
+public sealed class ListedAppIds : IDisposable
+{
+    // Shorter than the provider's own app-list cache so the list stays warm.
+    private static readonly TimeSpan DefaultRefresh = TimeSpan.FromMinutes(4);
+    private static readonly TimeSpan DefaultRetry = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxRetry = TimeSpan.FromSeconds(60);
 
     private readonly IShortcutsProvider _shortcuts;
+    private readonly TimeSpan _refresh;
+    private readonly TimeSpan _retry;
+    private readonly CancellationTokenSource _stop = new();
+    private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private HashSet<string>? _ids;
-    private long _expiryTicks;
-    private int _refreshing;
 
-    public ListedAppIds(IShortcutsProvider shortcuts)
+    public ListedAppIds(IShortcutsProvider shortcuts) : this(shortcuts, DefaultRefresh, DefaultRetry)
+    {
+    }
+
+    internal ListedAppIds(IShortcutsProvider shortcuts, TimeSpan refresh, TimeSpan retry)
     {
         _shortcuts = shortcuts;
-        Refresh();
+        _refresh = refresh;
+        _retry = retry;
+        _ = Task.Run(() => RunAsync(_stop.Token));
     }
 
-    /// <summary>A lookup frozen to the current set, so one request judges stored and incoming keys against the same data.</summary>
-    public Func<string, bool> Snapshot()
-    {
-        if (Volatile.Read(ref _expiryTicks) <= DateTime.UtcNow.Ticks)
-        {
-            Refresh();
-        }
-        var ids = Volatile.Read(ref _ids);
-        return id => ids is not null && ids.Contains(id);
-    }
+    /// <summary>Completes after the first successful load.</summary>
+    internal Task Loaded => _loaded.Task;
 
-    private void Refresh()
+    public ListedAppSnapshot Snapshot() => new(Volatile.Read(ref _ids), _shortcuts);
+
+    public void Dispose() => _stop.Cancel();
+
+    private async Task RunAsync(CancellationToken ct)
     {
-        if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0)
+        var retry = _retry;
+        var failing = false;
+        while (!ct.IsCancellationRequested)
         {
-            return;
-        }
-        _ = Task.Run(() =>
-        {
-            var ttl = EmptyRetry;
+            var delay = _refresh;
             try
             {
-                var ids = new HashSet<string>(
-                    _shortcuts.GetAll().Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+                var ids = new HashSet<string>(_shortcuts.GetAll().Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
                 if (ids.Count > 0)
                 {
                     Volatile.Write(ref _ids, ids);
-                    ttl = Ttl;
+                    _loaded.TrySetResult();
+                    retry = _retry;
+                    failing = false;
+                }
+                else
+                {
+                    delay = retry;
+                    retry = TimeSpan.FromTicks(Math.Min(retry.Ticks * 2, MaxRetry.Ticks));
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                if (!failing)
+                {
+                    ServiceLog.Warn($"[deck] listed-app refresh failed, retrying with backoff: {ex.Message}");
+                    failing = true;
+                }
+                delay = retry;
+                retry = TimeSpan.FromTicks(Math.Min(retry.Ticks * 2, MaxRetry.Ticks));
             }
-            finally
+
+            try
             {
-                Volatile.Write(ref _expiryTicks, (DateTime.UtcNow + ttl).Ticks);
-                Volatile.Write(ref _refreshing, 0);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
             }
-        });
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
     }
 }

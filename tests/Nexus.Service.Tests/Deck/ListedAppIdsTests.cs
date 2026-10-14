@@ -1,6 +1,7 @@
+using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 using Nexus.Service.Activity;
 using Nexus.Service.Deck;
 using Nexus.Service.Models.Activity;
@@ -10,15 +11,19 @@ namespace Nexus.Service.Tests.Deck;
 
 public sealed class ListedAppIdsTests
 {
-    private sealed class SlowProvider : IShortcutsProvider
+    private sealed class ScriptedProvider : IShortcutsProvider
     {
-        public readonly ManualResetEventSlim Release = new(false);
+        public readonly ManualResetEventSlim Gate = new(false);
         public int GetAllCalls;
+        public int EmptyCalls;
 
         public IReadOnlyList<Shortcut> GetAll()
         {
-            Interlocked.Increment(ref GetAllCalls);
-            Release.Wait(5000);
+            Gate.Wait(5000);
+            if (Interlocked.Increment(ref GetAllCalls) <= EmptyCalls)
+            {
+                return [];
+            }
             return [new Shortcut { Id = "steam://rungameid/1", Name = "Game One" }];
         }
 
@@ -29,29 +34,36 @@ public sealed class ListedAppIdsTests
     }
 
     [Fact]
-    public void ColdSet_FailsClosedWithoutBlocking_ThenListsIdOnly()
+    public async Task ColdSet_FailsClosedWithoutBlocking_ThenListsIdOnly()
     {
-        var provider = new SlowProvider();
-        var ids = new ListedAppIds(provider);
+        var provider = new ScriptedProvider();
+        using var ids = new ListedAppIds(provider, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
 
-        var sw = Stopwatch.StartNew();
         var cold = ids.Snapshot();
-        Assert.True(sw.ElapsedMilliseconds < 1000);
-        Assert.False(cold("steam://rungameid/1"));
-        ids.Snapshot();
-        ids.Snapshot();
+        Assert.False(cold.IsLoaded);
+        Assert.False(cold.Contains("steam://rungameid/1"));
 
-        provider.Release.Set();
-        var deadline = Stopwatch.StartNew();
-        while (!ids.Snapshot()("steam://rungameid/1") && deadline.ElapsedMilliseconds < 5000)
-        {
-            Thread.Sleep(10);
-        }
+        provider.Gate.Set();
+        await ids.Loaded.WaitAsync(TimeSpan.FromSeconds(5));
 
         var warm = ids.Snapshot();
-        Assert.True(warm("steam://rungameid/1"));
-        Assert.True(warm("STEAM://rungameid/1"));
-        Assert.False(warm("Game One"));
-        Assert.Equal(1, provider.GetAllCalls);
+        Assert.True(warm.IsLoaded);
+        Assert.True(warm.Contains("steam://rungameid/1"));
+        Assert.True(warm.Contains("STEAM://rungameid/1"));
+        Assert.False(warm.Contains("Game One"));
+        Assert.False(cold.IsLoaded);
+    }
+
+    [Fact]
+    public async Task EmptyFirstLoad_IsRetriedInTheBackgroundUntilItSucceeds()
+    {
+        var provider = new ScriptedProvider { EmptyCalls = 2 };
+        provider.Gate.Set();
+        using var ids = new ListedAppIds(provider, TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(1));
+
+        await ids.Loaded.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(ids.Snapshot().Contains("steam://rungameid/1"));
+        Assert.Equal(3, provider.GetAllCalls);
     }
 }

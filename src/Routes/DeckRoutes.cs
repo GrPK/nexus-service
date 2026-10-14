@@ -484,6 +484,10 @@ public static class DeckRoutes
             if (!id.StartsWith("streamdeck:", System.StringComparison.Ordinal))
             {
                 var lazy = CreateLazyWidgetInstance(store, id, cols, rows, ServiceTokenRequests.HasServiceToken(ctx, tokens), listed.Snapshot());
+                if (lazy is null)
+                {
+                    return Results.Json(ApiResponse.Fail("listed apps still loading"), AppJsonContext.Default.ApiResponse, statusCode: 503);
+                }
                 return Results.Json(new DeckInstanceResponse { Instance = lazy }, AppJsonContext.Default.DeckInstanceResponse);
             }
             var serial = id["streamdeck:".Length..];
@@ -638,8 +642,17 @@ public static class DeckRoutes
     /// plugging in a second Stream Deck, not starting a fresh layout); only a
     /// host with no presets at all gets a fresh empty one at the widget's grid.
     /// </summary>
-    private static DeckInstance CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop, System.Func<string, bool> isListed)
+    private static DeckInstance? CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop, ListedAppSnapshot listedSnapshot)
     {
+        System.Func<string, bool> isListed = listedSnapshot;
+        // The join below is persisted, so a cold set must not decide it. Only when a
+        // cold answer could differ from a loaded one does the caller retry.
+        if (!isDesktop && !listedSnapshot.IsLoaded &&
+            store.Load().StreamDeck.Presets.Any(p =>
+                DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any() != DeckLayoutPolicy.PrivilegedActions(p.Deck, _ => true).Any()))
+        {
+            return null;
+        }
         DeckInstance? created = null;
         store.Update(s =>
         {
