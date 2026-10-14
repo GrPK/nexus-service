@@ -484,10 +484,6 @@ public static class DeckRoutes
             if (!id.StartsWith("streamdeck:", System.StringComparison.Ordinal))
             {
                 var lazy = CreateLazyWidgetInstance(store, id, cols, rows, ServiceTokenRequests.HasServiceToken(ctx, tokens), listed.Snapshot());
-                if (lazy is null)
-                {
-                    return Results.Json(ApiResponse.Fail("listed apps still loading"), AppJsonContext.Default.ApiResponse, statusCode: 503);
-                }
                 return Results.Json(new DeckInstanceResponse { Instance = lazy }, AppJsonContext.Default.DeckInstanceResponse);
             }
             var serial = id["streamdeck:".Length..];
@@ -642,25 +638,8 @@ public static class DeckRoutes
     /// plugging in a second Stream Deck, not starting a fresh layout); only a
     /// host with no presets at all gets a fresh empty one at the widget's grid.
     /// </summary>
-    private static DeckInstance? CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop, ListedAppSnapshot listedSnapshot)
+    private static DeckInstance CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop, System.Func<string, bool> isListed)
     {
-        System.Func<string, bool> isListed = listedSnapshot;
-        // The join below is persisted, so a cold set must not decide it. When a cold
-        // answer could differ from a loaded one: during boot the caller retries; once
-        // the loader has settled and the set is still empty, answer fail-closed without
-        // persisting, so the widget loads and the real join happens after a load.
-        if (!isDesktop && !listedSnapshot.IsLoaded &&
-            store.Load().StreamDeck.Presets.Any(p =>
-                DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any() != DeckLayoutPolicy.PrivilegedActions(p.Deck, _ => true).Any()))
-        {
-            if (!listedSnapshot.Settled)
-            {
-                return null;
-            }
-            var transientId = store.Load().StreamDeck.Presets
-                .FirstOrDefault(p => !DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any())?.Id;
-            return new DeckInstance { Mode = "custom", ActivePresetId = transientId };
-        }
         DeckInstance? created = null;
         store.Update(s =>
         {

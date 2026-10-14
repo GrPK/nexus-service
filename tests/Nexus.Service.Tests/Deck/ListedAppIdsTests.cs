@@ -16,11 +16,9 @@ public sealed class ListedAppIdsTests
         public readonly ManualResetEventSlim Gate = new(false);
         public int GetAllCalls;
         public int EmptyCalls;
-        public readonly TaskCompletionSource FirstCall = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IReadOnlyList<Shortcut> GetAll()
         {
-            FirstCall.TrySetResult();
             Gate.Wait(5000);
             if (Interlocked.Increment(ref GetAllCalls) <= EmptyCalls)
             {
@@ -42,18 +40,16 @@ public sealed class ListedAppIdsTests
         using var ids = new ListedAppIds(provider, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
 
         var cold = ids.Snapshot();
-        Assert.False(cold.IsLoaded);
         Assert.False(cold.Contains("steam://rungameid/1"));
 
         provider.Gate.Set();
         await ids.Loaded.WaitAsync(TimeSpan.FromSeconds(5));
 
         var warm = ids.Snapshot();
-        Assert.True(warm.IsLoaded);
         Assert.True(warm.Contains("steam://rungameid/1"));
         Assert.True(warm.Contains("STEAM://rungameid/1"));
         Assert.False(warm.Contains("Game One"));
-        Assert.False(cold.IsLoaded);
+        Assert.False(cold.Contains("steam://rungameid/1"));
     }
 
     [Fact]
@@ -67,20 +63,5 @@ public sealed class ListedAppIdsTests
 
         Assert.True(ids.Snapshot().Contains("steam://rungameid/1"));
         Assert.Equal(3, provider.GetAllCalls);
-    }
-
-    [Fact]
-    public async Task EmptyProvider_BecomesSettledButStaysNotLoaded()
-    {
-        var provider = new ScriptedProvider { EmptyCalls = int.MaxValue };
-        provider.Gate.Set();
-        using var ids = new ListedAppIds(provider, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
-
-        await provider.FirstCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        var snapshot = ids.Snapshot();
-        Assert.True(snapshot.Settled);
-        Assert.False(snapshot.IsLoaded);
-        Assert.False(snapshot.Contains("steam://rungameid/1"));
     }
 }

@@ -13,18 +13,12 @@ public sealed class ListedAppSnapshot
 {
     private readonly HashSet<string>? _ids;
 
-    internal ListedAppSnapshot(HashSet<string>? ids, bool settled)
+    internal ListedAppSnapshot(HashSet<string>? ids)
     {
         _ids = ids;
-        Settled = settled;
     }
 
-    /// <summary>False until the first successful load; a cold snapshot lists nothing and must not drive a persisted decision.</summary>
-    public bool IsLoaded => _ids is not null;
-
-    /// <summary>True once a load has been attempted or the startup grace has passed, so a still-cold set is a real answer rather than a boot race.</summary>
-    public bool Settled { get; }
-
+    /// <summary>A cold snapshot (no successful load yet) lists nothing, so direct launchApp targets are privileged.</summary>
     public bool Contains(string id) => _ids is not null && _ids.Contains(id);
 
     public static implicit operator Func<string, bool>(ListedAppSnapshot snapshot) => snapshot.Contains;
@@ -48,11 +42,7 @@ public sealed class ListedAppIds : IDisposable
     private readonly TimeSpan _retry;
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private static readonly TimeSpan StartupGrace = TimeSpan.FromSeconds(30);
-
-    private readonly long _startTicks = DateTime.UtcNow.Ticks;
     private HashSet<string>? _ids;
-    private int _attempts;
 
     public ListedAppIds(IShortcutsProvider shortcuts) : this(shortcuts, DefaultRefresh, DefaultRetry)
     {
@@ -69,9 +59,7 @@ public sealed class ListedAppIds : IDisposable
     /// <summary>Completes after the first successful load.</summary>
     internal Task Loaded => _loaded.Task;
 
-    public ListedAppSnapshot Snapshot() => new(
-        Volatile.Read(ref _ids),
-        Volatile.Read(ref _attempts) > 0 || DateTime.UtcNow.Ticks - _startTicks > StartupGrace.Ticks);
+    public ListedAppSnapshot Snapshot() => new(Volatile.Read(ref _ids));
 
     public void Dispose()
     {
@@ -88,7 +76,6 @@ public sealed class ListedAppIds : IDisposable
             var delay = _refresh;
             try
             {
-                Interlocked.Increment(ref _attempts);
                 var ids = new HashSet<string>(_shortcuts.GetAll().Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
                 if (ids.Count > 0)
                 {
