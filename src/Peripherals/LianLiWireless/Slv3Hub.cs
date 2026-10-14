@@ -116,13 +116,14 @@ public sealed class Slv3Hub : IDisposable
     private readonly Dictionary<string, AutoRebindState> _moves = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RebindSighting> _rebindSeen = new(StringComparer.Ordinal);
     internal const int RebindConfirmPolls = 3;
-    // A chain back on the master it was retaken from within this window is
-    // held by a live master. Such a master re-asserts within seconds, while
-    // corruption was seen once in nine hours, so a later return is corruption.
+    // A chain back on the master it was retaken from within this window is held by a live master.
     internal const long PullBackWindowMs = 600_000;
+    // A neighbor mark lapses after this, so a wrong mark heals and a real neighbor is tugged once per lapse.
+    internal const long NeighborMarkMs = 3_600_000;
     private readonly Dictionary<string, byte[]> _retakeFrom = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Retaken> _retaken = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, byte[]> _neighbourMaster = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Retaken> _neighborMaster = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RebindSighting> _pullSeen = new(StringComparer.Ordinal);
 
     private ISlv3Transport? _tx;
     private ISlv3Transport? _rx;
@@ -904,8 +905,8 @@ public sealed class Slv3Hub : IDisposable
         {
             return false;
         }
-        if (_neighbourMaster.TryGetValue(Convert.ToHexString(record.Mac), out var near)
-            && Slv3Protocol.MacEquals(near, record.MasterMac))
+        if (_neighborMaster.TryGetValue(Convert.ToHexString(record.Mac), out var near)
+            && Slv3Protocol.MacEquals(near.Master, record.MasterMac) && _nowMs() - near.AtMs < NeighborMarkMs)
         {
             return false;
         }
@@ -921,30 +922,54 @@ public sealed class Slv3Hub : IDisposable
         return true;
     }
 
-    // A chain that returns to the master it was just retaken from is held by
-    // a live master: it is left alone while it sits there.
-    private void NotePullBackLocked(string key, Slv3DeviceRecord record, long now)
+    // A chain that keeps returning to the master it was retaken from is held by a live master.
+    private void NotePullBackLocked(string key, Slv3DeviceRecord record)
     {
-        if (!_retaken.TryGetValue(key, out var retaken))
+        if (!_retaken.TryGetValue(key, out var retaken) || !Slv3Protocol.MacEquals(retaken.Master, record.MasterMac))
+        {
+            _pullSeen.Remove(key);
+            return;
+        }
+        if (!_knownChains.TryGetValue(key, out var chain) || chain.Poll != _devicePolls)
         {
             return;
         }
-        if (now - retaken.AtMs > PullBackWindowMs)
+        _pullSeen.TryGetValue(key, out var seen);
+        if (seen.LastPoll != _devicePolls)
         {
-            _retaken.Remove(key);
-            return;
+            seen = new RebindSighting(_devicePolls, seen.Count + 1);
+            _pullSeen[key] = seen;
         }
-        if (!Slv3Protocol.MacEquals(retaken.Master, record.MasterMac)
-            || !_knownChains.TryGetValue(key, out var chain) || chain.Poll != _devicePolls)
+        if (seen.Count < RebindConfirmPolls)
         {
             return;
         }
         _retaken.Remove(key);
-        _neighbourMaster[key] = retaken.Master;
+        _pullSeen.Remove(key);
+        _neighborMaster[key] = new Retaken(retaken.Master, _nowMs());
         _pending.Remove(key);
         _rebind.Remove(key);
         _rebindSeen.Remove(key);
-        ServiceLog.Info($"[lianli-wireless] chain {key} pulled back to {Convert.ToHexString(retaken.Master)} after retake, treating it as a neighbour");
+        ServiceLog.Info($"[lianli-wireless] chain {key} pulled back to {Convert.ToHexString(retaken.Master)} after retake, treating it as a neighbor");
+    }
+
+    private void ExpireNeighborStateLocked(long now)
+    {
+        foreach (var (key, retaken) in new List<KeyValuePair<string, Retaken>>(_retaken))
+        {
+            if (now - retaken.AtMs > PullBackWindowMs)
+            {
+                _retaken.Remove(key);
+                _pullSeen.Remove(key);
+            }
+        }
+        foreach (var (key, mark) in new List<KeyValuePair<string, Retaken>>(_neighborMaster))
+        {
+            if (now - mark.AtMs >= NeighborMarkMs)
+            {
+                _neighborMaster.Remove(key);
+            }
+        }
     }
 
     // L-Connect SyncControlInfo for owned devices: bind one back when it reports
@@ -958,6 +983,7 @@ public sealed class Slv3Hub : IDisposable
             return;
         }
         var now = _nowMs();
+        ExpireNeighborStateLocked(now);
         foreach (var key in new List<string>(_rebindSeen.Keys))
         {
             if (!_owned.ContainsKey(key))
@@ -976,11 +1002,12 @@ public sealed class Slv3Hub : IDisposable
             var ours = Slv3Protocol.MacEquals(record.MasterMac, _masterMac);
             if (ours && IsBoundToUsLocked(record))
             {
-                _neighbourMaster.Remove(key);
+                _neighborMaster.Remove(key);
+                _pullSeen.Remove(key);
             }
             else if (!zeroMaster && !ours)
             {
-                NotePullBackLocked(key, record, now);
+                NotePullBackLocked(key, record);
             }
             var settled = ours && IsBoundToUsLocked(record) && record.Channel == _channel;
             var corrupted = !zeroMaster && !ours && CorruptedMasterLocked(record);
@@ -1027,7 +1054,7 @@ public sealed class Slv3Hub : IDisposable
             var why = corrupted ? $"on corrupted master {Convert.ToHexString(record.MasterMac)}" : drift ? "off our channel" : "unbound";
             ServiceLog.Info($"[lianli-wireless] auto-rebind {key} {why}, binding to slot {slot} (attempt {state.Attempts + 1})");
             StartBindLocked(record, (byte)slot, auto: true);
-            if (corrupted)
+            if (corrupted && Slv3Protocol.IsBitFlippedMasterCopy(record.MasterMac, _masterMac))
             {
                 _retakeFrom[key] = record.MasterMac;
             }
@@ -2133,8 +2160,9 @@ public sealed class Slv3Hub : IDisposable
                 return false;
             }
             var key = Convert.ToHexString(mac);
-            _neighbourMaster.Remove(key);
+            _neighborMaster.Remove(key);
             _retaken.Remove(key);
+            _pullSeen.Remove(key);
             if (IsBoundToUsLocked(existing))
             {
                 _pending.Remove(key);

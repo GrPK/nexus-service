@@ -749,22 +749,38 @@ public static class Slv3Protocol
         {
             return false;
         }
-        var bits = 0;
+        if (IsBitFlippedMasterCopy(reported, ours))
+        {
+            return true;
+        }
         var kept = 0;
-        var zeroDamage = true;
         for (var i = 0; i < MacLength; i++)
         {
-            bits += System.Numerics.BitOperations.PopCount((uint)(reported[i] ^ ours[i]));
             if (reported[i] == ours[i])
             {
                 kept++;
             }
             else if (reported[i] != 0)
             {
-                zeroDamage = false;
+                return false;
             }
         }
-        return bits <= MaxMasterBitErrors || (zeroDamage && kept >= MinMasterBytesKept);
+        return kept >= MinMasterBytesKept;
+    }
+
+    /// <summary>A non-zero master that is not ours but within the bit budget of it.</summary>
+    public static bool IsBitFlippedMasterCopy(ReadOnlySpan<byte> reported, ReadOnlySpan<byte> ours)
+    {
+        if (reported.Length < MacLength || ours.Length < MacLength || MacIsZero(reported) || MacEquals(reported, ours))
+        {
+            return false;
+        }
+        var bits = 0;
+        for (var i = 0; i < MacLength; i++)
+        {
+            bits += System.Numerics.BitOperations.PopCount((uint)(reported[i] ^ ours[i]));
+        }
+        return bits <= MaxMasterBitErrors;
     }
 
     /// <summary>True when the MAC is all zeros (an unbound device reports a zero master MAC).</summary>
