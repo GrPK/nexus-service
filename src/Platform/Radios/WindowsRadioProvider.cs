@@ -53,13 +53,12 @@ public sealed class WindowsRadioProvider : IRadioProvider
             return false;
         }
 
-        var ok = true;
         foreach (var radio in matches)
         {
-            var status = await radio.SetStateAsync(on ? RadioState.On : RadioState.Off).AsTask(ct).ConfigureAwait(false);
-            ok &= status == RadioAccessStatus.Allowed;
+            // A refusal by one adapter is not a failure: the caller reads the real state back.
+            await radio.SetStateAsync(on ? RadioState.On : RadioState.Off).AsTask(ct).ConfigureAwait(false);
         }
-        return ok;
+        return true;
     }
 
     private async Task<bool> SetAirplaneAsync(bool on, CancellationToken ct)
@@ -68,30 +67,47 @@ public sealed class WindowsRadioProvider : IRadioProvider
         {
             return false;
         }
-        // The manager's flag means "radios enabled", so airplane on is 0.
-        if (!await Task.Run(() => RadioManagerCom.SetRadiosEnabled(!on)).ConfigureAwait(false))
+
+        var radios = on
+            ? (await GetRadiosAsync().ConfigureAwait(false)).Where(r => r.Kind is RadioKind.WiFi or RadioKind.Bluetooth).ToList()
+            : new List<Radio>();
+        var changed = new SemaphoreSlim(0);
+        void OnChanged(Radio sender, object args) => changed.Release();
+        foreach (var radio in radios)
         {
-            return false;
+            radio.StateChanged += OnChanged;
         }
 
-        // Airplane flips the other radios asynchronously: wait for the flag, then for their states to stop changing.
-        var deadline = DateTime.UtcNow + SettleTimeout;
-        string? last = null;
-        var stableReads = 0;
-        while (DateTime.UtcNow < deadline)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            var flagSettled = ReadAirplane()?.On == on;
-            var snapshot = string.Join(',', (await GetRadiosAsync().ConfigureAwait(false)).Select(r => $"{r.Kind}{r.State}"));
-            stableReads = snapshot == last ? stableReads + 1 : 0;
-            last = snapshot;
-            if (flagSettled && stableReads >= 2)
+            // The manager's flag means "radios enabled", so airplane on is 0.
+            if (!await Task.Run(() => RadioManagerCom.SetRadiosEnabled(!on)).ConfigureAwait(false))
             {
                 return true;
             }
-            await Task.Delay(PollInterval, ct).ConfigureAwait(false);
+
+            // The flag has no event, so it is polled up to the cap; radio states arrive as events.
+            // Turning airplane off waits for the flag only, radios restore their prior states on their own.
+            var deadline = DateTime.UtcNow + SettleTimeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (ReadAirplane()?.On == on && (!on || radios.All(r => r.State == RadioState.Off)))
+                {
+                    break;
+                }
+                await changed.WaitAsync(PollInterval, ct).ConfigureAwait(false);
+            }
+            return true;
         }
-        return ReadAirplane()?.On == on;
+        finally
+        {
+            foreach (var radio in radios)
+            {
+                radio.StateChanged -= OnChanged;
+            }
+            changed.Dispose();
+        }
     }
 
     private static readonly TimeSpan SettleTimeout = TimeSpan.FromSeconds(4);
@@ -149,7 +165,7 @@ internal static unsafe class RadioManagerCom
         IntPtr mgr = IntPtr.Zero;
         try
         {
-            if (CoCreateInstance(ref clsid, IntPtr.Zero, ClsCtxAll, ref iid, out mgr) < 0 || mgr == IntPtr.Zero)
+            if (CoCreateInstance(ref clsid, IntPtr.Zero, ClsCtxLocalServer, ref iid, out mgr) < 0 || mgr == IntPtr.Zero)
             {
                 return false;
             }
@@ -183,7 +199,7 @@ internal static unsafe class RadioManagerCom
 
     private static readonly Guid ClsidRadioManagementApi = new("581333F6-28DB-41BE-BC7A-FF201F12F3F6");
     private static readonly Guid IidRadioManager = new("DB3AFBFB-08E6-46C6-AA70-BF9A34C30AB7");
-    private const uint ClsCtxAll = 0x17;
+    private const uint ClsCtxLocalServer = 0x4;
 
     [DllImport("ole32.dll", ExactSpelling = true)]
     private static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint clsContext, ref Guid iid, out IntPtr instance);

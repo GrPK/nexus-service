@@ -77,9 +77,43 @@ public sealed class SystemRadiosMicRouteTests : IDisposable
     {
         _radios.State = new RadiosState { Airplane = new RadioToggle { On = false }, Bluetooth = new RadioToggle { On = true } };
         var res = await PanelClient().PostAsJsonAsync("/system/radios", new SetRadioBody { Kind = "airplane", On = true });
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
         Assert.True(doc.RootElement.GetProperty("airplane").GetProperty("on").GetBoolean());
         Assert.False(doc.RootElement.GetProperty("bluetooth").GetProperty("on").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("wifi")]
+    [InlineData("bluetooth")]
+    [InlineData("airplane")]
+    public async Task PostRadios_KnownKindWithAbsentRadio_IsFailEnvelope(string kind)
+    {
+        _radios.State = new RadiosState();
+        var res = await PanelClient().PostAsJsonAsync("/system/radios", new SetRadioBody { Kind = kind, On = true });
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("error").GetBoolean());
+    }
+
+    [Fact]
+    public async Task PostRadios_RefusedChange_StillReturnsRealState()
+    {
+        _radios.State = new RadiosState { Wifi = new RadioToggle { On = false } };
+        _radios.Refuse = true;
+        var res = await PanelClient().PostAsJsonAsync("/system/radios", new SetRadioBody { Kind = "wifi", On = true });
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.False(doc.RootElement.TryGetProperty("error", out _));
+        Assert.False(doc.RootElement.GetProperty("wifi").GetProperty("on").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("/system/radios")]
+    [InlineData("/system/mic")]
+    [InlineData("/system/mic/mute")]
+    public async Task UnauthenticatedPosts_AreRejected(string path)
+    {
+        var res = await _factory.CreateClient().PostAsJsonAsync(path, new SetMutedBody { Muted = true });
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
     }
 
     [Theory]
@@ -135,6 +169,7 @@ public sealed class SystemRadiosMicRouteTests : IDisposable
     {
         public RadiosState State { get; set; } = new();
         public (string Kind, bool On)? LastSet { get; private set; }
+        public bool Refuse { get; set; }
 
         public Task<RadiosState> GetStateAsync(CancellationToken ct = default) => Task.FromResult(State);
 
@@ -144,6 +179,10 @@ public sealed class SystemRadiosMicRouteTests : IDisposable
             if (toggle is null)
             {
                 return Task.FromResult(false);
+            }
+            if (Refuse)
+            {
+                return Task.FromResult(true);
             }
             toggle.On = on;
             if (kind == "airplane" && State.Bluetooth is not null)

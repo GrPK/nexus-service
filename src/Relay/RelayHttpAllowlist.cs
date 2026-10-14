@@ -82,9 +82,6 @@ public static class RelayHttpAllowlist
         "/system/input/keys", // raw keystroke injection - desktop-token only
         "/system/input/text",
         "/system/audio/play", // plays an arbitrary local file - desktop-token only
-        "/system/radios", // panel control center only, the phone is excluded
-        "/system/mic",
-        "/system/mic/mute",
     };
 
     /// <summary>
@@ -95,6 +92,9 @@ public static class RelayHttpAllowlist
     private static readonly string[] DeniedPrefixes =
     {
         "/lighting/screen",
+        // Panel control center. An off-LAN Airplane toggle would cut the PC's own connection.
+        "/system/radios",
+        "/system/mic",
     };
 
     /// <summary>

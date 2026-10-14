@@ -13,8 +13,9 @@ public interface IRadioProvider
 {
     Task<RadiosState> GetStateAsync(CancellationToken ct = default);
 
-    /// <summary>Applies the change for a kind in <see cref="RadioKinds"/> and
-    /// returns false when that radio is absent or the OS refused it.</summary>
+    /// <summary>Applies the change for a kind in <see cref="RadioKinds"/>. False only
+    /// when the kind is unknown or that radio is absent; an OS refusal or an expired
+    /// settle wait still returns true, so the caller reads the real state back.</summary>
     Task<bool> SetAsync(string kind, bool on, CancellationToken ct = default);
 }
 

@@ -63,6 +63,8 @@ public class RelayHttpAllowlistTests
     [InlineData("GET", "/system/mic")]
     [InlineData("POST", "/system/mic")]
     [InlineData("POST", "/system/mic/mute")]
+    [InlineData("POST", "/system/radios/extra")]     // denied by prefix
+    [InlineData("GET", "/system/mic/extra")]
     [InlineData("POST", "/devices/firmware/flash")]  // irreversible flash - brick risk over a lossy tunnel
     [InlineData("POST", "/devices/firmware/flash/")] // trailing slash still routes to the flash handler
     [InlineData("POST", "/Devices/Firmware/Flash")]  // deny is case-insensitive
