@@ -205,34 +205,35 @@ public sealed class Nexus2RecommendedPresetTests
         Assert.Empty(store.Load().Cooling.FanPinOverrides);
     }
 
-    [Fact]
-    public void Activation_runs_the_ui_preset_path_so_it_matches_a_direct_profile_apply()
+    /// <summary>The import's activation and a direct FanProfiles.Apply, each on its own hardware and store.</summary>
+    private static void AssertMatchesDirectApply(string selected, string preset, Action<Hw>? arrange = null)
     {
-        var (service, store, hw) = Setup("performance");
-        service.ApplyFanCurves(Root(Text("performance")));
+        RecordingFans? importFans = null;
+        var (service, store, hw) = FanCurveServices.Service(Fixture, configText: Text(selected), configureFans: f => importFans = f);
+        arrange?.Invoke(hw);
+        service.ApplyFanCurves(Root(Text(selected)));
 
-        var (_, direct, _) = Setup("performance");
-        FanProfiles.Apply("turbo", new RecordingFans(hw), direct);
+        RecordingFans? directFans = null;
+        var (_, direct, directHw) = FanCurveServices.Service(Fixture, configText: Text(selected), configureFans: f => directFans = f);
+        arrange?.Invoke(directHw);
+        FanProfiles.Apply(preset, directFans!, direct);
 
-        string Shape(InMemoryConfigStore s) => string.Join("|", s.Load().Cooling.Curves.OrderBy(c => c.Id).Select(c => $"{c.Preset}:{string.Join(",", c.Outputs.Select(o => o.Id).OrderBy(x => x))}"))
-            + "|" + s.Load().Cooling.ActivePreset;
-        Assert.Equal(Shape(direct), Shape(store));
+        string Shape(InMemoryConfigStore s, RecordingFans f) => string.Join("|", s.Load().Cooling.Curves.OrderBy(c => c.Id).Select(c => $"{c.Preset}:{string.Join(",", c.Outputs.Select(o => o.Id).OrderBy(x => x))}"))
+            + "|" + s.Load().Cooling.ActivePreset
+            + "|" + string.Join(",", s.Load().Cooling.ManualSpeeds.OrderBy(k => k.Key).Select(k => $"{k.Key}={k.Value}"))
+            + "|" + string.Join(",", s.Load().Cooling.FanOffsets.OrderBy(k => k.Key).Select(k => $"{k.Key}={k.Value}"))
+            + "|" + string.Join(",", f.Calls);
+        Assert.Equal(Shape(direct, directFans!), Shape(store, importFans!));
+        Assert.Equal(preset, store.Load().Cooling.ActivePreset);
     }
 
     [Fact]
-    public void Activation_with_cooler_hubs_present_equals_a_direct_profile_apply()
-    {
-        var (service, store, hw) = Setup("silent", (_, h) => h.AddQSeries().AddNp50());
-        service.ApplyFanCurves(Root(Text("silent")));
+    public void Activation_runs_the_ui_preset_path_so_it_matches_a_direct_profile_apply() =>
+        AssertMatchesDirectApply("performance", "turbo");
 
-        var (_, direct, _) = Setup("silent", (_, h) => h.AddQSeries().AddNp50());
-        FanProfiles.Apply("silent", new RecordingFans(hw), direct);
-
-        string Shape(InMemoryConfigStore s) => string.Join("|", s.Load().Cooling.Curves.OrderBy(c => c.Id).Select(c => $"{c.Preset}:{string.Join(",", c.Outputs.Select(o => o.Id).OrderBy(x => x))}"))
-            + "|" + s.Load().Cooling.ActivePreset;
-        Assert.Equal(Shape(direct), Shape(store));
-        Assert.Contains($"np50:{Hw.Np50}:legacy", store.Load().Cooling.Curves.SelectMany(c => c.Outputs).Select(o => o.Id));
-    }
+    [Fact]
+    public void Activation_with_cooler_hubs_present_equals_a_direct_profile_apply() =>
+        AssertMatchesDirectApply("silent", "silent", h => h.AddQSeries().AddNp50());
 
     [Fact]
     public void A_change_landing_between_the_plan_and_the_write_aborts_the_activation()
@@ -276,9 +277,23 @@ public sealed class Nexus2RecommendedPresetTests
         var imported = Assert.Single(gpuless.Store.Load().Cooling.Curves, c => c.Id.StartsWith("n2-", StringComparison.Ordinal));
         Assert.Equal($"smarthub:{Hw.SmartHub}:fan0", Assert.Single(imported.Outputs).Id);
 
-        // With both sources present the same file maps to the preset instead.
+        // With both sources present the same file maps to the preset instead, and applying activates it.
         Assert.Equal("silent", service.BuildFanCurvesCategory(Root(text)).RecommendedPreset);
-        Assert.Empty(store.Load().Cooling.Curves);
+        var presetResult = service.ApplyFanCurves(Root(text));
+        Assert.Equal(("applied", "silent"), (presetResult.Status, presetResult.Preset));
+        Assert.Equal("silent", store.Load().Cooling.ActivePreset);
+    }
+
+    [Fact]
+    public void With_neither_a_cpu_nor_a_gpu_temperature_the_preset_mapping_is_kept_and_applies()
+    {
+        var (service, store, _) = Setup("silent", (_, h) => h.Sources.RemoveAll(t => t.Category is "CPU" or "GPU"));
+        var cat = service.BuildFanCurvesCategory(Root(Text("silent")));
+        Assert.Equal("recommendedMode", cat.FanCurvesNote);
+        Assert.Equal("silent", cat.RecommendedPreset);
+        var result = service.ApplyFanCurves(Root(Text("silent")));
+        Assert.Equal(("applied", "silent"), (result.Status, result.Preset));
+        Assert.Equal("silent", store.Load().Cooling.ActivePreset);
     }
 
     [Fact]

@@ -273,10 +273,12 @@ internal sealed class RecordingFans : IFanControlProvider
     }
 
     public float? ReadTemperature(string sensorId) => _hw.Sources.FirstOrDefault(s => s.Id == sensorId)?.Value;
-    public int SetFanSpeed(string channelId, int dutyPercent) => dutyPercent;
-    public void DriveFanSpeed(string channelId, int dutyPercent) { }
-    public void ReleaseFan(string channelId) { }
-    public void ReleaseAll() { }
+    /// <summary>Every hardware-facing call in order, so two activation paths can be compared.</summary>
+    public List<string> Calls { get; } = new();
+    public int SetFanSpeed(string channelId, int dutyPercent) { Calls.Add($"set:{channelId}:{dutyPercent}"); return dutyPercent; }
+    public void DriveFanSpeed(string channelId, int dutyPercent) => Calls.Add($"drive:{channelId}:{dutyPercent}");
+    public void ReleaseFan(string channelId) => Calls.Add($"release:{channelId}");
+    public void ReleaseAll() => Calls.Add("releaseAll");
     public Task<IReadOnlyList<FanCalibration>> CalibrateAsync(IReadOnlyList<string> fanIds, IProgress<FanCalibrationProgress> progress, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<FanCalibration>>(Array.Empty<FanCalibration>());
 }
