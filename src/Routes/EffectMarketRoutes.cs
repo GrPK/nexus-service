@@ -1,3 +1,4 @@
+#if DEV_TOOLS
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -170,3 +171,4 @@ public static class EffectMarketRoutes
 
     private static IResult TooLarge() => Fail(StatusCodes.Status413PayloadTooLarge, "body_too_large");
 }
+#endif

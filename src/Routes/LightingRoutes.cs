@@ -172,7 +172,9 @@ public static class LightingRoutes
         }).AllowPanel();
         MapCustomEffects(app);
         MapStudioLive(app);
+#if DEV_TOOLS
         EffectMarketRoutes.Map(app);
+#endif
         app.MapGet("/lighting/screen/monitors", (ILightingProvider l) => l.GetScreenSyncOptions()).AllowPanel();
         app.MapGet("/lighting/status", (Nexus.Service.Lighting.Engine.LightingEngine engine, ILightingDeviceProvider devices, IServiceProvider sp) =>
         {

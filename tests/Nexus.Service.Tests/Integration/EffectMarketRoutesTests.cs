@@ -1,3 +1,4 @@
+#if DEV_TOOLS
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -494,3 +495,4 @@ public sealed class EffectMarketRoutesTests : IClassFixture<EffectMarketAppFacto
         Assert.Null(endpoint!.Metadata.GetMetadata<AllowPanelAccess>());
     }
 }
+#endif
