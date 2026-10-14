@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Nexus.Service.Lighting.Engine.Gpu;
 using Nexus.Service.Models.Cooling;
 using Nexus.Service.Persistence;
 using Nexus.Service.Platform;
@@ -39,6 +41,30 @@ internal sealed unsafe class AdlxGpuFans
     {
         var path = Path.Combine(Environment.SystemDirectory, "amdadlx64.dll");
         if (!File.Exists(path)) return null;
+
+        var dir = NexusDataPaths.NexusRoot();
+        var key = InitGuardKey(path);
+        if (AdlxInitGuard.Latched(dir, key))
+        {
+            ServiceLog.Warn($"[amd-fan] ADLX off until a reboot or driver update: a previous run died inside ADLX init ({key})");
+            return null;
+        }
+        AdlxInitGuard.Arm(dir, key);
+        try { return Create(path, blockChanged); }
+        finally { AdlxInitGuard.Disarm(dir); }
+    }
+
+    // A driver update or a reboot can clear a broken ADLX, so either one re-arms it.
+    private static string InitGuardKey(string path)
+    {
+        string? version = null;
+        try { version = FileVersionInfo.GetVersionInfo(path).FileVersion; }
+        catch (Exception) { }
+        return $"{version ?? "?"}@{GpuRenderSelect.BootStamp()}";
+    }
+
+    private static AdlxGpuFans? Create(string path, Action blockChanged)
+    {
         if (!NativeLibrary.TryLoad(path, out var lib)
             || !NativeLibrary.TryGetExport(lib, "ADLXQueryFullVersion", out var query)
             || !NativeLibrary.TryGetExport(lib, "ADLXInitialize", out var init))

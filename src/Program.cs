@@ -903,6 +903,7 @@ return 0;
 static void FastServiceShutdown(WebApplication app)
 {
     Nexus.Service.Lifecycle.UserHelperBootstrapper.NoteServiceStopping();
+    Nexus.Service.Cooling.AdlxInitGuard.Stop(Nexus.Service.Persistence.NexusDataPaths.NexusRoot());
     var sp = app.Services;
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var osShutdown = Nexus.Service.Lifecycle.HostShutdown.IsOsShutdown;
