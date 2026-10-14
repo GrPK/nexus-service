@@ -14,11 +14,12 @@ namespace Nexus.Service.Routes;
 /// The desktop dashboard's first-run screens (welcome, feature pillars,
 /// lighting device selection) are
 /// <see cref="LocalhostOnlyEndpointExtensions.LocalhostOnly"/>:
-///   GET  /onboarding                    -> { completed, featuresCompleted, lightingCompleted }
+///   GET  /onboarding                    -> { completed, featuresCompleted, lightingCompleted, dismissedHints }
 ///   POST /onboarding/complete           -> set completed, return status
 ///   POST /onboarding/features-complete  -> set featuresCompleted, return status
 ///   POST /onboarding/lighting-complete  -> set lightingCompleted, return status
 ///   POST /onboarding/conflicts-step     -> log how the user left the conflict step, return status
+///   POST /onboarding/hints/dismiss      -> { id } adds to dismissedHints (idempotent, capped), return status
 /// The touch-panel swipe-up hint's flag is .AllowPanel() and not loopback-bound,
 /// since a paired phone is a touch panel too:
 ///   GET  /onboarding/panel-swipe           -> { completed, immersiveCompleted }
@@ -28,7 +29,7 @@ namespace Nexus.Service.Routes;
 ///   GET  /onboarding/banner                -> { dismissedKey }
 ///   POST /onboarding/banner/dismiss/{key}  -> store key
 /// </summary>
-internal static class OnboardingRoutes
+internal static partial class OnboardingRoutes
 {
     public static void MapOnboardingEndpoints(this WebApplication app)
     {
@@ -111,6 +112,24 @@ internal static class OnboardingRoutes
             return Results.Ok(new DashboardBannerDto { DismissedKey = key });
         }).LocalhostOnly();
 
+        app.MapPost("/onboarding/hints/dismiss", ([Microsoft.AspNetCore.Mvc.FromBody] OnboardingHintDismissBody? body, IConfigStore store) =>
+        {
+            var id = body?.Id;
+            if (id is null || !HintIdPattern().IsMatch(id)) return Results.BadRequest();
+            var full = false;
+            store.Update(s =>
+            {
+                if (s.DismissedOnboardingHints.Contains(id)) return;
+                if (s.DismissedOnboardingHints.Count >= MaxDismissedHints)
+                {
+                    full = true;
+                    return;
+                }
+                s.DismissedOnboardingHints = new List<string>(s.DismissedOnboardingHints) { id };
+            });
+            return full ? Results.Conflict() : Results.Ok(Status(store));
+        }).LocalhostOnly();
+
         // Replays the whole sequence. The two import latches are cleared as
         // well, or the import step is silently skipped - they are per-app flags
         // the migration routes own, not onboarding ones. An app that is no
@@ -135,6 +154,11 @@ internal static class OnboardingRoutes
             return Results.Ok(Status(store));
         }).LocalhostOnly();
     }
+
+    private const int MaxDismissedHints = 100;
+
+    [System.Text.RegularExpressions.GeneratedRegex("^[a-z0-9][a-z0-9-]{0,63}$")]
+    private static partial System.Text.RegularExpressions.Regex HintIdPattern();
 
     private static readonly string[] ConflictStepActions = { "resolveAll", "skip", "skipOnboarding" };
 
@@ -161,6 +185,7 @@ internal static class OnboardingRoutes
             Completed = s.OnboardingCompleted,
             FeaturesCompleted = s.FeaturesOnboardingCompleted,
             LightingCompleted = s.LightingOnboardingCompleted,
+            DismissedHints = new List<string>(s.DismissedOnboardingHints),
         };
     }
 
@@ -197,4 +222,10 @@ public sealed class OnboardingStatusDto
     public bool Completed { get; set; }
     public bool FeaturesCompleted { get; set; }
     public bool LightingCompleted { get; set; }
+    public List<string> DismissedHints { get; set; } = new();
+}
+
+public sealed class OnboardingHintDismissBody
+{
+    public string? Id { get; set; }
 }

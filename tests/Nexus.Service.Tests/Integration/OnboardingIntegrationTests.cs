@@ -349,3 +349,128 @@ public sealed class OnboardingBannerIntegrationTests : IClassFixture<NexusAppFac
         Assert.Equal(StatusCodes.Status401Unauthorized, (await Send("POST", "/onboarding/banner/dismiss/x", withToken: false)).Response.StatusCode);
     }
 }
+
+public sealed class OnboardingHintsIntegrationTests : IClassFixture<NexusAppFactory>
+{
+    private readonly NexusAppFactory _factory;
+
+    public OnboardingHintsIntegrationTests(NexusAppFactory factory) => _factory = factory;
+
+    private async Task<(int Status, string Body)> Send(string method, string path, string? jsonBody = null, bool withToken = true)
+    {
+        using var client = _factory.CreateClient();
+        if (withToken)
+        {
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
+        }
+        using var req = new HttpRequestMessage(new HttpMethod(method), path);
+        if (jsonBody is not null)
+        {
+            req.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
+        }
+        using var res = await client.SendAsync(req);
+        return ((int)res.StatusCode, await res.Content.ReadAsStringAsync());
+    }
+
+    private Task<(int Status, string Body)> Dismiss(string id)
+        => Send("POST", "/onboarding/hints/dismiss", $"{{\"id\":\"{id}\"}}");
+
+    private void Clear() => _factory.Services.GetRequiredService<IConfigStore>()
+        .Update(s => s.DismissedOnboardingHints = new List<string>());
+
+    [Fact]
+    public async Task Get_defaults_to_an_empty_list()
+    {
+        Clear();
+        var (status, body) = await Send("GET", "/onboarding");
+        Assert.Equal(StatusCodes.Status200OK, status);
+        Assert.Contains("\"dismissedHints\":[]", body);
+    }
+
+    [Fact]
+    public async Task Dismiss_then_get_returns_the_id_and_is_idempotent()
+    {
+        Clear();
+        Assert.Equal(StatusCodes.Status200OK, (await Dismiss("calibrate-fans")).Status);
+        Assert.Equal(StatusCodes.Status200OK, (await Dismiss("calibrate-fans")).Status);
+        var (_, body) = await Send("GET", "/onboarding");
+        Assert.Contains("\"dismissedHints\":[\"calibrate-fans\"]", body);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("Upper")]
+    [InlineData("-lead")]
+    [InlineData("has space")]
+    [InlineData("under_score")]
+    public async Task Dismiss_rejects_invalid_ids(string id)
+    {
+        Clear();
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Dismiss(id)).Status);
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Dismiss(new string('a', 65))).Status);
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Send("POST", "/onboarding/hints/dismiss", "{}")).Status);
+        Assert.Empty(_factory.Services.GetRequiredService<IConfigStore>().Load().DismissedOnboardingHints);
+    }
+
+    [Fact]
+    public async Task Dismiss_accepts_a_64_char_id()
+    {
+        Clear();
+        Assert.Equal(StatusCodes.Status200OK, (await Dismiss(new string('a', 64))).Status);
+    }
+
+    [Fact]
+    public async Task Dismiss_refuses_new_ids_past_the_cap_but_accepts_repeats()
+    {
+        Clear();
+        for (var i = 0; i < 100; i++)
+        {
+            Assert.Equal(StatusCodes.Status200OK, (await Dismiss($"hint-{i}")).Status);
+        }
+        Assert.Equal(StatusCodes.Status409Conflict, (await Dismiss("hint-extra")).Status);
+        Assert.Equal(StatusCodes.Status200OK, (await Dismiss("hint-0")).Status);
+        Assert.Equal(100, _factory.Services.GetRequiredService<IConfigStore>().Load().DismissedOnboardingHints.Count);
+    }
+
+    [Fact]
+    public async Task Reset_leaves_dismissed_hints_intact()
+    {
+        Clear();
+        await Dismiss("calibrate-fans");
+        Assert.Equal(StatusCodes.Status200OK, (await Send("POST", "/onboarding/reset")).Status);
+        Assert.Equal(new[] { "calibrate-fans" }, _factory.Services.GetRequiredService<IConfigStore>().Load().DismissedOnboardingHints);
+    }
+
+    [Fact]
+    public async Task Dismiss_requires_a_token()
+        => Assert.Equal(StatusCodes.Status401Unauthorized, (await Send("POST", "/onboarding/hints/dismiss", "{\"id\":\"x\"}", withToken: false)).Status);
+
+    [Fact]
+    public void Dismissed_hints_survive_a_store_reload()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "nexus-hints-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "settings.json");
+        try
+        {
+            var first = new JsonConfigStore(path);
+            first.Update(s => s.DismissedOnboardingHints = new List<string> { "calibrate-fans" });
+            first.Dispose();
+
+            var second = new JsonConfigStore(path);
+            try
+            {
+                Assert.Equal(new[] { "calibrate-fans" }, second.Load().DismissedOnboardingHints);
+            }
+            finally
+            {
+                second.Dispose();
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+}
