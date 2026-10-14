@@ -645,13 +645,21 @@ public static class DeckRoutes
     private static DeckInstance? CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop, ListedAppSnapshot listedSnapshot)
     {
         System.Func<string, bool> isListed = listedSnapshot;
-        // The join below is persisted, so a cold set must not decide it. Only when a
-        // cold answer could differ from a loaded one does the caller retry.
+        // The join below is persisted, so a cold set must not decide it. When a cold
+        // answer could differ from a loaded one: during boot the caller retries; once
+        // the loader has settled and the set is still empty, answer fail-closed without
+        // persisting, so the widget loads and the real join happens after a load.
         if (!isDesktop && !listedSnapshot.IsLoaded &&
             store.Load().StreamDeck.Presets.Any(p =>
                 DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any() != DeckLayoutPolicy.PrivilegedActions(p.Deck, _ => true).Any()))
         {
-            return null;
+            if (!listedSnapshot.Settled)
+            {
+                return null;
+            }
+            var transientId = store.Load().StreamDeck.Presets
+                .FirstOrDefault(p => !DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any())?.Id;
+            return new DeckInstance { Mode = "custom", ActivePresetId = transientId };
         }
         DeckInstance? created = null;
         store.Update(s =>

@@ -12,32 +12,20 @@ namespace Nexus.Service.Deck;
 public sealed class ListedAppSnapshot
 {
     private readonly HashSet<string>? _ids;
-    private readonly IShortcutsProvider _shortcuts;
 
-    internal ListedAppSnapshot(HashSet<string>? ids, IShortcutsProvider shortcuts)
+    internal ListedAppSnapshot(HashSet<string>? ids, bool settled)
     {
         _ids = ids;
-        _shortcuts = shortcuts;
+        Settled = settled;
     }
 
     /// <summary>False until the first successful load; a cold snapshot lists nothing and must not drive a persisted decision.</summary>
     public bool IsLoaded => _ids is not null;
 
-    public bool Contains(string id)
-    {
-        if (_ids is null)
-        {
-            return false;
-        }
-        if (_ids.Contains(id))
-        {
-            return true;
-        }
-        // macOS resolves a bundle path outside the scanned folders in-process; the
-        // background refresh keeps the provider's app list warm, so this stays cheap.
-        return OperatingSystem.IsMacOS() && _shortcuts.GetById(id) is { } s &&
-            string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase);
-    }
+    /// <summary>True once a load has been attempted or the startup grace has passed, so a still-cold set is a real answer rather than a boot race.</summary>
+    public bool Settled { get; }
+
+    public bool Contains(string id) => _ids is not null && _ids.Contains(id);
 
     public static implicit operator Func<string, bool>(ListedAppSnapshot snapshot) => snapshot.Contains;
 }
@@ -60,7 +48,11 @@ public sealed class ListedAppIds : IDisposable
     private readonly TimeSpan _retry;
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static readonly TimeSpan StartupGrace = TimeSpan.FromSeconds(30);
+
+    private readonly long _startTicks = DateTime.UtcNow.Ticks;
     private HashSet<string>? _ids;
+    private int _attempts;
 
     public ListedAppIds(IShortcutsProvider shortcuts) : this(shortcuts, DefaultRefresh, DefaultRetry)
     {
@@ -77,9 +69,15 @@ public sealed class ListedAppIds : IDisposable
     /// <summary>Completes after the first successful load.</summary>
     internal Task Loaded => _loaded.Task;
 
-    public ListedAppSnapshot Snapshot() => new(Volatile.Read(ref _ids), _shortcuts);
+    public ListedAppSnapshot Snapshot() => new(
+        Volatile.Read(ref _ids),
+        Volatile.Read(ref _attempts) > 0 || DateTime.UtcNow.Ticks - _startTicks > StartupGrace.Ticks);
 
-    public void Dispose() => _stop.Cancel();
+    public void Dispose()
+    {
+        _stop.Cancel();
+        _stop.Dispose();
+    }
 
     private async Task RunAsync(CancellationToken ct)
     {
@@ -90,6 +88,7 @@ public sealed class ListedAppIds : IDisposable
             var delay = _refresh;
             try
             {
+                Interlocked.Increment(ref _attempts);
                 var ids = new HashSet<string>(_shortcuts.GetAll().Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
                 if (ids.Count > 0)
                 {
