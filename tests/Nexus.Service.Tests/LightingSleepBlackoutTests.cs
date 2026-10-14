@@ -275,6 +275,21 @@ public class LightingSleepBlackoutTests : IDisposable
     }
 
     [Fact]
+    public void Coordinator_OnHostShutdown_AfterLockBlackout_StaysDark()
+    {
+        using var engine = new LightingEngine();
+        var devices = MakeLitDevices();
+        engine.UpdateDevices(devices);
+        var coordinator = new SleepBlackoutCoordinator(engine, _store);
+
+        coordinator.OnSessionLocked();
+        coordinator.OnHostShutdown();
+
+        Assert.True(engine.Blackout);
+        Assert.All(devices, d => Assert.True(AllBlack(d)));
+    }
+
+    [Fact]
     public void Coordinator_OnHostShutdown_WhenSettingOff_LeavesLightingAlone()
     {
         using var engine = new LightingEngine();
