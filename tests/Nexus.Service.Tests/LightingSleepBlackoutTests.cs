@@ -305,9 +305,12 @@ public class LightingSleepBlackoutTests : IDisposable
     }
 
     [Fact]
-    public void Coordinator_Budget_FitsTheOsShutdownTeardownCap()
+    public void Coordinator_ShutdownBudget_LeavesRoomUnderTheOsShutdownTeardownCap()
     {
-        Assert.True(SleepBlackoutCoordinator.Budget < Nexus.Service.Lifecycle.HostShutdown.OsShutdownTeardownBudget);
+        Assert.True(SleepBlackoutCoordinator.Budget <= SleepBlackoutCoordinator.ShutdownBudget);
+        Assert.True(
+            SleepBlackoutCoordinator.ShutdownBudget + TimeSpan.FromMilliseconds(500)
+                <= Nexus.Service.Lifecycle.HostShutdown.OsShutdownTeardownBudget);
         Assert.True(SleepBlackoutCoordinator.FadeDuration < SleepBlackoutCoordinator.Budget);
     }
 
@@ -357,7 +360,7 @@ public class LightingSleepBlackoutTests : IDisposable
     [Fact]
     public void Coordinator_OnHostShutdown_StaysInsideItsBudget()
     {
-        // Shutdown runs the sleep budget; the black frame has to land inside it.
+        // The black frame has to land inside the shutdown budget.
         using var engine = new LightingEngine();
         var devices = MakeLitDevices();
         engine.UpdateDevices(devices);
@@ -367,7 +370,7 @@ public class LightingSleepBlackoutTests : IDisposable
         coordinator.OnHostShutdown();
         sw.Stop();
 
-        Assert.True(sw.Elapsed < SleepBlackoutCoordinator.Budget,
+        Assert.True(sw.Elapsed < SleepBlackoutCoordinator.ShutdownBudget,
             $"shutdown blank overran its budget at {sw.ElapsedMilliseconds}ms");
         Assert.True(engine.Blackout);
         Assert.True(engine.Blackout);

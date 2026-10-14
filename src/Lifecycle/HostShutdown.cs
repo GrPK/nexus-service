@@ -26,7 +26,8 @@ public static class HostShutdown
     /// <summary>Cap on the same set when the OS is going down. Higher because the
     /// OS-shutdown-only work is the slowest in it: the Q-series keyevent execs a
     /// JVM on the panel, and the rest of the set was measured at 1209 ms on a
-    /// Y70. The window this spends from is the preshutdown phase - see the
+    /// Y70. The lights-off may also wait out an OpenRGB rescan, which takes
+    /// seconds on a slow board. The window this spends from is the preshutdown phase - see the
     /// SERVICE_ACCEPT_PRESHUTDOWN constant in WindowsServiceHost.</summary>
-    public static readonly TimeSpan OsShutdownTeardownBudget = TimeSpan.FromMilliseconds(3_000);
+    public static readonly TimeSpan OsShutdownTeardownBudget = TimeSpan.FromMilliseconds(6_000);
 }

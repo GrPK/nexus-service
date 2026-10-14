@@ -18,6 +18,7 @@ public sealed class ConflictExitRecovery : BackgroundService
     private readonly IConflictDetector _detector;
     private readonly Func<bool> _bridgeActive;
     private readonly Action _recover;
+    private readonly Func<bool> _osShuttingDown;
     private readonly ConflictExitTracker _tracker = new();
 
     public ConflictExitRecovery(IConflictDetector detector, RgbBridge bridge)
@@ -25,8 +26,9 @@ public sealed class ConflictExitRecovery : BackgroundService
     {
     }
 
-    internal ConflictExitRecovery(IConflictDetector detector, Func<bool> bridgeActive, Action recover)
+    internal ConflictExitRecovery(IConflictDetector detector, Func<bool> bridgeActive, Action recover, Func<bool>? osShuttingDown = null)
     {
+        _osShuttingDown = osShuttingDown ?? (() => Lifecycle.HostShutdown.IsOsShutdown);
         _detector = detector;
         _bridgeActive = bridgeActive;
         _recover = recover;
@@ -48,6 +50,13 @@ public sealed class ConflictExitRecovery : BackgroundService
 
     internal void Tick(long nowMs)
     {
+        // Once the OS is going down, a rescan only competes with the lights-off.
+        if (_osShuttingDown())
+        {
+            _tracker.Reset();
+            return;
+        }
+
         // Lighting off: the next Activate spawns a fresh daemon, which detects from scratch.
         if (!_bridgeActive())
         {

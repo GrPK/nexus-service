@@ -46,6 +46,16 @@ public sealed class SleepBlackoutCoordinator
     internal static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(1500);
 
     /// <summary>
+    /// Budget for the OS-shutdown path: the sleep budget plus room to wait out a
+    /// rescan, still inside <see cref="Lifecycle.HostShutdown.OsShutdownTeardownBudget"/>
+    /// with the setup work that runs ahead of the teardown wait.
+    /// </summary>
+    internal static readonly TimeSpan ShutdownBudget = TimeSpan.FromMilliseconds(5000);
+
+    /// <summary>Left for the push itself when the shutdown wait for a rescan uses up its share.</summary>
+    private static readonly TimeSpan PushReserve = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
     /// Wall clock the ramp runs over. Short because it races the host tearing
     /// down USB: devices behind it stop receiving frames partway with no error,
     /// since the writes report success into a handle that is going away. Longer
@@ -156,11 +166,11 @@ public sealed class SleepBlackoutCoordinator
 
     /// <summary>
     /// Call inline from the service's fast teardown, on a real OS shutdown only.
-    /// The sleep path verbatim, within the OS-shutdown teardown cap. Any other
+    /// The sleep path under <see cref="ShutdownBudget"/>. Any other
     /// stop (tray quit, /service/stop, an OTA install, a GPU-change restart)
     /// leaves lighting alone - the service comes back and repaints.
     /// </summary>
-    public void OnHostShutdown() => BlankOut(Budget, "shutdown");
+    public void OnHostShutdown() => BlankOut(ShutdownBudget, "shutdown", settleFirst: true);
 
     /// <summary>
     /// Call when the session locks. Unlike every other path here nothing is
@@ -340,7 +350,7 @@ public sealed class SleepBlackoutCoordinator
         }
     }
 
-    private void BlankOut(TimeSpan budget, string reason)
+    private void BlankOut(TimeSpan budget, string reason, bool settleFirst = false)
     {
         try
         {
@@ -369,7 +379,7 @@ public sealed class SleepBlackoutCoordinator
             // what hands them the blank frame to push.
             var published = _engine.WaitForBlackout(Clamp(EnginePublishBudget, deadline));
 
-            var pushed = PushBridgeBlackout(deadline);
+            var pushed = PushBridgeBlackout(deadline, settleFirst);
             ServiceLog.Info(
                 $"[lighting-sleep] blanked for {reason} (fade={fade}, engine={(published ? "published" : "timeout")}, openrgb={pushed})");
         }
@@ -482,11 +492,12 @@ public sealed class SleepBlackoutCoordinator
     }
 
     /// <summary>
-    /// Drives the awaited OpenRGB blackout to completion or to the deadline.
-    /// Returns what happened, for the log line - the caller has no recovery to
-    /// perform either way.
+    /// Drives the awaited OpenRGB blackout to completion or to the deadline,
+    /// waiting first for a rescan in progress to commit its device list.
+    /// Returns what was written out of what is known, for the log line - the
+    /// caller has no recovery to perform either way.
     /// </summary>
-    private string PushBridgeBlackout(DateTime deadline)
+    private string PushBridgeBlackout(DateTime deadline, bool settleFirst = false)
     {
         if (_bridge is null)
         {
@@ -502,8 +513,8 @@ public sealed class SleepBlackoutCoordinator
         {
             // Blocking on purpose: the machine stops when this returns, so
             // there is no later to continue on.
-            _bridge.BlackoutAsync(cts.Token).GetAwaiter().GetResult();
-            return "ok";
+            DateTime? settleUntil = settleFirst ? deadline - PushReserve : null;
+            return _bridge.BlackoutSettledAsync(settleUntil, cts.Token).GetAwaiter().GetResult().ToString();
         }
         catch (OperationCanceledException)
         {
