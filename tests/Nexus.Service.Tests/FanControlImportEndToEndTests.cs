@@ -369,4 +369,27 @@ public class FanControlImportEndToEndTests
         Assert.True(result.Error);
         Assert.Empty(store.Load().Cooling.Curves);
     }
+
+    [Fact]
+    public void Apply_RecordsTheImportAsCompleted()
+    {
+        var (import, _, store) = Build();
+        Assert.False(store.Load().FanControlImportCompleted);
+
+        var result = import.Apply(null, AllCategories);
+
+        Assert.False(result.Error);
+        Assert.True(store.Load().FanControlImportCompleted);
+    }
+
+    [Fact]
+    public void Apply_ThatAppliesNothing_LeavesTheImportIncomplete()
+    {
+        var (import, _, store) = Build();
+
+        var result = import.Apply(null, Array.Empty<string>());
+
+        Assert.True(result.Error);
+        Assert.False(store.Load().FanControlImportCompleted);
+    }
 }

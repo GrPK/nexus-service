@@ -37,7 +37,8 @@ internal static class FanControlMigrationRoutes
                 AutostartPresent = result.AutostartPresent,
                 Version = result.Version,
                 InstallLocation = result.InstallLocation,
-                Pending = result.Detected && result.ImportAvailable && !settings.FanControlImportOffered,
+                Pending = result.Detected && result.ImportAvailable && !settings.FanControlImportOffered
+                    && !settings.FanControlImportCompleted,
                 Completed = settings.FanControlImportCompleted,
             };
             foreach (var c in result.Configs)
