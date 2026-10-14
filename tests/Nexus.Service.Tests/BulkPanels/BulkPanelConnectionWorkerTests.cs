@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
@@ -36,6 +37,36 @@ public class BulkPanelConnectionWorkerTests
 
             usb.Present = true;
             Assert.True(await Eventually(() => hub.IsConnected));
+        }
+        finally
+        {
+            await worker.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task A_pipe_whose_device_is_gone_is_reopened_while_presence_never_misses()
+    {
+        var usb = new SwitchableUsb { Present = true };
+        var driver = new FakeDriver();
+        var hub = new BulkPanelHub(driver);
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Devices.NexusControlEnabled.Add(driver.HandlerId));
+        var pipes = new PipeFactory();
+        var worker = new BulkPanelConnectionWorker(
+            new NoHid(), pipes, hub, new DeviceControlGate(store), new HardwarePresence(usb),
+            connectPollMs: 100, presencePollMs: 50);
+
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.True(await Eventually(() => hub.IsConnected));
+            Assert.Single(pipes.Opened);
+
+            Assert.True(pipes.Opened.TryPeek(out var first));
+            first!.Gone = true;
+            Assert.True(await Eventually(() => pipes.Opened.Count == 2 && hub.IsConnected));
+            Assert.Equal(1, driver.Disconnects);
         }
         finally
         {
@@ -89,11 +120,21 @@ public class BulkPanelConnectionWorkerTests
 
     private sealed class PipeFactory : IBulkUsbPipeFactory
     {
-        public IBulkUsbPipe? Open(int vendorId, int productId, byte writePipeId, byte readPipeId) => new NullPipe();
+        public readonly ConcurrentQueue<NullPipe> Opened = new();
+
+        public IBulkUsbPipe? Open(int vendorId, int productId, byte writePipeId, byte readPipeId)
+        {
+            var pipe = new NullPipe();
+            Opened.Enqueue(pipe);
+            return pipe;
+        }
     }
 
     private sealed class NullPipe : IBulkUsbPipe
     {
+        public volatile bool Gone;
+
+        public bool IsGone => Gone;
         public bool Write(ReadOnlySpan<byte> data) => true;
         public bool Write(byte pipeId, ReadOnlySpan<byte> data) => true;
         public int Read(Span<byte> buffer, int timeoutMs) => 0;

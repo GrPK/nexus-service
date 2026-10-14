@@ -25,6 +25,8 @@
 // * Status-window level when --always-on-top, normal level otherwise.
 // * SPA -> host bridge via WKScriptMessageHandler named "nexusOverlay".
 //
+// Also hosts the off-screen renderers for streamed panels (streamhost.swift).
+//
 // Lifecycle: dies on parent process exit (we monitor stdin EOF). Re-spawned
 // by the service on demand. Single instance via PID file in
 // ~/Library/Application Support/Nexus/.
@@ -864,6 +866,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let opts: Options
     var controller: OverlayController?
     var kiosk: KioskController?
+    var streams: StreamHostController?
 
     init(_ opts: Options) { self.opts = opts }
 
@@ -876,15 +879,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         k.start()
         kiosk = k
 
+        let s = StreamHostController(opts)
+        s.start()
+        streams = s
+
         // Stdin doubles as lifecycle + push channel: the service writes one
-        // command per line ("assignments-changed" -> kiosk reconcile), and
+        // command per line ("assignments-changed" -> kiosk and stream reconcile), and
         // EOF means the parent (nexus-service) is gone, so terminate. The
         // EOF half keeps the helper from leaking after a service crash that
         // doesn't close its child cleanly.
         DispatchQueue.global(qos: .background).async { [weak self] in
             while let line = readLine(strippingNewline: true) {
                 if line == "assignments-changed" {
-                    DispatchQueue.main.async { self?.kiosk?.refresh() }
+                    DispatchQueue.main.async {
+                        self?.kiosk?.refresh()
+                        self?.streams?.refresh()
+                    }
                 }
             }
             DispatchQueue.main.async { NSApplication.shared.terminate(nil) }

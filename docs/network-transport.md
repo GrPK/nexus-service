@@ -50,7 +50,7 @@ is called out here:
 - `/panel/streams/*` (streamed panels) - `GET /panel/streams/assignments` is a
   regular poll target; `POST /panel/streams/{sessionId}/ingest` is not
   request/reply, it is one long-lived chunked POST per stream session that
-  carries framed H.264 access units for the life of the session (request
+  carries framed H.264 access units or raw BGRA frames for the life of the session (request
   body size and minimum data rate limits are lifted for this route).
 - `/diagnostics/*` - health/incident/SMART/GPU/memory snapshots plus
   downloadable support bundle (`/diagnostics/support-bundle/download`) and PDF report

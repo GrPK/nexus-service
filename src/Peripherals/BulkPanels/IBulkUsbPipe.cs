@@ -4,8 +4,7 @@ namespace Nexus.Service.Peripherals.BulkPanels;
 
 /// <summary>
 /// A USB bulk endpoint pair for one panel. Kept behind an interface so the driver logic
-/// and its tests build and run everywhere, while the only real implementation is WinUSB
-/// and Windows-only.
+/// and its tests build and run everywhere; the transports are WinUSB and macOS IOUSBHost.
 /// </summary>
 public interface IBulkUsbPipe : IDisposable
 {
@@ -23,13 +22,16 @@ public interface IBulkUsbPipe : IDisposable
 
     /// <summary>USB product id of the opened device, for a driver that claims several; 0 when unknown.</summary>
     int ProductId => 0;
+
+    /// <summary>True once the transport knows the device behind this pipe is gone; a fast re-enumeration slips between presence scans.</summary>
+    bool IsGone => false;
 }
 
 /// <summary>
 /// Opens the bulk pipes for a device, or returns null when it is not reachable that way.
 ///
-/// The common reason for null is not absence: these panels only expose bulk endpoints to
-/// us when Windows has bound WinUSB to them. A cooler still driven by its vendor's own
+/// The common reason for null on Windows is not absence: these panels only expose bulk
+/// endpoints to us when WinUSB is bound to them. A cooler still driven by its vendor's own
 /// kernel driver enumerates fine and cannot be opened here at all.
 /// </summary>
 public interface IBulkUsbPipeFactory
@@ -37,7 +39,7 @@ public interface IBulkUsbPipeFactory
     IBulkUsbPipe? Open(int vendorId, int productId, byte writePipeId, byte readPipeId);
 }
 
-/// <summary>Stands in on platforms with no WinUSB, so the rest of the graph still resolves.</summary>
+/// <summary>Stands in on Linux, which has no bulk-pipe transport, so the rest of the graph still resolves.</summary>
 public sealed class NullBulkUsbPipeFactory : IBulkUsbPipeFactory
 {
     public IBulkUsbPipe? Open(int vendorId, int productId, byte writePipeId, byte readPipeId) => null;
