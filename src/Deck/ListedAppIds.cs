@@ -32,7 +32,7 @@ public sealed class ListedAppSnapshot
 /// </summary>
 public sealed class ListedAppIds : IDisposable
 {
-    // Shorter than the provider's own app-list cache so the list stays warm.
+    // Refresh cadence; requests read the last loaded set and never wait on a refresh.
     private static readonly TimeSpan DefaultRefresh = TimeSpan.FromMinutes(4);
     private static readonly TimeSpan DefaultRetry = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MaxRetry = TimeSpan.FromSeconds(60);

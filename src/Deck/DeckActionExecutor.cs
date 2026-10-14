@@ -240,7 +240,7 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
     /// A Start-Menu id launches through the shortcuts provider. Anything it does
     /// not know is a direct target saved in the layout: a local-drive file path,
     /// or an http, https or steam URI. launchApp keys carrying a direct target
-    /// are privileged (DeckLayoutPolicy), so they are desktop-authored; a panel
+    /// are privileged when unlisted (DeckLayoutPolicy; listed direct ids are not), so they are desktop-authored; a panel
     /// can only trigger them. /shortcuts/launch still resolves list ids only.
     /// </summary>
     private async Task LaunchAppAsync(string appId)
