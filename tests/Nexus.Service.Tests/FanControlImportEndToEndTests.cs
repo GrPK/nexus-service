@@ -250,13 +250,13 @@ public class FanControlImportEndToEndTests
     }
 
     [Fact]
-    public void Apply_ActivatingThePresetBindsTheFansForReal()
+    public void Apply_BindsTheFansSoTheEngineDrivesOnTheNextTick()
     {
         var (import, fans, store) = Build();
         import.Apply(null, AllCategories);
 
-        // Activation ran as part of the import, so the engine drives on the
-        // very next tick without anything else being pressed.
+        // The bindings are written by the import itself, so the engine drives
+        // on the very next tick without anything else being pressed.
         var engine = new CurveEngine(fans, store, new MultiplexHub());
         fans.Temperature = 55f;
         engine.Tick();
@@ -275,7 +275,6 @@ public class FanControlImportEndToEndTests
         });
 
         Assert.False(result.Error);
-        Assert.Null(result.PresetId);
         Assert.Empty(store.Load().Cooling.Presets);
         Assert.NotEmpty(store.Load().Cooling.FanCalibrations);
     }
@@ -343,7 +342,6 @@ public class FanControlImportEndToEndTests
         var result = import.Apply(null, BindingCategories);
 
         Assert.False(result.Error);
-        Assert.Null(result.PresetId);
         var after = store.Load().Cooling;
         Assert.Equal("Mine", Assert.Single(after.Presets).Name);
         Assert.Equal("mine", after.ActivePresetId);
@@ -351,7 +349,6 @@ public class FanControlImportEndToEndTests
         Assert.Equal(assignmentsBefore, after.CustomFanCurveAssignments);
         Assert.Equal(offsetsBefore, after.FanOffsets);
     }
-
 
     private static (string? Curve, int? Manual, int? Offset) Effective(CoolingSettings c, string channel) =>
         (c.Curves.FirstOrDefault(x => x.Outputs.Any(o => o.Id == channel))?.Id,
@@ -399,7 +396,6 @@ public class FanControlImportEndToEndTests
         var (import, _, store) = Build();
         var result = import.Apply(null, AllCategories);
 
-        Assert.Null(result.PresetId);
         Assert.Empty(store.Load().Cooling.Presets);
         Assert.NotNull(Effective(store.Load().Cooling, Fan0).Curve);
         Assert.Equal(65, store.Load().Cooling.ManualSpeeds[Fan2]);
@@ -496,5 +492,92 @@ public class FanControlImportEndToEndTests
         Assert.NotNull(Effective(cooling, Fan1).Curve);
         Assert.DoesNotContain(Fan0, cooling.CustomFanCurveAssignments.Keys);
         Assert.Equal(0, result.ManualImported);
+    }
+
+    [Theory]
+    [InlineData("names")]
+    [InlineData("calibration")]
+    [InlineData("manual")]
+    [InlineData("offsets")]
+    public void Apply_WithoutCurves_LeavesAFansEarlierManualSpeedAndOffsetAlone(string category)
+    {
+        var (import, _, store) = Build();
+        store.Update(s =>
+        {
+            s.Cooling.ManualSpeeds[Fan1] = 50;
+            s.Cooling.CustomManualSpeeds[Fan1] = 50;
+            s.Cooling.FanOffsets[Fan1] = 9;
+        });
+
+        import.Apply(null, new[] { category });
+
+        var cooling = store.Load().Cooling;
+        Assert.Equal(50, cooling.ManualSpeeds[Fan1]);
+        Assert.Equal(50, cooling.CustomManualSpeeds[Fan1]);
+        Assert.Equal(9, cooling.FanOffsets[Fan1]);
+    }
+
+    [Fact]
+    public void Apply_ManualOnly_ClearsTheHealUndoWhenItTakesAFanOffACurve()
+    {
+        var (import, _, store) = Build();
+        store.Update(s =>
+        {
+            s.Cooling.Curves.Add(new CurveDocument
+            {
+                Id = "mine", Name = "Mine", Type = "Flat", Flat = new FlatCurveData { Speed = 33 },
+                Outputs = { new CurveOutputDocument { Id = Fan2, Type = "Fan" } },
+            });
+            s.Cooling.HealedAtUtcMs = 5;
+            s.Cooling.HealedChannels = new List<HealedChannelRecord> { new() { Id = Fan2, Name = "Fan #3", Hazard = "x" } };
+        });
+
+        import.Apply(null, new[] { FanControlImportService.CategoryManual });
+
+        var cooling = store.Load().Cooling;
+        Assert.Null(Effective(cooling, Fan2).Curve);
+        Assert.Null(cooling.HealedAtUtcMs);
+        Assert.Empty(cooling.HealedChannels);
+    }
+
+    [Fact]
+    public void ReImporting_MovesASavedPresetsReferenceToTheRetainedCopyOnly()
+    {
+        var (import, _, store) = Build();
+        import.Apply(null, AllCategories);
+        // An unclaimed fan was left on an earlier import's graph curve, and a
+        // saved preset and the custom snapshot both name that curve for it.
+        store.Update(s =>
+        {
+            s.Cooling.Curves.First(c => c.Id == "fc-cpu-graph").Outputs.Add(new CurveOutputDocument { Id = Other, Type = "Fan" });
+            s.Cooling.Presets.Add(new CoolingPreset
+            {
+                Id = "gaming", Name = "Gaming", Mode = "custom",
+                FanCurveAssignments = new Dictionary<string, string> { [Other] = "fc-cpu-graph", [Fan2] = "mine" },
+            });
+            s.Cooling.CustomFanCurveAssignments[Other] = "fc-cpu-graph";
+        });
+
+        import.Apply(null, AllCategories);
+
+        var cooling = store.Load().Cooling;
+        var gaming = cooling.Presets.Single(p => p.Id == "gaming");
+        Assert.Equal("fc-cpu-graph-kept", gaming.FanCurveAssignments[Other]);
+        Assert.Equal("fc-cpu-graph-kept", cooling.CustomFanCurveAssignments[Other]);
+        Assert.Equal("mine", gaming.FanCurveAssignments[Fan2]);
+        Assert.Equal("fc-cpu-graph-kept", Effective(cooling, Other).Curve);
+        Assert.Equal("fc-cpu-graph", Effective(cooling, Fan0).Curve);
+    }
+
+    [Fact]
+    public void Apply_ThatBindsAFan_LabelsTheProfileCustom()
+    {
+        var (import, fans, store) = Build();
+        FanProfiles.Apply("silent", fans, store);
+        Assert.Equal("silent", store.Load().Cooling.ActivePreset);
+
+        import.Apply(null, AllCategories);
+
+        Assert.Equal("custom", store.Load().Cooling.ActivePreset);
     }
 }

@@ -85,7 +85,10 @@ public sealed class FanControlImportService
             {
                 curve.Outputs.RemoveAll(o => !eligible.Contains(o.Id));
             }
-            var claimed = new HashSet<string>(curves.SelectMany(c => c.Outputs.Select(o => o.Id)), StringComparer.Ordinal);
+            // Only channels whose curve binding is written in this import.
+            var claimed = wanted.Contains(CategoryCurves)
+                ? new HashSet<string>(curves.SelectMany(c => c.Outputs.Select(o => o.Id)), StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
             var manual = wanted.Contains(CategoryManual)
                 ? plan.ManualSpeeds.Where(kv => eligible.Contains(kv.Key) && !claimed.Contains(kv.Key))
                     .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal)
@@ -103,9 +106,10 @@ public sealed class FanControlImportService
                 // manual channel leaves whatever curve drove it: two curves on
                 // one channel would fight every tick.
                 var previous = cooling.Curves;
+                var oldOwner = ImportedOwners(previous);
                 var extra = new HashSet<string>(manual.Keys, StringComparer.Ordinal);
                 cooling.Curves = Nexus2FanCurveApplier.Compose(previous, curves, ImportedIdPrefix, extra);
-                RemapStaleReferences(cooling);
+                FollowRetainedCopies(cooling, oldOwner, claimed);
                 var restore = new Dictionary<string, string>(cooling.CustomFanCurveAssignments, StringComparer.Ordinal);
                 foreach (var channel in claimed)
                 {
@@ -125,9 +129,15 @@ public sealed class FanControlImportService
             }
             else if (manual.Count > 0)
             {
+                var removed = false;
                 foreach (var curve in cooling.Curves)
                 {
-                    curve.Outputs.RemoveAll(o => manual.ContainsKey(o.Id));
+                    removed |= curve.Outputs.RemoveAll(o => manual.ContainsKey(o.Id)) > 0;
+                }
+                if (removed)
+                {
+                    // Undo heal would restore the old curves over this import.
+                    cooling.ClearHeal("import");
                 }
                 foreach (var channel in manual.Keys)
                 {
@@ -184,8 +194,10 @@ public sealed class FanControlImportService
 
             if (changedAny)
             {
-                // The profile bar has to agree with the bindings just written.
-                cooling.ActivePreset = FanProfiles.DerivePresetFromCurves(cooling, channels);
+                // Derivation ignores unresponsive channels, so a built-in label
+                // could survive and the boot re-apply would pull the imported
+                // fans back onto its curve.
+                cooling.ActivePreset = "custom";
             }
         });
 
@@ -209,26 +221,50 @@ public sealed class FanControlImportService
         return response;
     }
 
-    /// <summary>
-    /// A retained copy moves an earlier import's curve to a new id; saved
-    /// assignments that named the old id follow the channel to the curve that
-    /// drives it now.
-    /// </summary>
-    private static void RemapStaleReferences(CoolingSettings cooling)
+    /// <summary>Channel to the id of the earlier import's curve that drives it.</summary>
+    private static Dictionary<string, string> ImportedOwners(IEnumerable<CurveDocument> curves)
     {
-        var live = cooling.Curves.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
-        string? Owner(string channel) =>
-            cooling.Curves.FirstOrDefault(c => c.Outputs.Any(o => o.Id == channel))?.Id;
-        bool Stale(string curveId) =>
-            curveId.StartsWith(ImportedIdPrefix, StringComparison.Ordinal) && !live.Contains(curveId);
+        var owners = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var curve in curves.Where(c => c.Id.StartsWith(ImportedIdPrefix, StringComparison.Ordinal)))
+        {
+            foreach (var output in curve.Outputs)
+            {
+                owners[output.Id] = curve.Id;
+            }
+        }
+        return owners;
+    }
+
+    /// <summary>
+    /// A channel this import does not claim stays on a retained copy of its
+    /// earlier curve, which gets a new id. Saved assignments that named the
+    /// earlier id for that channel follow it; any other reference (a user
+    /// curve, a built-in preset curve) is left as it is.
+    /// </summary>
+    private static void FollowRetainedCopies(CoolingSettings cooling, Dictionary<string, string> oldOwner, HashSet<string> claimed)
+    {
+        var moved = new Dictionary<string, (string From, string To)>(StringComparer.Ordinal);
+        foreach (var (channel, from) in oldOwner)
+        {
+            if (claimed.Contains(channel))
+            {
+                continue;
+            }
+            var now = cooling.Curves.FirstOrDefault(
+                c => c.Id.StartsWith(ImportedIdPrefix, StringComparison.Ordinal) && c.Outputs.Any(o => o.Id == channel));
+            if (now is not null && now.Id != from)
+            {
+                moved[channel] = (from, now.Id);
+            }
+        }
 
         foreach (var map in cooling.Presets.Select(p => p.FanCurveAssignments).Append(cooling.CustomFanCurveAssignments))
         {
-            foreach (var (channel, curveId) in map.Where(kv => Stale(kv.Value)).ToList())
+            foreach (var (channel, move) in moved)
             {
-                if (Owner(channel) is { } owner)
+                if (map.TryGetValue(channel, out var id) && id == move.From)
                 {
-                    map[channel] = owner;
+                    map[channel] = move.To;
                 }
             }
         }
