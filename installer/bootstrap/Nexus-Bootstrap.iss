@@ -117,26 +117,45 @@ begin
     + 'Restoring the file this window downloaded will not help, because each run downloads a new copy.';
 end;
 
-// Shows the message; interactive runs may open the offline download page.
-// Silent runs get no dialog (IDNO) and the caller still fails.
+// Interactive runs show the message and may start the offline installer
+// download. Silent runs (any /SILENT or /VERYSILENT) show nothing; the caller
+// still fails.
 procedure ShowAntivirusBlock();
 var
   ErrCode: Integer;
 begin
-  if SuppressibleMsgBox(AntivirusMessage() + #13#10#13#10 + 'Open the download page now?',
-    mbError, MB_YESNO, IDNO) = IDYES then
+  if WizardSilent then
+    Exit;
+  if MsgBox(AntivirusMessage() + #13#10#13#10 + 'Download the offline installer now?',
+    mbError, MB_YESNO) = IDYES then
     ShellExec('open', '{#PayloadUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
 end;
 
-// True when a payload download error reads like a scanner interfering with
-// the temp file (open or rename refused), not a network or hash failure.
-function LooksLikeFileBlock(const Msg: String): Boolean;
+// The literal text of an Inno message before its first placeholder.
+function MessageLead(const Id: TSetupMessageID): String;
 var
-  M: String;
+  P: Integer;
 begin
-  M := Lowercase(Msg);
-  Result := (Pos('movefile', M) > 0) or (Pos('could not open', M) > 0) or
-            (Pos('access is denied', M) > 0) or (Pos('virus', M) > 0);
+  Result := SetupMessage(Id);
+  P := Pos('%', Result);
+  if P > 0 then
+    Result := Copy(Result, 1, P - 1);
+end;
+
+// A payload-phase error that is clearly not a scanner touching the file: a
+// failed or mismatched transfer, identified by Inno's own English message
+// text (this stub ships English only) plus the HTTP client's wording.
+// Everything else in that phase (rename, open, hash read failures) is treated
+// as a file block.
+function IsTransferError(const Msg: String): Boolean;
+begin
+  Result := (Pos(MessageLead(msgErrorDownloadFailed), Msg) > 0) or
+            (Pos(MessageLead(msgErrorDownloadSizeFailed), Msg) > 0) or
+            (Pos(MessageLead(msgErrorFileSize), Msg) > 0) or
+            (Pos(MessageLead(msgErrorProgress), Msg) > 0) or
+            (Pos(SetupMessage(msgVerificationFileHashIncorrect), Msg) > 0) or
+            (Pos('Error sending data', Msg) > 0) or
+            (Pos('Error receiving data', Msg) > 0);
 end;
 
 procedure InitializeWizard();
@@ -212,7 +231,7 @@ begin
     except
       if DownloadPage.AbortedByUser then
         Log('Download aborted by user.')
-      else if InPayload and (Downloaded or LooksLikeFileBlock(GetExceptionMessage)) then
+      else if InPayload and (Downloaded or not IsTransferError(GetExceptionMessage)) then
       begin
         Log('Payload blocked during or after download: ' + GetExceptionMessage);
         ShowAntivirusBlock;

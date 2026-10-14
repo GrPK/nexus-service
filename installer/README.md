@@ -97,15 +97,15 @@ exits non-zero on failure: 1 if the download or the hash check fails, 3 if
 the payload fails, is cancelled, or the UAC prompt is declined. When the
 payload is blocked or removed around the download (antivirus quarantine, a
 false positive), the stub says so and offers the offline installer, a single
-file the user can allow in their antivirus. The payload is downloaded without Mark-of-the-Web, the same as the
-in-app OTA, so it is not subject to a per-release SmartScreen check - which is
-the point: SmartScreen reputation is keyed on the downloaded file's hash, and
-a release every day or two never lets `Nexus-Setup.exe` accrue any. The web
-installers are built and signed **once** by the release CI's `web_installers`
-dispatch input and published as release assets on
-`github.com/hello-nexus/nexus-installer` (one release per `StubVersion`, so
-`releases/latest/download/<name>` is a fixed URL), then re-used unchanged
-across releases. **Rebuild them only when the bootstrap
+file the user can allow in their antivirus. The payload is downloaded
+without Mark-of-the-Web, the same as the in-app OTA, so it is not subject to a
+per-release SmartScreen check - which is the point: SmartScreen reputation is
+keyed on the downloaded file's hash, and a release every day or two never lets
+`Nexus-Setup.exe` accrue any. The web installers are built and signed **once**
+by the release CI's `web_installers` dispatch input and published as release
+assets on `github.com/hello-nexus/nexus-installer` (one release per
+`StubVersion`, so `releases/latest/download/<name>` is a fixed URL), then
+re-used unchanged across releases. **Rebuild them only when the bootstrap
 script changes** (bump its `StubVersion`); every rebuild is a new hash that
 starts from zero. `-Bootstrap` writes a `<name>.sha256` next to each output
 (same `<hash>  <name>` shape as `SHA256SUMS`).
