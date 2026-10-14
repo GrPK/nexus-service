@@ -116,6 +116,13 @@ public sealed class Slv3Hub : IDisposable
     private readonly Dictionary<string, AutoRebindState> _moves = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RebindSighting> _rebindSeen = new(StringComparer.Ordinal);
     internal const int RebindConfirmPolls = 3;
+    // A chain back on the master it was retaken from within this window is
+    // held by a live master. Such a master re-asserts within seconds, while
+    // corruption was seen once in nine hours, so a later return is corruption.
+    internal const long PullBackWindowMs = 600_000;
+    private readonly Dictionary<string, byte[]> _retakeFrom = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Retaken> _retaken = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, byte[]> _neighbourMaster = new(StringComparer.Ordinal);
 
     private ISlv3Transport? _tx;
     private ISlv3Transport? _rx;
@@ -889,11 +896,16 @@ public sealed class Slv3Hub : IDisposable
         return false;
     }
 
-    // A reported master that is a damaged copy of ours, seen on no other unowned chain: a real neighbour
-    // master always has chains of its own in the list, a corrupted one is unique to the chain it hit.
+    // A near copy of our master is corruption unless another unowned chain
+    // reports it too, or the chain was pulled back to it after a retake.
     private bool CorruptedMasterLocked(Slv3DeviceRecord record)
     {
         if (!Slv3Protocol.IsCorruptedMasterCopy(record.MasterMac, _masterMac))
+        {
+            return false;
+        }
+        if (_neighbourMaster.TryGetValue(Convert.ToHexString(record.Mac), out var near)
+            && Slv3Protocol.MacEquals(near, record.MasterMac))
         {
             return false;
         }
@@ -907,6 +919,32 @@ public sealed class Slv3Hub : IDisposable
             }
         }
         return true;
+    }
+
+    // A chain that returns to the master it was just retaken from is held by
+    // a live master: it is left alone while it sits there.
+    private void NotePullBackLocked(string key, Slv3DeviceRecord record, long now)
+    {
+        if (!_retaken.TryGetValue(key, out var retaken))
+        {
+            return;
+        }
+        if (now - retaken.AtMs > PullBackWindowMs)
+        {
+            _retaken.Remove(key);
+            return;
+        }
+        if (!Slv3Protocol.MacEquals(retaken.Master, record.MasterMac)
+            || !_knownChains.TryGetValue(key, out var chain) || chain.Poll != _devicePolls)
+        {
+            return;
+        }
+        _retaken.Remove(key);
+        _neighbourMaster[key] = retaken.Master;
+        _pending.Remove(key);
+        _rebind.Remove(key);
+        _rebindSeen.Remove(key);
+        ServiceLog.Info($"[lianli-wireless] chain {key} pulled back to {Convert.ToHexString(retaken.Master)} after retake, treating it as a neighbour");
     }
 
     // L-Connect SyncControlInfo for owned devices: bind one back when it reports
@@ -936,6 +974,14 @@ public sealed class Slv3Hub : IDisposable
             }
             var zeroMaster = Slv3Protocol.MacIsZero(record.MasterMac);
             var ours = Slv3Protocol.MacEquals(record.MasterMac, _masterMac);
+            if (ours && IsBoundToUsLocked(record))
+            {
+                _neighbourMaster.Remove(key);
+            }
+            else if (!zeroMaster && !ours)
+            {
+                NotePullBackLocked(key, record, now);
+            }
             var settled = ours && IsBoundToUsLocked(record) && record.Channel == _channel;
             var corrupted = !zeroMaster && !ours && CorruptedMasterLocked(record);
             if (!(zeroMaster || ours || corrupted) || settled)
@@ -981,6 +1027,10 @@ public sealed class Slv3Hub : IDisposable
             var why = corrupted ? $"on corrupted master {Convert.ToHexString(record.MasterMac)}" : drift ? "off our channel" : "unbound";
             ServiceLog.Info($"[lianli-wireless] auto-rebind {key} {why}, binding to slot {slot} (attempt {state.Attempts + 1})");
             StartBindLocked(record, (byte)slot, auto: true);
+            if (corrupted)
+            {
+                _retakeFrom[key] = record.MasterMac;
+            }
         }
         ResolveSlotConflictsLocked();
     }
@@ -1476,6 +1526,10 @@ public sealed class Slv3Hub : IDisposable
                 if (done)
                 {
                     ServiceLog.Info($"[lianli-wireless] {(op.Unbind ? "unbind" : "bind")} for {key} confirmed ({DescribeBinding(record, _masterMac)})");
+                    if (_retakeFrom.Remove(key, out var from) && !op.Unbind)
+                    {
+                        _retaken[key] = new Retaken(from, _nowMs());
+                    }
                     (resolved ??= new List<string>()).Add(key);
                     bindConfirmed |= !op.Unbind;
                     if (op.Auto)
@@ -2079,6 +2133,8 @@ public sealed class Slv3Hub : IDisposable
                 return false;
             }
             var key = Convert.ToHexString(mac);
+            _neighbourMaster.Remove(key);
+            _retaken.Remove(key);
             if (IsBoundToUsLocked(existing))
             {
                 _pending.Remove(key);
@@ -2101,6 +2157,7 @@ public sealed class Slv3Hub : IDisposable
 
     private void StartBindLocked(Slv3DeviceRecord record, byte slot, bool auto)
     {
+        _retakeFrom.Remove(Convert.ToHexString(record.Mac));
         _rebindSeen.Remove(Convert.ToHexString(record.Mac));
         _pending[Convert.ToHexString(record.Mac)] = new Slv3PendingOp(record.Mac, slot, Unbind: false, PendingOpTickBudget, auto);
         // First frame goes out now; the poll re-sends until the device list
@@ -2879,6 +2936,7 @@ public sealed class Slv3Hub : IDisposable
 
     private readonly record struct Slv3PendingOp(byte[] Mac, byte TargetSlot, bool Unbind, int TicksRemaining, bool Auto = false);
 
+    private readonly record struct Retaken(byte[] Master, long AtMs);
     private readonly record struct AutoRebindState(long LastAttemptMs, int Attempts);
 
     private readonly record struct RebindSighting(long LastPoll, int Count);

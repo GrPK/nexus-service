@@ -742,11 +742,7 @@ public static class Slv3Protocol
     /// <summary>Fewest bytes a zero-damaged master must still share with ours.</summary>
     public const int MinMasterBytesKept = 3;
 
-    /// <summary>
-    /// True when <paramref name="reported"/> is a damaged copy of <paramref name="ours"/>: not equal and not
-    /// zero, yet either within <see cref="MaxMasterBitErrors"/> flipped bits, or made only of our bytes and
-    /// zeros with at least <see cref="MinMasterBytesKept"/> of ours intact.
-    /// </summary>
+    /// <summary>A non-zero master within the bit budget of ours, or ours with bytes zeroed.</summary>
     public static bool IsCorruptedMasterCopy(ReadOnlySpan<byte> reported, ReadOnlySpan<byte> ours)
     {
         if (reported.Length < MacLength || ours.Length < MacLength || MacIsZero(reported) || MacEquals(reported, ours))
