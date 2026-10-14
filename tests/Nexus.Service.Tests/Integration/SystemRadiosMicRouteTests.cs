@@ -72,9 +72,18 @@ public sealed class SystemRadiosMicRouteTests : IDisposable
         Assert.Equal(("wifi", true), _radios.LastSet);
     }
 
+    [Fact]
+    public async Task PostRadios_Airplane_ReturnsReadBackState()
+    {
+        _radios.State = new RadiosState { Airplane = new RadioToggle { On = false }, Bluetooth = new RadioToggle { On = true } };
+        var res = await PanelClient().PostAsJsonAsync("/system/radios", new SetRadioBody { Kind = "airplane", On = true });
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("airplane").GetProperty("on").GetBoolean());
+        Assert.False(doc.RootElement.GetProperty("bluetooth").GetProperty("on").GetBoolean());
+    }
+
     [Theory]
     [InlineData("nope")]
-    [InlineData("airplane")]
     [InlineData("")]
     public async Task PostRadios_UnknownOrAbsentKind_IsFailEnvelope(string kind)
     {
@@ -131,12 +140,16 @@ public sealed class SystemRadiosMicRouteTests : IDisposable
 
         public Task<bool> SetAsync(string kind, bool on, CancellationToken ct = default)
         {
-            var toggle = kind switch { "wifi" => State.Wifi, "bluetooth" => State.Bluetooth, _ => null };
+            var toggle = kind switch { "wifi" => State.Wifi, "bluetooth" => State.Bluetooth, "airplane" => State.Airplane, _ => null };
             if (toggle is null)
             {
                 return Task.FromResult(false);
             }
             toggle.On = on;
+            if (kind == "airplane" && State.Bluetooth is not null)
+            {
+                State.Bluetooth.On = !on;
+            }
             LastSet = (kind, on);
             return Task.FromResult(true);
         }
