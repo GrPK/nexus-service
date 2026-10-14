@@ -111,6 +111,9 @@ public class Slv3MotherboardArgbTests
         Assert.True(_hub.DriveTick());
 
         Assert.Empty(_provider.BuildStructures());
+        var entry = Assert.Single(_provider.GetAll().DevicePageDevices);
+        Assert.Equal("lianli-wireless", entry.HandlerId);
+        Assert.Equal("argbInput", entry.Reason);
     }
 
     [Fact]

@@ -37,6 +37,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
     private readonly HydroShift2CurveLightingDeviceProvider _hydroShift2Curve;
     private readonly Galahad2LcdLightingProvider _galahad2Lcd;
     private readonly AsiahorseUmbraLightingDeviceProvider _umbra;
+    private readonly Peripherals.LianLiTl.TlFanHub _tl;
     private readonly Nexus.Service.Lighting.Smart.SmartLightProvider _smart;
     private readonly IConfigStore _store;
     private readonly LightingEngine _engine;
@@ -61,6 +62,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
         HydroShift2CurveLightingDeviceProvider hydroShift2Curve,
         Galahad2LcdLightingProvider galahad2Lcd,
         AsiahorseUmbraLightingDeviceProvider umbra,
+        Peripherals.LianLiTl.TlFanHub tl,
         Nexus.Service.Lighting.Smart.SmartLightProvider smart,
         IConfigStore store,
         LightingEngine engine)
@@ -84,6 +86,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
         _hydroShift2Curve = hydroShift2Curve;
         _galahad2Lcd = galahad2Lcd;
         _umbra    = umbra;
+        _tl       = tl;
         _smart    = smart;
         _store    = store;
         _engine   = engine;
@@ -97,6 +100,12 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             card.ControlHandlerId = handlerId;
         }
     }
+
+    /// <summary>The TL controller has no per-LED path, so while connected its look is always set on its device page.</summary>
+    internal static DevicePageLightingDevice? TlDevicePageEntry(bool connected, TlLightingSettings lighting) =>
+        !connected ? null : DevicePageLightingDevice.For("lianli-tl", lighting.ArgbSync
+            ? DevicePageLightingDevice.ReasonArgbInput
+            : DevicePageLightingDevice.ReasonFirmware);
 
     public bool IsConnected => _openRgb.IsConnected || _np50.IsConnected || _miniHub.IsConnected || _smartHub.IsConnected || _cnvs.IsConnected || _qseries.IsConnected || _keeb.IsConnected || _ibp.IsConnected || _lianLi.IsConnected || _lianLiWireless.IsConnected || _corsair.IsConnected || _strimer.IsConnected || _galahad2.IsConnected || _nollie.IsConnected || _kraken.IsConnected || _hydroShift2.IsConnected || _hydroShift2Curve.IsConnected || _galahad2Lcd.IsConnected || _umbra.IsConnected || _smart.IsConnected;
 
@@ -254,6 +263,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             foreach (var card in lianLi.Devices) card.ControlHandlerId = card.ParentDeviceId;
             rgb.Devices.AddRange(lianLi.Devices);
         }
+        rgb.DevicePageDevices.AddRange(lianLi.DevicePageDevices);
         var lianLiWireless = _lianLiWireless.GetAll();
         if (lianLiWireless.Devices.Count > 0)
         {
@@ -261,6 +271,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             TagControlHandler(lianLiWireless.Devices, "lianli-wireless");
             rgb.Devices.AddRange(lianLiWireless.Devices);
         }
+        rgb.DevicePageDevices.AddRange(lianLiWireless.DevicePageDevices);
         var corsair = _corsair.GetAll();
         if (corsair.Devices.Count > 0)
         {
@@ -275,6 +286,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             TagControlHandler(strimer.Devices, "strimer");
             rgb.Devices.AddRange(strimer.Devices);
         }
+        rgb.DevicePageDevices.AddRange(strimer.DevicePageDevices);
         var galahad2 = _galahad2.GetAll();
         if (galahad2.Devices.Count > 0)
         {
@@ -316,6 +328,11 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             rgb.IsInit = rgb.IsInit || umbra.IsInit;
             TagControlHandler(umbra.Devices, AsiahorseUmbraLightingDeviceProvider.DeviceId);
             rgb.Devices.AddRange(umbra.Devices);
+        }
+        rgb.DevicePageDevices.AddRange(umbra.DevicePageDevices);
+        if (TlDevicePageEntry(_tl.IsConnected, _store.Load().Devices.TlLighting) is { } tl)
+        {
+            rgb.DevicePageDevices.Add(tl);
         }
         var smartLights = _smart.GetAll();
         if (smartLights.Devices.Count > 0)

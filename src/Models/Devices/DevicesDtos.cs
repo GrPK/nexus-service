@@ -275,6 +275,24 @@ public class GetLightingDevicesResponse
     public List<Nexus.Service.Persistence.DeviceGroup> Groups { get; set; } = new();
     /// <summary>Cards stacked on one canvas frame and one selection, riding the list the same way.</summary>
     public List<Nexus.Service.Persistence.DeviceGroup> Stacks { get; set; } = new();
+    /// <summary>Connected devices whose lighting is set on their device page, so they have no cards here.</summary>
+    public List<DevicePageLightingDevice> DevicePageDevices { get; set; } = new();
+}
+
+public class DevicePageLightingDevice
+{
+    public const string ReasonFirmware = "firmware";
+    public const string ReasonArgbInput = "argbInput";
+
+    /// <summary>Device handler id, which keys the device page.</summary>
+    public string HandlerId { get; set; } = "";
+    /// <summary>The handler's name, filled by the route.</summary>
+    public string Name { get; set; } = "";
+    /// <summary><see cref="ReasonFirmware"/> (an effect the device plays itself) or <see cref="ReasonArgbInput"/> (follows a motherboard ARGB header).</summary>
+    public string Reason { get; set; } = "";
+
+    public static DevicePageLightingDevice For(string handlerId, string reason) =>
+        new() { HandlerId = handlerId, Reason = reason };
 }
 
 /// <summary>Whole-list replace for the user-made groups; the client owns order and membership.</summary>

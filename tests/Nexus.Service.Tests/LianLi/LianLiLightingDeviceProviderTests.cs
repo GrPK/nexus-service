@@ -322,6 +322,9 @@ public class LianLiLightingDeviceProviderTests
         Assert.Empty(_provider.GetAll().Devices);
         Assert.Empty(_provider.GetStructures());
         Assert.Empty(_provider.BuildFrames(0));
+        var entry = Assert.Single(_provider.GetAll().DevicePageDevices);
+        Assert.Equal("lianli", entry.HandlerId);
+        Assert.Equal("argbInput", entry.Reason);
     }
 
     [Fact]

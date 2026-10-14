@@ -99,8 +99,13 @@ public sealed class LianLiLightingDeviceProvider :
         var slot = 0;
         foreach (var hub in _hubs.Hubs)
         {
+            if (!hub.IsConnected) continue;
             // Under ARGB sync the fans play the source header's card, so the ports have none of their own.
-            if (!hub.IsConnected || PlaysArgbInput(hub, settings)) continue;
+            if (PlaysArgbInput(hub, settings))
+            {
+                resp.DevicePageDevices.Add(DevicePageLightingDevice.For(hub.DeviceId, DevicePageLightingDevice.ReasonArgbInput));
+                continue;
+            }
             var cards = BuildCards(hub.DeviceId, hub.Profile, settings, slot);
             slot += cards.Count;
             resp.Devices.AddRange(cards);

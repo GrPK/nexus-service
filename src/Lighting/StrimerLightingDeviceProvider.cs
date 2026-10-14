@@ -53,7 +53,11 @@ public sealed class StrimerLightingDeviceProvider :
         if (!_hub.IsConnected) return resp;
         var settings = _store.Load();
         // Under ARGB sync the cable plays the motherboard header, so it has no cards of its own.
-        if (settings.Devices.StrimerLighting.ArgbSync) return resp;
+        if (settings.Devices.StrimerLighting.ArgbSync)
+        {
+            resp.DevicePageDevices.Add(DevicePageLightingDevice.For("strimer", DevicePageLightingDevice.ReasonArgbInput));
+            return resp;
+        }
         var slot = 0;
         var structures = BuildStructures();
         foreach (var structure in structures)

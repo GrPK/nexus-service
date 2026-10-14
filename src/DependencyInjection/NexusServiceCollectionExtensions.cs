@@ -1401,6 +1401,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
+                sp.GetRequiredService<Nexus.Service.Peripherals.LianLiTl.TlFanHub>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Smart.SmartLightProvider>(),
                 sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Engine.LightingEngine>()));
@@ -1427,6 +1428,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
+                sp.GetRequiredService<Nexus.Service.Peripherals.LianLiTl.TlFanHub>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Smart.SmartLightProvider>(),
                 sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Engine.LightingEngine>()));

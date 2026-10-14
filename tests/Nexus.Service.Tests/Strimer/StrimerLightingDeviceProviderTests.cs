@@ -31,6 +31,21 @@ public class StrimerLightingDeviceProviderTests
         Connect();
         var result = _provider.GetAll();
         Assert.Equal(12, result.Devices.Count);
+        Assert.Empty(result.DevicePageDevices);
+    }
+
+    [Fact]
+    public void Argb_sync_lists_the_strimer_as_set_on_its_device_page()
+    {
+        Connect();
+        _store.Update(s => s.Devices.StrimerLighting.ArgbSync = true);
+
+        var result = _provider.GetAll();
+
+        Assert.Empty(result.Devices);
+        var entry = Assert.Single(result.DevicePageDevices);
+        Assert.Equal("strimer", entry.HandlerId);
+        Assert.Equal("argbInput", entry.Reason);
     }
 
     [Fact]

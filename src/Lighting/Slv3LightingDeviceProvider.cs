@@ -162,6 +162,15 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
                 resp.Devices.Add(BuildCard(structure, zone, slot++, settings, iconType));
             }
         }
+        var chains = settings.Devices.LianLiWireless.Chains;
+        foreach (var fan in _hub.State.Fans)
+        {
+            if (fan.BoundToUs && PlaysMotherboardArgb(fan, chains))
+            {
+                resp.DevicePageDevices.Add(DevicePageLightingDevice.For("lianli-wireless", DevicePageLightingDevice.ReasonArgbInput));
+                break;
+            }
+        }
         return resp;
     }
 

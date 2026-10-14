@@ -37,6 +37,7 @@ public class UmbraProviderTests
         Assert.Equal(new[] { 8, 12, 6 }, devices.Select(d => d.LedCount));
         Assert.All(devices, d => Assert.False(d.ZoneResizable));
         Assert.All(devices, d => Assert.Equal("asiahorse-umbra", d.ParentDeviceId));
+        Assert.Empty(provider.GetAll().DevicePageDevices);
     }
 
     [Theory]
@@ -51,14 +52,36 @@ public class UmbraProviderTests
         Assert.Empty(provider.GetAll().Devices);
         Assert.Empty(provider.GetStructures());
         Assert.Empty(provider.BuildFrames(0));
+        var entry = Assert.Single(provider.GetAll().DevicePageDevices);
+        Assert.Equal("asiahorse-umbra", entry.HandlerId);
+        Assert.Equal(source, entry.Reason);
+    }
+
+    [Fact]
+    public void Switching_between_device_page_sources_raises_DevicesChanged()
+    {
+        Connect((0, 8));
+        _store.Update(s => s.Devices.AsiahorseUmbra.Source = "firmware");
+        var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
+        var changed = 0;
+        provider.DevicesChanged += () => changed++;
+        provider.OnHubStateUpdated();
+        changed = 0;
+
+        _store.Update(s => s.Devices.AsiahorseUmbra.Source = "argbInput");
+        provider.OnHubStateUpdated();
+
+        Assert.Equal(1, changed);
     }
 
     [Fact]
     public void A_disconnected_device_publishes_nothing()
     {
+        _store.Update(s => s.Devices.AsiahorseUmbra.Source = "firmware");
         var provider = new AsiahorseUmbraLightingDeviceProvider(_hub, _store);
 
         Assert.Empty(provider.GetAll().Devices);
+        Assert.Empty(provider.GetAll().DevicePageDevices);
         Assert.Empty(provider.GetStructures());
         Assert.Empty(provider.BuildFrames(0));
     }

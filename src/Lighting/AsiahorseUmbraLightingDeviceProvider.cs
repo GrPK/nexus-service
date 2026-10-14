@@ -67,9 +67,11 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
 
     private string BuildSignature()
     {
-        if (!PublishesZones(_store.Load()))
+        var settings = _store.Load();
+        if (!PublishesZones(settings))
         {
-            return "none";
+            // The source takes part: firmware and ARGB input list the device under different reasons.
+            return _hub.IsConnected ? UmbraLightingPlan.SourceOf(settings.Devices.AsiahorseUmbra) : "none";
         }
         var sb = new StringBuilder();
         foreach (var p in _hub.Snapshot.Ports)
@@ -90,6 +92,13 @@ public sealed class AsiahorseUmbraLightingDeviceProvider :
         var settings = _store.Load();
         if (!PublishesZones(settings))
         {
+            if (_hub.IsConnected)
+            {
+                var source = UmbraLightingPlan.SourceOf(settings.Devices.AsiahorseUmbra);
+                resp.DevicePageDevices.Add(DevicePageLightingDevice.For(DeviceId, source == UmbraLightingPlan.SourceArgbInput
+                    ? DevicePageLightingDevice.ReasonArgbInput
+                    : DevicePageLightingDevice.ReasonFirmware));
+            }
             return resp;
         }
         var ports = _hub.Snapshot.Ports;
