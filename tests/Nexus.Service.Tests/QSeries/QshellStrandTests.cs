@@ -85,3 +85,51 @@ public class StrandedBeforeGraceTests
         Assert.False(QSeriesPortWatcher.StrandedBeforeGrace(TimeSpan.FromMinutes(2), null, 0));
     }
 }
+
+public class EscalationHeldDarkTests
+{
+    [Fact]
+    public void Panel_asleep_for_a_session_lock_is_not_escalated()
+    {
+        // Asleep after a resume it has no socket and no bytes, which reads as stranded.
+        Assert.True(QSeriesPortWatcher.EscalationHeldDark(settingScreenOff: false, sleepingForSessionLock: true));
+    }
+
+    [Fact]
+    public void Screen_off_setting_is_not_escalated()
+    {
+        Assert.True(QSeriesPortWatcher.EscalationHeldDark(settingScreenOff: true, sleepingForSessionLock: false));
+    }
+
+    [Fact]
+    public void Awake_panel_can_be_escalated()
+    {
+        Assert.False(QSeriesPortWatcher.EscalationHeldDark(settingScreenOff: false, sleepingForSessionLock: false));
+    }
+}
+
+public class RebootSettleRemainingTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 10, 14, 12, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void Reset_waits_out_the_cooldown_after_our_reboot()
+    {
+        var rebootedAt = Now - TimeSpan.FromSeconds(30);
+        Assert.Equal(
+            QSeriesPortWatcher.QshellRebootCooldown - TimeSpan.FromSeconds(30),
+            QSeriesPortWatcher.RebootSettleRemaining(rebootedAt, Now));
+    }
+
+    [Fact]
+    public void Reset_may_run_once_the_cooldown_has_passed()
+    {
+        Assert.Null(QSeriesPortWatcher.RebootSettleRemaining(Now - QSeriesPortWatcher.QshellRebootCooldown, Now));
+    }
+
+    [Fact]
+    public void No_reboot_this_run_never_holds_a_reset()
+    {
+        Assert.Null(QSeriesPortWatcher.RebootSettleRemaining(null, Now));
+    }
+}

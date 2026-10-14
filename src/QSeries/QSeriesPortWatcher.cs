@@ -585,6 +585,11 @@ public sealed class QSeriesPortWatcher : BackgroundService
     internal static bool EffectiveScreenOff(bool settingScreenOff, bool sleepingForSessionLock) =>
         settingScreenOff || sleepingForSessionLock;
 
+    /// <summary>A panel held dark (setting or session lock) stops its activity, so
+    /// it never contacts the service and the escalation would read it as wedged.</summary>
+    internal static bool EscalationHeldDark(bool settingScreenOff, bool sleepingForSessionLock) =>
+        EffectiveScreenOff(settingScreenOff, sleepingForSessionLock);
+
     /// Which keyevent a lock transition calls for. Unlock does NOT unconditionally
     /// wake: a user who turned the screen off by hand still wants it off when
     /// they come back, the same rule the resume path follows.
@@ -1063,10 +1068,9 @@ public sealed class QSeriesPortWatcher : BackgroundService
         {
             // Our own reboots re-enumerate USB before adbd registers; resetting the
             // devnode under one is the host-driven churn that wedges adbd.
-            if (_lastQshellRebootBySerial.TryGetValue(serial, out var lastReboot)
-                && now - lastReboot < QshellRebootCooldown)
+            if (RebootSettleRemaining(LastQshellReboot(serial), now) is { } settle)
             {
-                if (force) NoteLinkRepairDeferred(serial, QshellRebootCooldown - (now - lastReboot));
+                if (force) NoteLinkRepairDeferred(serial, settle);
                 continue;
             }
 
@@ -1158,6 +1162,12 @@ public sealed class QSeriesPortWatcher : BackgroundService
             // A forced repair only bypasses the waits for a serial already proven to
             // be a panel; an unrelated MediaTek phone keeps its own timers.
             var forceThis = force && _knownQSeriesSerials.Contains(device.Serial);
+            // Our own reboot passes through offline; a reset under it wedges adbd.
+            if (RebootSettleRemaining(LastQshellReboot(device.Serial), now) is { } settle)
+            {
+                if (forceThis) NoteLinkRepairDeferred(device.Serial, settle);
+                continue;
+            }
             if (HostRebootRecoverySuspended(forceThis)) continue;
             var offlineFor = now - since;
             if (!forceThis && offlineFor < OfflineRecoveryThreshold) continue;
@@ -1893,6 +1903,13 @@ public sealed class QSeriesPortWatcher : BackgroundService
         ServiceLog.Info($"[qseries-port-watcher] link repair requested {(DateTimeOffset.UtcNow - requestedAt).TotalSeconds:F0}s ago; running USB reset now");
     }
 
+    /// <summary>Time left before a USB reset may follow our reboot at <paramref name="lastReboot"/>, or null once it may.</summary>
+    internal static TimeSpan? RebootSettleRemaining(DateTimeOffset? lastReboot, DateTimeOffset now) =>
+        lastReboot is { } at && now - at < QshellRebootCooldown ? QshellRebootCooldown - (now - at) : null;
+
+    private DateTimeOffset? LastQshellReboot(string serial) =>
+        _lastQshellRebootBySerial.TryGetValue(serial, out var at) ? at : null;
+
     private void NoteLinkRepairDeferred(string serial, TimeSpan remaining)
     {
         if (_linkRepairDeferralLogged) return;
@@ -2179,7 +2196,7 @@ public sealed class QSeriesPortWatcher : BackgroundService
     /// transport id), so without this a flapping connector - or the reboot's own
     /// re-attach - could reboot-loop. 2 min spans reboot + qshell bootstrap.
     /// </summary>
-    private static readonly TimeSpan QshellRebootCooldown = TimeSpan.FromMinutes(2);
+    internal static readonly TimeSpan QshellRebootCooldown = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Grace after first sighting before an escalation reboot when the panel cannot
@@ -3209,10 +3226,7 @@ public sealed class QSeriesPortWatcher : BackgroundService
         // qshell is not installed (pre-upgrade panel on the OEM launcher): a panel
         // running the OEM is the expected pre-install state, not a wedge to reboot.
         if (_qshellMissingBySerial.Contains(device.Serial)) return;
-        // Screen off by request: a stopped activity cannot bump LastSeenAt, so the
-        // liveness gate below reads a deliberately dark panel as a wedged one and
-        // reboots it back on.
-        if (_configStore.Load().QSeries.ScreenOff) return;
+        if (EscalationHeldDark(_configStore.Load().QSeries.ScreenOff, SleepingForSessionLock())) return;
 
         var now = DateTimeOffset.UtcNow;
         var sinceFirstSeen = now - firstSeenAt;
