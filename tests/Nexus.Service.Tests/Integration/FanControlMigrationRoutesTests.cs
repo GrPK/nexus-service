@@ -91,4 +91,22 @@ public sealed class FanControlMigrationRoutesTests
             Assert.True(after["completed"].GetBoolean());
         }
     }
+
+    [Fact]
+    public async Task Onboarding_reset_clears_completed_so_the_import_is_offered_again()
+    {
+        var (factory, client) = Boot();
+        using (factory)
+        {
+            (await client.PostAsJsonAsync("/migration/fancontrol/apply", new { categories = new[] { "names" } }))
+                .EnsureSuccessStatusCode();
+            Assert.True(factory.Services.GetRequiredService<IConfigStore>().Load().FanControlImportCompleted);
+
+            (await client.PostAsync("/onboarding/reset", null)).EnsureSuccessStatusCode();
+
+            var status = await client.GetFromJsonAsync<Dictionary<string, System.Text.Json.JsonElement>>("/migration/fancontrol");
+            Assert.False(status!["completed"].GetBoolean());
+            Assert.True(status["pending"].GetBoolean());
+        }
+    }
 }

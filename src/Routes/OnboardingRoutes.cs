@@ -127,6 +127,7 @@ internal static class OnboardingRoutes
                 s.ImmersiveSwipeOnboardingCompleted = false;
                 s.Nexus2MigrationOffered = false;
                 s.FanControlImportOffered = false;
+                s.FanControlImportCompleted = false;
             });
             // Re-close, or notifications keep firing through the replay.
             Nexus.Service.Notifications.NotificationGate.Initialize(onboardingComplete: false);
