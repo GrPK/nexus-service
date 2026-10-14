@@ -867,6 +867,7 @@
     <Compile Remove="src/Platform/Displays/WindowsDisplayBrightnessProvider.cs" />
     <Compile Remove="src/Activity/WasapiLoopbackBeatsProvider.cs" />
     <Compile Remove="src/Activity/WindowsShortcutsProvider.cs" />
+    <Compile Remove="src/Platform/Radios/WindowsRadioProvider.cs" />
   </ItemGroup>
 
   <!-- Foreign-platform providers are dropped from a published single-RID binary

@@ -81,6 +81,12 @@ public interface IVolumeProvider
     VolumeState GetState(string deviceId) => GetState();
     void SetVolume(string deviceId, double volume) => SetVolume(volume);
     void SetMuted(string deviceId, bool muted) => SetMuted(muted);
+
+    /// <summary>The default capture (microphone) endpoint. Platforms without a
+    /// capture path report the same unsupported state as a missing output.</summary>
+    VolumeState GetCaptureState() => new() { Supported = false, Volume = 0, Muted = false };
+    void SetCaptureVolume(double volume) { }
+    void SetCaptureMuted(bool muted) { }
 }
 
 public interface IShortcutsProvider

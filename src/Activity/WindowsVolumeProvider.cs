@@ -66,6 +66,45 @@ public sealed unsafe class WindowsVolumeProvider : IVolumeProvider, IDisposable
         }, fallback: new VolumeState { Supported = deviceId.Length == 0, Volume = 0, Muted = false }, op: "read");
     }
 
+    public VolumeState GetCaptureState()
+    {
+        return RunOnComThread(() =>
+        {
+            var ep = OpenEndpoint("", capture: true);
+            if (ep == IntPtr.Zero) return new VolumeState { Supported = false, Volume = 0, Muted = false };
+            try
+            {
+                Marshal.ThrowExceptionForHR(GetMasterVolumeLevelScalar(ep, out var v));
+                Marshal.ThrowExceptionForHR(GetMute(ep, out var m));
+                return new VolumeState { Supported = true, Volume = Math.Clamp((double)v, 0, 1), Muted = m };
+            }
+            finally { Release(ep); }
+        }, fallback: new VolumeState { Supported = false, Volume = 0, Muted = false }, op: "capture read");
+    }
+
+    public void SetCaptureVolume(double volume)
+    {
+        var clamped = (float)Math.Clamp(volume, 0, 1);
+        RunOnComThread(() =>
+        {
+            var ep = OpenEndpoint("", capture: true);
+            if (ep == IntPtr.Zero) return 0;
+            try { Marshal.ThrowExceptionForHR(SetMasterVolumeLevelScalar(ep, clamped, IntPtr.Zero)); return 0; }
+            finally { Release(ep); }
+        }, fallback: 0, op: "capture set");
+    }
+
+    public void SetCaptureMuted(bool muted)
+    {
+        RunOnComThread(() =>
+        {
+            var ep = OpenEndpoint("", capture: true);
+            if (ep == IntPtr.Zero) return 0;
+            try { Marshal.ThrowExceptionForHR(SetMute(ep, muted, IntPtr.Zero)); return 0; }
+            finally { Release(ep); }
+        }, fallback: 0, op: "capture mute");
+    }
+
     public void SetVolume(double volume) => SetVolume("", volume);
 
     public void SetVolume(string deviceId, double volume)
@@ -176,7 +215,7 @@ public sealed unsafe class WindowsVolumeProvider : IVolumeProvider, IDisposable
     /// endpoint; otherwise the named endpoint. Returns IntPtr.Zero (not a
     /// throw) when a named device id no longer exists, so a device unplugged
     /// mid-session degrades to unsupported rather than an exception.</summary>
-    private static IntPtr OpenEndpoint(string deviceId = "")
+    private static IntPtr OpenEndpoint(string deviceId = "", bool capture = false)
     {
         var clsid = MMDeviceEnumeratorClsid;
         var enumIid = IID_IMMDeviceEnumerator;
@@ -188,7 +227,7 @@ public sealed unsafe class WindowsVolumeProvider : IVolumeProvider, IDisposable
             if (deviceId.Length == 0)
             {
                 // IMMDeviceEnumerator::GetDefaultAudioEndpoint - vtable slot 4 (after QI/AddRef/Release/EnumAudioEndpoints)
-                hrDevice = GetDefaultAudioEndpoint(enumPtr, EDataFlow.eRender, ERole.eConsole, out devicePtr);
+                hrDevice = GetDefaultAudioEndpoint(enumPtr, capture ? EDataFlow.eCapture : EDataFlow.eRender, ERole.eConsole, out devicePtr);
             }
             else
             {

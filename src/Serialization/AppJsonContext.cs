@@ -873,6 +873,8 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(VolumeState))]
 [JsonSerializable(typeof(SetVolumeBody))]
 [JsonSerializable(typeof(SetMutedBody))]
+[JsonSerializable(typeof(Nexus.Service.Models.Radios.RadiosState))]
+[JsonSerializable(typeof(Nexus.Service.Models.Radios.SetRadioBody))]
 [JsonSerializable(typeof(VolumeTargetState))]
 [JsonSerializable(typeof(SetVolumeTargetBody))]
 [JsonSerializable(typeof(SetVolumeTargetMuteBody))]
