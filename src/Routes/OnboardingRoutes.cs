@@ -157,7 +157,7 @@ internal static partial class OnboardingRoutes
 
     private const int MaxDismissedHints = 100;
 
-    [System.Text.RegularExpressions.GeneratedRegex("^[a-z0-9][a-z0-9-]{0,63}$")]
+    [System.Text.RegularExpressions.GeneratedRegex("^[a-z0-9][a-z0-9-]{0,63}\\z")]
     private static partial System.Text.RegularExpressions.Regex HintIdPattern();
 
     private static readonly string[] ConflictStepActions = { "resolveAll", "skip", "skipOnboarding" };

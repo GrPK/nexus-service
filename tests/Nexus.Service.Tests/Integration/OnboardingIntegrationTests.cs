@@ -404,12 +404,39 @@ public sealed class OnboardingHintsIntegrationTests : IClassFixture<NexusAppFact
     [InlineData("-lead")]
     [InlineData("has space")]
     [InlineData("under_score")]
+    [InlineData("calibrate-fans\n")]
     public async Task Dismiss_rejects_invalid_ids(string id)
     {
         Clear();
-        Assert.Equal(StatusCodes.Status400BadRequest, (await Dismiss(id)).Status);
+        var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { ["id"] = id });
+        Assert.Equal(StatusCodes.Status400BadRequest, (await Send("POST", "/onboarding/hints/dismiss", json)).Status);
+        Assert.Empty(_factory.Services.GetRequiredService<IConfigStore>().Load().DismissedOnboardingHints);
+    }
+
+    [Fact]
+    public async Task Dismiss_rejects_an_overlong_id_and_a_body_without_id()
+    {
+        Clear();
         Assert.Equal(StatusCodes.Status400BadRequest, (await Dismiss(new string('a', 65))).Status);
         Assert.Equal(StatusCodes.Status400BadRequest, (await Send("POST", "/onboarding/hints/dismiss", "{}")).Status);
+        Assert.Empty(_factory.Services.GetRequiredService<IConfigStore>().Load().DismissedOnboardingHints);
+    }
+
+    [Fact]
+    public async Task Dismiss_with_a_json_null_body_returns_400_from_the_route()
+    {
+        Clear();
+        var (status, _) = await Send("POST", "/onboarding/hints/dismiss", "null");
+        Assert.Equal(StatusCodes.Status400BadRequest, status);
+        Assert.Empty(_factory.Services.GetRequiredService<IConfigStore>().Load().DismissedOnboardingHints);
+    }
+
+    [Fact]
+    public async Task Dismiss_with_no_body_at_all_is_rejected_without_storing()
+    {
+        Clear();
+        var (status, _) = await Send("POST", "/onboarding/hints/dismiss");
+        Assert.Equal(StatusCodes.Status400BadRequest, status);
         Assert.Empty(_factory.Services.GetRequiredService<IConfigStore>().Load().DismissedOnboardingHints);
     }
 
@@ -472,5 +499,51 @@ public sealed class OnboardingHintsIntegrationTests : IClassFixture<NexusAppFact
         {
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
+    }
+}
+
+public sealed class OnboardingHintsProfileIsolationTests : IDisposable
+{
+    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "nexus-hints-prof-" + Guid.NewGuid().ToString("N")[..8]);
+    private readonly JsonConfigStore _store;
+    private readonly ProfileManager _profiles;
+
+    public OnboardingHintsProfileIsolationTests()
+    {
+        Directory.CreateDirectory(_tempDir);
+        _store = new JsonConfigStore(Path.Combine(_tempDir, "settings.json"));
+        _profiles = new ProfileManager(_store);
+        _profiles.Initialize();
+    }
+
+    public void Dispose()
+    {
+        _profiles.Dispose();
+        _store.Dispose();
+        try { Directory.Delete(_tempDir, recursive: true); } catch { }
+    }
+
+    [Fact]
+    public void Profile_switch_leaves_dismissed_hints_untouched()
+    {
+        _store.Update(s => s.DismissedOnboardingHints = new List<string> { "calibrate-fans" });
+        var other = _profiles.CreateProfile("Other");
+
+        _profiles.SwitchProfile(other.Id);
+
+        Assert.Equal(new[] { "calibrate-fans" }, _store.Load().DismissedOnboardingHints);
+    }
+
+    [Fact]
+    public void Library_replace_leaves_dismissed_hints_untouched()
+    {
+        _store.Update(s => s.DismissedOnboardingHints = new List<string> { "calibrate-fans" });
+
+        _profiles.ReplaceLibrary(new List<(string Id, string Name, NexusSettings Data)>
+        {
+            ("incoming-1", "Incoming", new NexusSettings()),
+        });
+
+        Assert.Equal(new[] { "calibrate-fans" }, _store.Load().DismissedOnboardingHints);
     }
 }
