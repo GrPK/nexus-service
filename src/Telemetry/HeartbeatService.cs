@@ -23,8 +23,12 @@ public sealed class HeartbeatService : BackgroundService
     private const string Endpoint = "https://api.hellonexus.com/telemetry/heartbeat";
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
 
+    private static readonly TimeSpan RateLimitCap = TimeSpan.FromHours(1);
+
     private readonly IConfigStore _store;
     private readonly IHttpClientFactory _http;
+    // Environment.TickCount64 deadline, so a wall-clock jump cannot stall beats.
+    private long _holdUntilTick;
 
     public HeartbeatService(IConfigStore store, IHttpClientFactory http)
     {
@@ -71,6 +75,9 @@ public sealed class HeartbeatService : BackgroundService
 
     private async Task BeatAsync(CancellationToken ct)
     {
+        if (Environment.TickCount64 < _holdUntilTick)
+            return;
+
         // Shared with product telemetry: honors the single opt-out but the id itself survives - see InstallIdentity.
         var installId = InstallIdentity.Resolve(_store);
         if (installId is null)
@@ -94,7 +101,19 @@ public sealed class HeartbeatService : BackgroundService
         using var res = await client
             .PostAsync(Endpoint, content, ct)
             .ConfigureAwait(false);
-        if (!res.IsSuccessStatusCode)
+        if (res.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            // Skip beats until Retry-After passes, when the API sends one; else the next tick is the retry.
+            var retry = res.Headers.RetryAfter;
+            var hold = retry?.Delta ?? (retry?.Date - DateTimeOffset.UtcNow) ?? TimeSpan.Zero;
+            if (hold < TimeSpan.Zero)
+                hold = TimeSpan.Zero;
+            if (hold > RateLimitCap)
+                hold = RateLimitCap;
+            _holdUntilTick = Environment.TickCount64 + (long)hold.TotalMilliseconds;
+            Platform.ServiceLog.Warn($"[heartbeat] rate limited (429); next beat in {(hold > Interval ? hold : Interval).TotalMinutes:0} min or later");
+        }
+        else if (!res.IsSuccessStatusCode)
         {
             Console.Error.WriteLine($"[heartbeat] {(int)res.StatusCode} from {Endpoint}");
         }

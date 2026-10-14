@@ -96,4 +96,44 @@ public interface ILightingProvider
     /// the LED engine also running an audio effect.
     /// </summary>
     void SetAudioCaptureDemand(bool demanded);
+
+    /// <summary>
+    /// A custom effect's source changed: drop its cached thumbnails and, when it
+    /// is the running animate effect, rebuild it live from the new source.
+    /// </summary>
+    void ReloadCustomEffect(string key) { }
+
+    /// <summary>
+    /// A custom effect was deleted: drop its cached thumbnails and saved looks,
+    /// and move the running animate effect to rainbow if it was the one.
+    /// </summary>
+    void DropCustomEffect(string key) { }
+
+    /// <summary>
+    /// Shader Studio live preview: paint <paramref name="body"/>'s fragment over every device until
+    /// <see cref="StopStudioLive"/> or the lease (LightingProvider.StudioLeaseMs) lapses. It is an engine overlay
+    /// and touches no setting. The caller has already validated and compile-checked the fragment.
+    /// </summary>
+    StudioLiveResult StartStudioLive(StudioLiveBody body) => new(StudioLiveOutcome.Failed, "studio live is not supported", "");
+
+    /// <summary>Ends a live session. A <paramref name="sessionId"/> that is not the running session is a no-op. True when a session was ended.</summary>
+    bool StopStudioLive(string? sessionId = null) => false;
+
+    /// <summary>True while a live session runs.</summary>
+    bool StudioLiveActive => false;
+}
+
+public enum StudioLiveOutcome
+{
+    Ok,
+    /// <summary>Refused: the Lighting feature is off, or a fragment the shader could not be built from.</summary>
+    Failed,
+    /// <summary>The session the caller names is over (lease lapse, another tab).</summary>
+    Ended,
+}
+
+/// <summary>Outcome of <see cref="ILightingProvider.StartStudioLive"/>.</summary>
+public readonly record struct StudioLiveResult(StudioLiveOutcome Outcome, string Message, string SessionId, bool LightingOff = false)
+{
+    public bool Ok => Outcome == StudioLiveOutcome.Ok;
 }

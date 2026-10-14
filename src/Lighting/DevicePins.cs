@@ -85,7 +85,9 @@ public sealed class DevicePinTracker
     public static bool IsAnimateEffect(string? key) =>
         !string.IsNullOrEmpty(key)
         && ((AnimateTemplateDefaults.All.ContainsKey(key) && !StaticEffectCatalog.Contains(key))
-            || Nexus.Service.Lighting.Engine.Gpu.ShaderLibrary.IsSweepEffect(key));
+            || Nexus.Service.Lighting.Engine.Gpu.ShaderLibrary.IsSweepEffect(key)
+            || (Nexus.Service.Lighting.Engine.Gpu.ShaderLibrary.IsCustomKey(key)
+                && Nexus.Service.Lighting.Engine.Gpu.ShaderLibrary.IsKnownKey(key)));
 
     /// <summary>Null when the pin is acceptable, else why not.</summary>
     public static string? Validate(DevicePin? pin)

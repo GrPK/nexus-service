@@ -359,6 +359,75 @@ public sealed class ShaderEffect : IEffect
         }
     }
 
+    /// <summary>
+    /// Compile and link a fragment source on the GL thread without keeping the
+    /// program. Returns the driver's info log on failure, null when it links or
+    /// when no GPU context is available to check with.
+    /// </summary>
+    public static string? ValidateFragment(GpuContext ctx, string fragSource)
+    {
+        if (!ctx.Available)
+        {
+            return null;
+        }
+        string? error = null;
+        ctx.Invoke(() =>
+        {
+            var gl = ctx.Gl;
+            uint vs = 0, fs = 0, prog = 0;
+            try
+            {
+                vs = gl.CreateShader(ShaderType.VertexShader);
+                gl.ShaderSource(vs, VertexShaderSrc);
+                gl.CompileShader(vs);
+                gl.GetShader(vs, ShaderParameterName.CompileStatus, out int vsOk);
+                if (vsOk == 0)
+                {
+                    error = gl.GetShaderInfoLog(vs);
+                    return;
+                }
+                fs = gl.CreateShader(ShaderType.FragmentShader);
+                gl.ShaderSource(fs, fragSource);
+                gl.CompileShader(fs);
+                gl.GetShader(fs, ShaderParameterName.CompileStatus, out int fsOk);
+                if (fsOk == 0)
+                {
+                    error = gl.GetShaderInfoLog(fs);
+                    return;
+                }
+                prog = gl.CreateProgram();
+                gl.AttachShader(prog, vs);
+                gl.AttachShader(prog, fs);
+                gl.LinkProgram(prog);
+                gl.GetProgram(prog, GLEnum.LinkStatus, out int linkOk);
+                if (linkOk == 0)
+                {
+                    error = gl.GetProgramInfoLog(prog);
+                }
+            }
+            finally
+            {
+                if (prog != 0)
+                {
+                    gl.DeleteProgram(prog);
+                }
+                if (vs != 0)
+                {
+                    gl.DeleteShader(vs);
+                }
+                if (fs != 0)
+                {
+                    gl.DeleteShader(fs);
+                }
+            }
+        });
+        if (error is not null && string.IsNullOrWhiteSpace(error))
+        {
+            error = "shader failed to compile";
+        }
+        return error;
+    }
+
     private void CompileProgram(GL gl)
     {
         uint vs = CompileShader(gl, ShaderType.VertexShader, VertexShaderSrc);

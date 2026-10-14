@@ -23,7 +23,7 @@ public static class LightingRoutes
     public static void MapLightingEndpoints(this WebApplication app)
     {
         app.MapPost("/lighting/stop", (ILightingProvider l, MultiplexHub hub) => { l.StopAll(); ResetEffectSignature(); PanelTopics.BroadcastLighting(hub); return ApiResponse.Ok(); }).AllowPanel();
-        app.MapGet("/lighting/current", (ILightingProvider l) => new CurrentSyncResponse { Sync = l.GetSync(), Paused = l.IsPaused }).AllowPanel();
+        app.MapGet("/lighting/current", (ILightingProvider l) => new CurrentSyncResponse { Sync = l.GetSync(), Paused = l.IsPaused, StudioLive = l.StudioLiveActive }).AllowPanel();
         // Freeze/resume the active effect's rendered frame. No-op with no active
         // effect (engine not running); returns the resulting paused state either way.
         app.MapPost("/lighting/pause", (Models.Lighting.LightingPauseBody body, ILightingProvider l, MultiplexHub hub) =>
@@ -155,13 +155,26 @@ public static class LightingRoutes
             }
             return ApiResponse.Ok();
         }).LocalhostOnly();
-        app.MapGet("/lighting/shaders/{name}", (string name) =>
+        app.MapGet("/lighting/shaders/{name}", (string name, Nexus.Service.Lighting.CustomEffects.CustomEffectStore custom) =>
         {
             name = name.ToLowerInvariant();
+            if (ShaderLibrary.IsCustomKey(name))
+            {
+                // Read through the store so the first request after a boot sees the persisted source.
+                var entry = custom.Get(name[ShaderLibrary.CustomPrefix.Length..]);
+                return entry is null
+                    ? Results.NotFound()
+                    : Results.Json(new ShaderSourceResponse { Frag = entry.Frag }, AppJsonContext.Default.ShaderSourceResponse);
+            }
             if (!ShaderLibrary.AllEffectKeys.Contains(name))
                 return Results.NotFound();
             return Results.Json(new ShaderSourceResponse { Frag = ShaderLibrary.Get(name) }, AppJsonContext.Default.ShaderSourceResponse);
         }).AllowPanel();
+        MapCustomEffects(app);
+        MapStudioLive(app);
+#if DEV_TOOLS
+        EffectMarketRoutes.Map(app);
+#endif
         app.MapGet("/lighting/screen/monitors", (ILightingProvider l) => l.GetScreenSyncOptions()).AllowPanel();
         app.MapGet("/lighting/status", (Nexus.Service.Lighting.Engine.LightingEngine engine, ILightingDeviceProvider devices, IServiceProvider sp) =>
         {
@@ -401,6 +414,126 @@ public static class LightingRoutes
         }).AllowPanel();
     }
 
+    private static Nexus.Service.Models.Lighting.CustomEffectResponse ToResponse(Nexus.Service.Lighting.CustomEffects.CustomEffectEntry e) => new()
+    {
+        Id = e.Id,
+        Name = e.Name,
+        Recipe = e.Recipe,
+        UpdatedAt = e.UpdatedAt,
+        Audio = ShaderLibrary.ReadsAudio(e.Frag),
+        MarketId = e.MarketId,
+        MarketAuthor = e.MarketAuthor,
+        Downloaded = e.Downloaded,
+    };
+
+    private static IResult CustomEffectError(string message) =>
+        Results.Json(ApiResponse.Fail(message), AppJsonContext.Default.ApiResponse, statusCode: StatusCodes.Status400BadRequest);
+
+    private static IResult CustomEffectUnavailable() =>
+        Results.Json(ApiResponse.Fail(Nexus.Service.Lighting.CustomEffects.CustomEffectStore.UnavailableMessage),
+            AppJsonContext.Default.ApiResponse, statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    private static void MapCustomEffects(WebApplication app)
+    {
+        app.MapGet("/lighting/custom-effects", (Nexus.Service.Lighting.CustomEffects.CustomEffectStore custom) =>
+            Results.Json(custom.List().Select(ToResponse).ToList(), AppJsonContext.Default.ListCustomEffectResponse)).AllowPanel();
+        app.MapPut("/lighting/custom-effects/{id}", (string id, Nexus.Service.Models.Lighting.CustomEffectPutBody? body,
+            Nexus.Service.Lighting.CustomEffects.CustomEffectStore custom,
+            Nexus.Service.Lighting.CustomEffects.CustomFragCompiler compile,
+            ILightingProvider l, MultiplexHub hub) =>
+        {
+            if (!custom.EnsureAvailable())
+            {
+                return CustomEffectUnavailable();
+            }
+            var problem = Nexus.Service.Lighting.CustomEffects.CustomEffectStore.Validate(id, body?.Name, body?.Recipe, body?.Frag);
+            if (problem is not null)
+            {
+                return CustomEffectError(problem);
+            }
+            var linkProblem = Nexus.Service.Lighting.CustomEffects.CustomEffectStore.ValidateMarketLink(body!.MarketId, body.MarketAuthor);
+            if (linkProblem is not null)
+            {
+                return CustomEffectError(linkProblem);
+            }
+            var compileError = compile(body.Frag!);
+            if (compileError is not null)
+            {
+                return CustomEffectError(compileError);
+            }
+            var (entry, error) = custom.Put(id, body.Name!, body.Recipe ?? "", body.Frag!, body.MarketId, body.MarketAuthor, body.Downloaded);
+            if (entry is null)
+            {
+                return CustomEffectError(error ?? "rejected");
+            }
+            l.ReloadCustomEffect(ShaderLibrary.CustomPrefix + id);
+            PanelTopics.BroadcastLighting(hub);
+            return Results.Json(ToResponse(entry), AppJsonContext.Default.CustomEffectResponse);
+        });
+        app.MapDelete("/lighting/custom-effects/{id}", (string id,
+            Nexus.Service.Lighting.CustomEffects.CustomEffectStore custom,
+            ILightingProvider l, MultiplexHub hub) =>
+        {
+            if (!custom.EnsureAvailable())
+            {
+                return CustomEffectUnavailable();
+            }
+            if (!custom.Delete(id))
+            {
+                return Results.NotFound();
+            }
+            l.DropCustomEffect(ShaderLibrary.CustomPrefix + id);
+            PanelTopics.BroadcastLighting(hub);
+            return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
+        });
+    }
+
+    // Shader Studio live preview. Dashboard-only: no AllowPanel, so a panel token is refused on both verbs.
+    // The session holds nothing in settings: it is an engine overlay over the running mode (LightingProvider.StudioLive.cs).
+    private static void MapStudioLive(WebApplication app)
+    {
+        app.MapPost("/lighting/studio-live", (Nexus.Service.Models.Lighting.StudioLiveBody? body,
+            Nexus.Service.Lighting.CustomEffects.CustomFragCompiler compile,
+            ILightingProvider l, FeatureGates gates) =>
+        {
+            if (!gates.Lighting)
+            {
+                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
+            }
+            // The store's own rules, under a fixed id and name that are always valid, then the GPU compile.
+            var problem = Nexus.Service.Lighting.CustomEffects.CustomEffectStore.Validate("studiolive", "Studio live", null, body?.Frag);
+            if (problem is not null)
+            {
+                return CustomEffectError(problem);
+            }
+            var compileError = compile(body!.Frag!);
+            if (compileError is not null)
+            {
+                return CustomEffectError(compileError);
+            }
+            var result = l.StartStudioLive(body);
+            if (!result.Ok)
+            {
+                return Results.Json(ApiResponse.Fail(result.Message), AppJsonContext.Default.ApiResponse, statusCode: StatusCodes.Status409Conflict);
+            }
+            return Results.Json(new Nexus.Service.Models.Lighting.StudioLiveResponse
+            {
+                Active = true,
+                LeaseMs = Nexus.Service.Lighting.LightingProvider.StudioLeaseMs,
+                SessionId = result.SessionId,
+                LightingOff = result.LightingOff,
+            }, AppJsonContext.Default.StudioLiveResponse);
+        });
+        app.MapDelete("/lighting/studio-live", (string? sessionId, ILightingProvider l, MultiplexHub hub) =>
+        {
+            if (l.StopStudioLive(sessionId))
+            {
+                PanelTopics.BroadcastLighting(hub);
+            }
+            return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
+        });
+    }
+
     // The three headless-start routes are re-posted on every slider move, so
     // only a changed mode/effect pair is worth an event. One slot, not one per
     // mode: it tracks what is currently applied, so switching away and back is
@@ -430,6 +563,8 @@ public static class LightingRoutes
     {
         if (routeMode == "screen") return ("screen", "screen");
         var name = (effect ?? "").Trim().ToLowerInvariant();
+        // The id is user content; only the fact that a custom effect ran is reported.
+        if (ShaderLibrary.IsCustomKey(name)) return (routeMode, "custom");
         if (routeMode == "animate")
         {
             if (name.Length == 0) name = "rainbow";
