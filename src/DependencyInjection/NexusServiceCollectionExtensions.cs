@@ -1974,6 +1974,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IProcessActionsProvider, HelperProcessActionsProxy>();
         services.AddSingleton<IMediaProvider, WindowsMediaProvider>();
         services.AddSingleton<IVolumeProvider, WindowsVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.WindowsRadioProvider>();
         // Explicit factory: the two constructors would otherwise leave which one
         // DI picks (and so whether the helper route is wired) to overload rules.
         services.AddSingleton<IAudioDeviceProvider>(sp =>
@@ -1998,6 +1999,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IProcessActionsProvider, DirectProcessActionsProvider>();
         services.AddSingleton<IMediaProvider, MacMediaProvider>();
         services.AddSingleton<IVolumeProvider, MacVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.StubRadioProvider>();
         services.AddSingleton<IAudioDeviceProvider, MacAudioDeviceProvider>();
         // macOS exposes no per-app volume API; the only implementations ship a
         // HAL driver, which Nexus does not.
@@ -2015,6 +2017,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<ISystemAccentProvider, Nexus.Service.Platform.Linux.LinuxSystemAccentProvider>();
         services.AddSingleton<IMediaProvider, LinuxMediaProvider>();
         services.AddSingleton<IVolumeProvider, LinuxVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.StubRadioProvider>();
         services.AddSingleton<IAudioDeviceProvider, LinuxAudioDeviceProvider>();
         // PipeWire/PulseAudio do expose per-sink-input volume; not wired yet.
         services.AddSingleton<IAudioSessionProvider, StubAudioSessionProvider>();
@@ -2027,6 +2030,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IProcessActionsProvider, DirectProcessActionsProvider>();
         services.AddSingleton<IMediaProvider, StubMediaProvider>();
         services.AddSingleton<IVolumeProvider, StubVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.StubRadioProvider>();
         services.AddSingleton<IAudioDeviceProvider, StubAudioDeviceProvider>();
         services.AddSingleton<IAudioSessionProvider, StubAudioSessionProvider>();
         services.AddSingleton<IBeatsProvider, StubBeatsProvider>();

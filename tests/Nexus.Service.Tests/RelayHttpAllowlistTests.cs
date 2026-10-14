@@ -58,6 +58,11 @@ public class RelayHttpAllowlistTests
     [InlineData("POST", "/system/audio/play")]       // plays an arbitrary local file - desktop only
     [InlineData("GET", "/panel/phone/pair-qr")]      // mints pair tokens - desktop only
     [InlineData("POST", "/system/pick-path")]        // opens a native OS dialog on the host - desktop-only
+    [InlineData("GET", "/system/radios")]            // panel control center only
+    [InlineData("POST", "/system/radios")]
+    [InlineData("GET", "/system/mic")]
+    [InlineData("POST", "/system/mic")]
+    [InlineData("POST", "/system/mic/mute")]
     [InlineData("POST", "/devices/firmware/flash")]  // irreversible flash - brick risk over a lossy tunnel
     [InlineData("POST", "/devices/firmware/flash/")] // trailing slash still routes to the flash handler
     [InlineData("POST", "/Devices/Firmware/Flash")]  // deny is case-insensitive
