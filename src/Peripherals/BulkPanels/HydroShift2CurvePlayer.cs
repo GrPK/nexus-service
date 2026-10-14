@@ -163,6 +163,10 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             return;
         }
 
+        if (_driver.ResumePending)
+        {
+            return;
+        }
         var record = Record();
         if (LockSleeping(record?.Id))
         {
@@ -196,7 +200,8 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             return false;
         }
         var settings = _store.Load().Devices.HydroShift2Curve;
-        if (!settingsAllow(settings) || LockSleeping(recordId))
+        // A display that rebooted in sleep lost its decoder; the play starts over after the resume handshake.
+        if (!settingsAllow(settings) || LockSleeping(recordId) || _driver.ResumePending)
         {
             return false;
         }
@@ -327,8 +332,13 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             return;
         }
         var restoreBacklight = _saverBacklight is not null;
+        // The resume handshake runs the same sequence and backlight once the display settles.
         _hub.Exchange(pipe =>
         {
+            if (_driver.ResumePending)
+            {
+                return true;
+            }
             _driver.EndVideo(pipe);
             if (restoreBacklight)
             {

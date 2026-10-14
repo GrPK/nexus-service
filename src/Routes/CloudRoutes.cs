@@ -28,6 +28,7 @@ public static class CloudRoutes
     private static readonly string[] AllowedAvatarContentTypes = { "image/png", "image/jpeg", "image/webp" };
     private const long MaxBenchmarkSubmitBytes = 256 * 1024;
     private const long MaxDevicePutBytes = 64 * 1024;
+    private const long MaxBenchmarkDeleteBytes = 4 * 1024;
     private const long MaxGameScoreSubmitBytes = 4 * 1024;
 
     public static void MapCloudEndpoints(this WebApplication app)
@@ -279,6 +280,26 @@ public static class CloudRoutes
                 ? await api.PostRawAsync("/benchmarks/submit", rawJson, null, ct).ConfigureAwait(false)
                 : await accounts.WithAuthAsync(accountId, token => api.PostRawAsync("/benchmarks/submit", rawJson, token, ct), ct).ConfigureAwait(false);
 
+            if (!result.Success)
+            {
+                return CloudApiFailure(result.StatusCode, result.ErrorCode, result.ErrorMessage, result.Offline);
+            }
+            return Results.Text(result.Value!.Body, result.Value.ContentType, statusCode: result.StatusCode);
+        });
+
+        // Removes the caller's own leaderboard entry. The body carries the
+        // submitting browser's deviceId; upstream also accepts the bearer.
+        app.MapDelete("/cloud/benchmarks/{id}", async (string id, HttpRequest req, CloudAccountService accounts, ICloudApiClient api, CancellationToken ct) =>
+        {
+            var (bytes, tooLarge) = await ReadBoundedAsync(req.Body, MaxBenchmarkDeleteBytes, ct).ConfigureAwait(false);
+            if (tooLarge)
+            {
+                return Results.BadRequest(ApiResponse.Fail("Benchmark removal too large."));
+            }
+            var rawJson = bytes is null || bytes.Length == 0 ? "{}" : Encoding.UTF8.GetString(bytes);
+            var path = "/benchmarks/" + Uri.EscapeDataString(id);
+
+            var result = await ForwardDeviceRequestAsync(accounts, api, HttpMethod.Delete, path, rawJson, ct).ConfigureAwait(false);
             if (!result.Success)
             {
                 return CloudApiFailure(result.StatusCode, result.ErrorCode, result.ErrorMessage, result.Offline);

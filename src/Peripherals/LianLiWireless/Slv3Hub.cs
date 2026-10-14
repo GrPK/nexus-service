@@ -169,12 +169,22 @@ public sealed class Slv3Hub : IDisposable
     private int _rxBusyStreak;
     private byte[]? _firstBusyReply;
 
-    // L-Connect MasterDevice.ResetTx: consecutive TX reopen failures ->
-    // UsbResetAnother written on the RX handle, then the TX keeps reopening.
+    // L-Connect MasterDevice.ResetTx: consecutive TX failures (a reopen or a
+    // connect attempt that gets no master MAC) -> UsbResetAnother written on the
+    // RX handle, then the TX keeps reopening. Only a master MAC from the TX
+    // clears the streak and the backoff, so a link that never comes up still
+    // escalates across connect attempts.
     private const int TxFailsBeforeReset = 5;
-    private int _txOpenFails;
+    private int _txFails;
     private int _txRecoveries;
     private long _nextTxRecoveryMs;
+
+    // The transport keeps a TX handle open through write timeouts, so a TX that
+    // sends nothing back to the once-a-second GetMac this many times in a row is
+    // closed here; the reopen path then counts toward the reset above.
+    private const int TxMissedProbesBeforeReopen = 5;
+    private int _txMissedProbes;
+    private int _txProbeWriteFailures;
 
     // Neither dongle enumerating this long means it was unplugged: the only
     // fault that ends the connection.
@@ -316,8 +326,27 @@ public sealed class Slv3Hub : IDisposable
                 State.LinkStatus = txPort is null && rxPort is null ? Slv3LinkStatus.None
                     : txPort is null ? Slv3LinkStatus.TxMissing
                     : Slv3LinkStatus.RxMissing;
+                // A reset via the RX re-enumerates only the TX, so only a module
+                // with neither half listed for LinkAbsentDisconnectMs was
+                // unplugged and starts a fresh streak.
+                var nowMs = _nowMs();
+                if (txPort is not null || rxPort is not null)
+                {
+                    _bothAbsentSinceMs = 0;
+                }
+                else if (_bothAbsentSinceMs == 0)
+                {
+                    _bothAbsentSinceMs = nowMs;
+                }
+                else if (nowMs - _bothAbsentSinceMs >= LinkAbsentDisconnectMs)
+                {
+                    _txFails = 0;
+                    _txRecoveries = 0;
+                    _nextTxRecoveryMs = 0;
+                }
                 return false;
             }
+            _bothAbsentSinceMs = 0;
 
             try
             {
@@ -334,12 +363,25 @@ public sealed class Slv3Hub : IDisposable
                 return false;
             }
 
-            if (!MasterInitLocked())
+            if (!MasterInitLocked(out var anyWritten))
             {
                 State.LinkStatus = _probesSinceLastMac >= Slv3Protocol.ChannelScanOrder().Length
                     ? Slv3LinkStatus.NoResponse
                     : Slv3LinkStatus.Unknown;
-                ServiceLog.Warn("[lianli-wireless] GetMac failed on connect");
+                ServiceLog.Warn($"[lianli-wireless] GetMac failed on connect{(anyWritten ? "" : " (every write failed)")}");
+                // A TX parked on another channel still takes writes, and a hard write
+                // error closes the handle of a TX that is re-enumerating, so writes
+                // that all timed out on a handle still open are a hung TX: the first
+                // reset of a streak goes out now instead of after TxFailsBeforeReset
+                // attempts.
+                if (!anyWritten && _tx is { IsOpen: true } && _txRecoveries == 0)
+                {
+                    ResetTxViaRxLocked(_nowMs(), "every GetMac write on connect failed");
+                }
+                else
+                {
+                    NoteTxFailureLocked(_nowMs());
+                }
                 DisconnectLocked();
                 return false;
             }
@@ -402,9 +444,8 @@ public sealed class Slv3Hub : IDisposable
         _rxBusyStreak = 0;
         _rxRecoveries = 0;
         _nextRxRecoveryMs = 0;
-        _txOpenFails = 0;
-        _txRecoveries = 0;
-        _nextTxRecoveryMs = 0;
+        _txMissedProbes = 0;
+        _txProbeWriteFailures = 0;
         _bothAbsentSinceMs = 0;
         _saveCfgBurstRemaining = 0;
         _saveCfgDueMs = 0;
@@ -439,6 +480,10 @@ public sealed class Slv3Hub : IDisposable
             if (nowMs - _bothAbsentSinceMs >= LinkAbsentDisconnectMs)
             {
                 ServiceLog.Warn($"[lianli-wireless] neither dongle enumerated for {LinkAbsentDisconnectMs / 1000}s, link down");
+                // A replugged module brings a fresh TX; its failures start over.
+                _txFails = 0;
+                _txRecoveries = 0;
+                _nextTxRecoveryMs = 0;
                 return false;
             }
         }
@@ -469,7 +514,7 @@ public sealed class Slv3Hub : IDisposable
         _tx = null;
         if (txPort is null)
         {
-            NoteTxOpenFailureLocked(nowMs);
+            NoteTxFailureLocked(nowMs);
             return;
         }
         try
@@ -478,19 +523,16 @@ public sealed class Slv3Hub : IDisposable
         }
         catch (Exception)
         {
-            NoteTxOpenFailureLocked(nowMs);
+            NoteTxFailureLocked(nowMs);
             return;
         }
         if (!TryGetMacOnChannelLocked(_channel))
         {
             try { _tx.Dispose(); } catch { /* best effort */ }
             _tx = null;
-            NoteTxOpenFailureLocked(nowMs);
+            NoteTxFailureLocked(nowMs);
             return;
         }
-        _txOpenFails = 0;
-        _txRecoveries = 0;
-        _nextTxRecoveryMs = 0;
         // The restarted TX lost the LCD video arming; the LCD loop re-arms it.
         _videoModeActive = false;
         _videoModePreppedCount = 0;
@@ -498,26 +540,41 @@ public sealed class Slv3Hub : IDisposable
     }
 
     // L-Connect ResetTx: UsbResetAnother on the RX handle restarts the TX.
-    private void NoteTxOpenFailureLocked(long nowMs)
+    private void NoteTxFailureLocked(long nowMs)
     {
-        if (++_txOpenFails < TxFailsBeforeReset || nowMs < _nextTxRecoveryMs)
+        if (++_txFails >= TxFailsBeforeReset)
+        {
+            ResetTxViaRxLocked(nowMs, $"{TxFailsBeforeReset} consecutive TX failures");
+        }
+    }
+
+    private void ResetTxViaRxLocked(long nowMs, string reason)
+    {
+        if (nowMs < _nextTxRecoveryMs)
         {
             return;
         }
-        _txOpenFails = 0;
+        _txFails = 0;
+        // An unsent reset still waits out the backoff but is not counted, so the
+        // first-attempt reset stays available and "answered after" counts only
+        // resets that went out.
+        if (_rx is not { IsOpen: true } || !_rx.RfSend(Slv3Protocol.BuildResetAnother()))
+        {
+            _nextTxRecoveryMs = nowMs + RecoveryBackoffFor(_txRecoveries + 1);
+            ServiceLog.Warn($"[lianli-wireless] {reason}, but the TX reset could not be written to the RX");
+            return;
+        }
         _txRecoveries++;
         _nextTxRecoveryMs = nowMs + RecoveryBackoffFor(_txRecoveries);
-        if (_rx is { IsOpen: true } && _rx.RfSend(Slv3Protocol.BuildResetAnother()))
-        {
-            ServiceLog.Warn($"[lianli-wireless] {TxFailsBeforeReset} consecutive TX open failures, resetting TX via RX ({_txRecoveries})");
-        }
+        ServiceLog.Warn($"[lianli-wireless] {reason}, resetting TX via RX ({_txRecoveries})");
     }
 
     private static long RecoveryBackoffFor(int recoveries) =>
         Math.Min(RecoveryBackoffMs << Math.Min(recoveries - 1, 4), RecoveryBackoffMaxMs);
 
-    private bool MasterInitLocked()
+    private bool MasterInitLocked(out bool anyWritten)
     {
+        anyWritten = false;
         if (_tx is null)
         {
             return false;
@@ -531,11 +588,12 @@ public sealed class Slv3Hub : IDisposable
         // covering all 39 channels across a few attempts without starving the
         // routes and writer that share the lock.
         _probesSinceLastMac++;
-        if (TryGetMacOnChannelLocked(_channel))
+        if (TryGetMacOnChannelLocked(_channel, out var probe))
         {
             _probesSinceLastMac = 0;
             return true;
         }
+        anyWritten = probe != TxProbe.WriteFailed;
         const int ScanProbesPerAttempt = 8;
         var order = Slv3Protocol.ChannelScanOrder();
         for (var probes = 0; probes < ScanProbesPerAttempt && probes < order.Length; _channelScanCursor++)
@@ -547,7 +605,7 @@ public sealed class Slv3Hub : IDisposable
             }
             probes++;
             _probesSinceLastMac++;
-            if (TryGetMacOnChannelLocked(channel))
+            if (TryGetMacOnChannelLocked(channel, out probe))
             {
                 ServiceLog.Info($"[lianli-wireless] master found on channel {channel} (scanned from {_channel})");
                 _channel = channel;
@@ -555,22 +613,48 @@ public sealed class Slv3Hub : IDisposable
                 _probesSinceLastMac = 0;
                 return true;
             }
+            anyWritten |= probe != TxProbe.WriteFailed;
         }
         return false;
     }
 
-    private bool TryGetMacOnChannelLocked(byte channel)
+    private enum TxProbe
+    {
+        WriteFailed,
+        NoReply,
+        // A GetMac reply came back, with or without a master MAC.
+        Answered,
+    }
+
+    private bool TryGetMacOnChannelLocked(byte channel) => TryGetMacOnChannelLocked(channel, out _);
+
+    private bool TryGetMacOnChannelLocked(byte channel, out TxProbe probe)
     {
         if (_tx is null || !_tx.RfSend(Slv3Protocol.BuildGetMac(channel)))
         {
+            probe = TxProbe.WriteFailed;
             return false;
         }
         var reply = _tx.RfRead(Slv3Protocol.UsbPacketSize);
-        if (!Slv3Protocol.TryParseGetMac(reply, out var mac, out _, out var fw)
-            || Slv3Protocol.MacIsZero(mac))
+        if (!Slv3Protocol.TryParseGetMac(reply, out var mac, out _, out var fw))
+        {
+            probe = TxProbe.NoReply;
+            return false;
+        }
+        probe = TxProbe.Answered;
+        if (Slv3Protocol.MacIsZero(mac))
         {
             return false;
         }
+        if (_txRecoveries > 0)
+        {
+            ServiceLog.Info($"[lianli-wireless] TX answered after {_txRecoveries} reset(s) via RX");
+        }
+        _txFails = 0;
+        _txRecoveries = 0;
+        _nextTxRecoveryMs = 0;
+        _txMissedProbes = 0;
+        _txProbeWriteFailures = 0;
         if (!Slv3Protocol.MacIsZero(_masterMac) && !Slv3Protocol.MacEquals(_masterMac, mac))
         {
             ServiceLog.Warn($"[lianli-wireless] dongle master MAC {Convert.ToHexString(_masterMac)} -> {Convert.ToHexString(mac)} on channel {channel}");
@@ -1322,10 +1406,34 @@ public sealed class Slv3Hub : IDisposable
 
     // L-Connect QuerryMasterMac once a second: refreshes the master identity,
     // RF timer and TX firmware version. A missed reply keeps the last known
-    // values; the link is not torn down for it.
+    // values and the link; a run of silent probes closes the TX for the reopen
+    // path. Any reply proves the TX alive, even without a master MAC.
     private void RefreshMasterMacLocked()
     {
-        TryGetMacOnChannelLocked(_channel);
+        if (_tx is not { IsOpen: true })
+        {
+            return;
+        }
+        TryGetMacOnChannelLocked(_channel, out var probe);
+        if (probe == TxProbe.Answered)
+        {
+            _txMissedProbes = 0;
+            _txProbeWriteFailures = 0;
+            return;
+        }
+        if (probe == TxProbe.WriteFailed)
+        {
+            _txProbeWriteFailures++;
+        }
+        if (++_txMissedProbes < TxMissedProbesBeforeReopen)
+        {
+            return;
+        }
+        ServiceLog.Warn($"[lianli-wireless] TX missed {_txMissedProbes} GetMac probes in a row ({_txProbeWriteFailures} failed writes), reopening it");
+        _txMissedProbes = 0;
+        _txProbeWriteFailures = 0;
+        try { _tx.Dispose(); } catch { /* best effort */ }
+        _tx = null;
     }
 
     private void ResolvePendingLocked()
@@ -1411,9 +1519,10 @@ public sealed class Slv3Hub : IDisposable
         }
     }
 
+    // Waits out a closed TX so the due save is sent once it reopens.
     private void RunSaveCfgScheduleLocked()
     {
-        if (_saveCfgDueMs == 0)
+        if (_saveCfgDueMs == 0 || _tx is null)
         {
             return;
         }

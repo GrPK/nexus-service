@@ -34,7 +34,7 @@
   #error Channel must be "stable" or "beta"
 #endif
 ; Bump on any change to this script; it is the only version this file has.
-#define StubVersion "1.0.0"
+#define StubVersion "1.0.1"
 #define PayloadName "Nexus-Setup.exe"
 ; AppId of ..\Nexus.iss: its uninstall key holds the install location.
 #define PayloadAppId "{8F2E3A4D-9C5B-4E7A-B1F8-3C2A5E9D0F12}"
@@ -102,6 +102,65 @@ begin
   Result := True;
 end;
 
+// Antivirus false positives quarantine the freshly downloaded payload. Every
+// stub run downloads a NEW copy into a new temp folder, so restoring or
+// excluding the old file never helps; the offline installer is one file the
+// user can keep and allow.
+function AntivirusMessage(): String;
+begin
+  Result := 'Security software on this PC likely blocked or removed {#PayloadName} while Nexus was installing. '
+    + 'This is almost always a false positive: Nexus is digitally signed and safe.'#13#10#13#10
+    + 'To finish installing:'#13#10
+    + '  1. Download the offline installer from {#PayloadUrl}'#13#10
+    + '  2. In your antivirus, allow or restore that file.'#13#10
+    + '  3. Run it.'#13#10#13#10
+    + 'Restoring the file this window downloaded will not help, because each run downloads a new copy.';
+end;
+
+// Interactive runs show the message and may start the offline installer
+// download. Silent runs (any /SILENT or /VERYSILENT) only log it; the caller
+// still fails.
+procedure ShowAntivirusBlock();
+var
+  ErrCode: Integer;
+begin
+  Log(AntivirusMessage());
+  if WizardSilent then
+    Exit;
+  if MsgBox(AntivirusMessage() + #13#10#13#10 + 'Download the offline installer now?',
+    mbError, MB_YESNO) = IDYES then
+    ShellExec('open', '{#PayloadUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
+end;
+
+// The literal text of an Inno message before its first placeholder.
+function MessageLead(const Id: TSetupMessageID): String;
+var
+  P: Integer;
+begin
+  Result := SetupMessage(Id);
+  P := Pos('%', Result);
+  if P > 0 then
+    Result := Copy(Result, 1, P - 1);
+end;
+
+// A payload-phase error that is clearly not a scanner touching the file: a
+// failed or mismatched transfer, identified by Inno's own English message
+// text (this stub ships English only) plus the HTTP client's wording.
+// Everything else in that phase (rename, open, hash read failures) is treated
+// as a file block.
+function IsTransferError(const Msg: String): Boolean;
+begin
+  Result := (Pos(MessageLead(msgErrorDownloadFailed), Msg) > 0) or
+            (Pos(MessageLead(msgErrorDownloadSizeFailed), Msg) > 0) or
+            (Pos(MessageLead(msgErrorFileSize), Msg) > 0) or
+            (Pos(MessageLead(msgErrorProgress), Msg) > 0) or
+            (Pos(SetupMessage(msgVerificationFileHashIncorrect), Msg) > 0) or
+            (Pos('Error sending data', Msg) > 0) or
+            (Pos('Error receiving data', Msg) > 0) or
+            (Pos('Error reading data', Msg) > 0) or
+            (Pos('Error querying', Msg) > 0);
+end;
+
 procedure InitializeWizard();
 begin
   DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
@@ -148,8 +207,11 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Hash: String;
+  InPayload, Downloaded: Boolean;
 begin
   Result := True;
+  InPayload := False;
+  Downloaded := False;
   if CurPageID <> wpReady then
     Exit;
   DownloadPage.Clear;
@@ -163,10 +225,20 @@ begin
         RaiseException('The release checksum list has no entry for {#PayloadName}.');
       DownloadPage.Clear;
       DownloadPage.Add('{#PayloadUrl}', '{#PayloadName}', Hash);
+      InPayload := True;
       DownloadPage.Download;
+      Downloaded := True;
+      // Real-time scanners can remove the file the moment it lands.
+      if not FileExists(ExpandConstant('{tmp}\{#PayloadName}')) then
+        RaiseException('{#PayloadName} is missing after download.');
     except
       if DownloadPage.AbortedByUser then
         Log('Download aborted by user.')
+      else if InPayload and (Downloaded or not IsTransferError(GetExceptionMessage)) then
+      begin
+        Log('Payload blocked during or after download: ' + GetExceptionMessage);
+        ShowAntivirusBlock;
+      end
       else
         SuppressibleMsgBox(AddPeriod(GetExceptionMessage), mbCriticalError, MB_OK, IDOK);
       Result := False;
@@ -217,6 +289,17 @@ begin
     // 1223 = the user declined the UAC prompt: as deliberate as a cancel.
     if ResultCode = 1223 then
       Abort;
+    // 5 = access denied, 225/226 = virus or unwanted software detected, 2/3 =
+    // file or path gone: all mean the scanner took the payload.
+    if (ResultCode = 5) or (ResultCode = 225) or (ResultCode = 226) or
+       (((ResultCode = 2) or (ResultCode = 3)) and not FileExists(ExpandConstant('{tmp}\{#PayloadName}'))) then
+    begin
+      Log('Payload blocked, ShellExec error ' + IntToStr(ResultCode));
+      // Abort, not RaiseException: a raise pops a blocking error box even
+      // under /VERYSILENT. Both paths end as a failed run, like a declined UAC.
+      ShowAntivirusBlock;
+      Abort;
+    end;
     RaiseException(Format('Could not start {#PayloadName} (error %d).', [ResultCode]));
   end;
   Log(Format('{#PayloadName} exited with code %d', [ResultCode]));

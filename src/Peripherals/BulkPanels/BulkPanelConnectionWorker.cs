@@ -12,8 +12,8 @@ namespace Nexus.Service.Peripherals.BulkPanels;
 /// <summary>
 /// Opens one bulk-pipe panel while it is present and Nexus Control is on for it.
 ///
-/// Most of these will never open on a stock machine: the bulk endpoints are reachable only
-/// where Windows has bound WinUSB, and a cooler still owned by its vendor's driver
+/// Most of these will never open on a stock Windows machine: the bulk endpoints are reachable
+/// only where WinUSB is bound, and a cooler still owned by its vendor's driver
 /// enumerates without being openable. That is logged once per attempt at Info, not treated
 /// as an error.
 /// </summary>
@@ -79,7 +79,8 @@ public sealed class BulkPanelConnectionWorker : BackgroundService
                 ServiceLog.Info($"[{driver.HandlerId}] connected: {driver.Name}, {_hub.Width}x{_hub.Height}");
                 try
                 {
-                    // The hub never detaches on a failed transfer, so presence is what ends the session after an unplug.
+                    // The hub never detaches on a failed transfer, so presence, or a pipe that knows its
+                    // device re-enumerated, is what ends the session after an unplug.
                     int misses = 0;
                     while (!stoppingToken.IsCancellationRequested
                         && _gate.IsEnabled(driver.HandlerId)
@@ -88,6 +89,11 @@ public sealed class BulkPanelConnectionWorker : BackgroundService
                         misses = _presence.UsbPresent(driver.VendorId, driver.ProductIds) ? 0 : misses + 1;
                         if (misses >= MissesToDetach)
                         {
+                            break;
+                        }
+                        if (_hub.PipeGone)
+                        {
+                            ServiceLog.Info($"[{driver.HandlerId}] device re-enumerated; reopening");
                             break;
                         }
                         if (driver.GeometryStale && _hub.Renegotiate())

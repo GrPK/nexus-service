@@ -85,7 +85,7 @@ public static partial class DevicesRoutes
             {
                 // The badge advertises layouts the user has not engaged
                 // with yet; devices already running a mapping stay quiet.
-                if (card.DeviceKey.Length == 0 || applied.ContainsKey(card.Id))
+                if (card.DeviceKey.Length == 0 || card.DevicePageReason is not null || applied.ContainsKey(card.Id))
                     continue;
                 var count = cloud.CachedMappingCount(card.DeviceKey);
                 if (count > 0)

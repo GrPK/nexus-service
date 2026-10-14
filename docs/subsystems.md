@@ -29,7 +29,7 @@ runtime data directory).
 
 Fan curves, pump speed, and AIO control. The curve engine, calibration runner,
 and safety limits live in `Cooling/`; each hub or cooler family contributes an
-`ICoolingProvider` (Corsair LINK, Galahad II, Kraken, Lian Li, Q-series
+`ICoolingProvider` (Asiahorse Umbra, Corsair LINK, Galahad II, Kraken, Lian Li, Q-series
 coolers, SL wireless, SmartHub, NP50, MiniHub, plus the OS-level Windows, macOS,
 Linux hwmon, liquidctl and NVIDIA providers). `QSeries/` holds the transport to
 Q-series screens.
@@ -80,7 +80,10 @@ Q-series screens.
   iBUYPOWER AW5; Tryx; Nollie ARGB channel controllers (the 32-channel
   board's two Strimer connectors present as one port each, pre-wired with
   the Lian Li cable; what a board runs once Nexus lets go is set through
-  `/devices/nollie`, `Routes/NollieRoutes.cs`). The curated
+  `/devices/nollie`, `Routes/NollieRoutes.cs`); the Asiahorse Umbra V2 ARGB/PWM
+  controller (`Peripherals/AsiahorseUmbra/`, `Routes/AsiahorseUmbraRoutes.cs`),
+  whose LED zones and fan channel exist only in the modes that hand them to
+  Nexus. The curated
   supported-hardware catalogs sit behind `/peripherals/supported` and
   `/peripherals/all-supported`.
 - `Conflicts/` detects competing vendor software, tracks which app owns a
@@ -166,10 +169,15 @@ support-bundle ZIP export.
 - Pairs and serves the React panel UIs for the HYTE Y70 secondary touch panel,
   the mobile companion (`/panel/phone`), and Q-series on-device screens
   (`Panel/`).
-- Streamed panels: panels rendered off-screen by the overlay's stream engine
-  and piped as H.264 to USB display devices through swappable transports
-  (`Panel/Streams/`, `/panel/streams/*`). The ArtInChip D213 reference
-  transport is dev-tools only.
+- Streamed panels: panels rendered off-screen and piped as H.264 or raw BGRA
+  frames to USB display devices through swappable transports
+  (`Panel/Streams/`, `/panel/streams/*`). The renderer is the overlay's stream
+  engine on Windows and the overlay helper on macOS
+  (`Bundled/macos/overlay-helper/streamhost.swift`: an off-screen WKWebView
+  captured by ScreenCaptureKit, raw frames only, needs the Screen Recording
+  grant). Bulk-pipe screens open over WinUSB on Windows and IOUSBHost on macOS
+  (`Peripherals/BulkPanels/`). The ArtInChip D213 reference transport is
+  dev-tools only.
 
 ## Apps and the store
 

@@ -9,8 +9,8 @@ namespace Nexus.Service.Devices.Handlers;
 /// <see cref="JpegPanelModel"/>, so each model gets its own Nexus Control toggle and its
 /// own Experimental badge rather than the family sharing one switch.
 ///
-/// <see cref="HasPage"/> is false: the panel record is the device's page (the glass is
-/// what the user configures), the same way a streamed Kraken panel claims its cooler row.
+/// It keeps a page while unconnected, so its row stays listed; once connected the panel record
+/// carries that page (the glass is what the user configures), the way a Kraken panel claims its row.
 /// </summary>
 public sealed class JpegPanelHandler : IDeviceHandler
 {
@@ -27,7 +27,6 @@ public sealed class JpegPanelHandler : IDeviceHandler
     public string Id => _hub.Model.HandlerId;
     public string Name => _hub.Model.Name;
     public string Category => "cooler";
-    public bool HasPage => false;
 
     public IReadOnlyList<UsbId> Identifiers { get; }
 

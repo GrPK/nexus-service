@@ -97,11 +97,24 @@ public sealed class LianLiLightingDeviceProvider :
         var resp = new GetLightingDevicesResponse { IsInit = true };
         var settings = _store.Load();
         var slot = 0;
+        // Hubs under ARGB sync play the source header's card, so their ports keep cards that only point at the
+        // device page. They come after the driven hubs so the driven hubs' default slots still match BuildFrames.
+        var argbHubs = new List<LianLiHub>();
         foreach (var hub in _hubs.Hubs)
         {
-            // Under ARGB sync the fans play the source header's card, so the ports have none of their own.
-            if (!hub.IsConnected || PlaysArgbInput(hub, settings)) continue;
+            if (!hub.IsConnected) continue;
+            if (PlaysArgbInput(hub, settings))
+            {
+                argbHubs.Add(hub);
+                continue;
+            }
             var cards = BuildCards(hub.DeviceId, hub.Profile, settings, slot);
+            slot += cards.Count;
+            resp.Devices.AddRange(cards);
+        }
+        foreach (var hub in argbHubs)
+        {
+            var cards = BuildCards(hub.DeviceId, hub.Profile, settings, slot, LightingDevice.ReasonArgbInput);
             slot += cards.Count;
             resp.Devices.AddRange(cards);
         }
@@ -109,7 +122,7 @@ public sealed class LianLiLightingDeviceProvider :
     }
 
     /// <summary>Pure card emission for the current composition + partition; static so tests cover it without a live hub.</summary>
-    internal static List<LightingDevice> BuildCards(string hubId, in LianLiFanProfile profile, NexusSettings settings, int firstSlot = 0)
+    internal static List<LightingDevice> BuildCards(string hubId, in LianLiFanProfile profile, NexusSettings settings, int firstSlot = 0, string? devicePageReason = null)
     {
         var comp = LianLiZoneSupport.ReadComposition(settings, hubId);
         var composed = LianLiZoneSupport.Compose(hubId, profile, comp, LianLiHubSet.FansOf(settings.Devices, hubId));
@@ -120,14 +133,14 @@ public sealed class LianLiLightingDeviceProvider :
             var zones = ZoneResolution.Resolve(device.Structure, settings);
             foreach (var zone in zones)
             {
-                cards.Add(BuildCard(hubId, device.Structure, zone, slot++, settings));
+                cards.Add(BuildCard(hubId, device.Structure, zone, slot++, settings, devicePageReason));
             }
         }
         return cards;
     }
 
     private static LightingDevice BuildCard(
-        string hubId, DeviceStructure structure, ResolvedZone zone, int slot, NexusSettings settings)
+        string hubId, DeviceStructure structure, ResolvedZone zone, int slot, NexusSettings settings, string? devicePageReason)
     {
         var disabled = settings.Devices.DisabledLightingDevices;
         var prefs = settings.Devices.LightingDevicePrefs;
@@ -165,6 +178,7 @@ public sealed class LianLiLightingDeviceProvider :
             ZoneResizable = false,
             DeviceId = structure.DeviceId,
             ZoneCustomizable = true,
+            DevicePageReason = devicePageReason,
         };
     }
 

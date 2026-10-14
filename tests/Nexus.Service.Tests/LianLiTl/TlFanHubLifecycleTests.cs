@@ -91,6 +91,25 @@ public class TlFanHubLifecycleTests
     }
 
     [Fact]
+    public void Detach_raises_TopologyChanged_only_when_the_hub_was_connected()
+    {
+        var fake = new TlDeviceFake(BuildHandshakeReply((port: 1, fanIdx: 0, rpm: 1200)));
+        using var hub = new TlFanHub();
+        var raised = 0;
+        hub.TopologyChanged += () => raised++;
+
+        hub.Attach(fake);
+        hub.Detach();
+        Assert.Equal(0, raised);
+
+        hub.Attach(fake);
+        Assert.True(hub.DiscoverFans());
+        Assert.Equal(1, raised);
+        hub.Detach();
+        Assert.Equal(2, raised);
+    }
+
+    [Fact]
     public void DiscoverFans_sorts_channels_by_port_then_fanIdx()
     {
         // Fans out of sort order to verify sorting.

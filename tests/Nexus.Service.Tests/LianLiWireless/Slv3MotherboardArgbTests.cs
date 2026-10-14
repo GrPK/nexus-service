@@ -105,12 +105,15 @@ public class Slv3MotherboardArgbTests
     }
 
     [Fact]
-    public void A_chain_playing_its_input_with_no_saved_choice_has_no_cards()
+    public void A_chain_playing_its_input_with_no_saved_choice_keeps_marked_cards_only()
     {
         _net.Fans[0].PlayingMotherboardArgb = true;
         Assert.True(_hub.DriveTick());
 
         Assert.Empty(_provider.BuildStructures());
+        var cards = _provider.GetAll().Devices;
+        Assert.NotEmpty(cards);
+        Assert.All(cards, d => Assert.Equal("argbInput", d.DevicePageReason));
     }
 
     [Fact]

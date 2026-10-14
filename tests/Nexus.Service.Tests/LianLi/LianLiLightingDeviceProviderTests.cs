@@ -314,24 +314,28 @@ public class LianLiLightingDeviceProviderTests
     }
 
     [Fact]
-    public void Argb_sync_leaves_the_ports_no_cards_structures_or_frames()
+    public void Argb_sync_keeps_marked_cards_but_no_structures_or_frames()
     {
         Connect();
         _store.Update(s => s.Devices.LianLiLighting.ArgbSync = true);
 
-        Assert.Empty(_provider.GetAll().Devices);
+        var cards = _provider.GetAll().Devices;
+        Assert.NotEmpty(cards);
+        Assert.All(cards, d => Assert.Equal("argbInput", d.DevicePageReason));
         Assert.Empty(_provider.GetStructures());
         Assert.Empty(_provider.BuildFrames(0));
     }
 
     [Fact]
-    public void Argb_sync_hides_the_cards_on_every_family()
+    public void Argb_sync_marks_the_cards_on_every_family()
     {
         ConnectSl();
         OnlyPort0(2);
         _store.Update(s => s.Devices.LianLiLighting.ArgbSync = true);
 
-        Assert.Empty(_provider.GetAll().Devices);
+        var cards = _provider.GetAll().Devices;
+        Assert.NotEmpty(cards);
+        Assert.All(cards, c => Assert.Equal("argbInput", c.DevicePageReason));
         Assert.Empty(_provider.GetStructures());
     }
 
@@ -357,7 +361,7 @@ public class LianLiLightingDeviceProviderTests
     }
 
     [Fact]
-    public void A_second_hub_under_argb_sync_hides_only_its_own_cards()
+    public void A_second_hub_under_argb_sync_marks_only_its_own_cards_and_lists_them_last()
     {
         Connect();
         _hubs.Hubs[1].Attach(new HubTransportSpy(), Sli);
@@ -365,7 +369,10 @@ public class LianLiLightingDeviceProviderTests
 
         var cards = _provider.GetAll().Devices;
 
-        Assert.Contains(cards, c => c.ParentDeviceId == "lianli");
-        Assert.DoesNotContain(cards, c => c.ParentDeviceId == "lianli2");
+        Assert.Contains(cards, c => c.ParentDeviceId == "lianli" && c.DevicePageReason is null);
+        Assert.Contains(cards, c => c.ParentDeviceId == "lianli2");
+        Assert.All(cards.Where(c => c.ParentDeviceId == "lianli2"), c => Assert.Equal("argbInput", c.DevicePageReason));
+        Assert.DoesNotContain(cards.Where(c => c.ParentDeviceId == "lianli"), c => c.DevicePageReason is not null);
+        Assert.True(cards.FindLastIndex(c => c.ParentDeviceId == "lianli") < cards.FindIndex(c => c.ParentDeviceId == "lianli2"));
     }
 }

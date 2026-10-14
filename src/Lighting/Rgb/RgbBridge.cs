@@ -206,7 +206,7 @@ public sealed class RgbBridge : IDisposable
     // Written by RefreshDevicesAsync (serialized by _refreshSemaphore); Deactivate resets it.
     private string _frameIdSignature = "";
 
-    /// <summary>Raised under the refresh lock when the engine's frame set changes (a device or zone appears, goes away, or gains its LEDs); handlers must not block.</summary>
+    /// <summary>Raised when the engine's frame set changes (a device or zone appears, goes away, or gains its LEDs), under the refresh lock, and after a contributor change even when the frame set did not change, outside the lock; handlers must not block.</summary>
     public event Action? DeviceSetChanged;
 
     private readonly IReadOnlyList<ILightingFrameContributor> _frameContributors;
@@ -280,11 +280,20 @@ public sealed class RgbBridge : IDisposable
         Redetect("smbus-dram-gate", detectorsChanged: true);
     }
 
-    private void OnContributorDevicesChanged()
+    // Fire-and-forget - RefreshDevicesAsync is the same path the periodic refresh loop
+    // uses and is debounced by _refreshSemaphore.
+    private void OnContributorDevicesChanged() => _ = RefreshAfterContributorChangeAsync();
+
+    // A contributor change touching only cards with no engine frame (device page cards) leaves the frame set
+    // as it was, so the lighting views are told here when the refresh did not already announce it.
+    private async Task RefreshAfterContributorChangeAsync()
     {
-        // Cheap fire-and-forget - RefreshDevicesAsync is the same path the
-        // periodic refresh loop uses and is debounced by _refreshSemaphore.
-        _ = RefreshDevicesAsync();
+        var before = _frameIdSignature;
+        await RefreshDevicesAsync().ConfigureAwait(false);
+        if (_frameIdSignature == before)
+        {
+            DeviceSetChanged?.Invoke();
+        }
     }
 
     /// <summary>Latest device snapshot. Updated on connect, refresh tick, and DEVICE_LIST_UPDATED.</summary>

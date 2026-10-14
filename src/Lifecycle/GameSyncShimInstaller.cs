@@ -206,7 +206,17 @@ public static class GameSyncShimInstaller
             var dest = Path.Combine(destDir, name);
             bool destExists = File.Exists(dest);
             string destCompany = destExists ? ReadCompanyName(dest) : "";
-            bool contentMatches = destExists && FileBytesEqual(src, dest);
+            bool contentMatches;
+            try
+            {
+                contentMatches = destExists && FileBytesEqual(src, dest);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Antivirus or a pending update can deny either DLL; the next Game Sync start retries.
+                ServiceLog.Error($"[chroma-shim] could not compare {name}: {ex.Message}");
+                return false;
+            }
 
             var decision = DecideFile(destExists, destCompany, contentMatches);
             switch (decision)

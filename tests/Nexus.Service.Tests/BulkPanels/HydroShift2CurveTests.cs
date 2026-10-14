@@ -391,6 +391,65 @@ public class HydroShift2CurveTests
         Assert.Empty(pipe.Commands);
     }
 
+    [Fact]
+    public void A_rebooted_display_is_not_taken_back_until_its_own_screen_is_up()
+    {
+        long now = 1_000;
+        var pipe = new GlassPipe { Answers = true };
+        var driver = new HydroShift2CurveLcdDriver(() => now);
+        Assert.NotNull(driver.Connect(pipe, null));
+        driver.Disconnect(pipe, null);
+
+        now += 11_999;
+        pipe.Commands.Clear();
+        Assert.Null(driver.Connect(pipe, null));
+        driver.Disconnect(pipe, null);
+        Assert.Empty(pipe.Commands);
+        now += 1;
+        Assert.NotNull(driver.Connect(pipe, null));
+    }
+
+    [Fact]
+    public void A_resume_waits_for_a_playing_video_to_let_go_before_the_handshake()
+    {
+        long now = 1_000;
+        var driver = new HydroShift2CurveLcdDriver(() => now);
+        Assert.NotNull(driver.Connect(new GlassPipe { Answers = true }, null));
+        driver.VideoOwnsGlass = true;
+
+        driver.OnSystemResumed();
+        now += 12_000;
+        Assert.True(driver.ResumePending);
+        Assert.False(driver.GeometryStale);
+
+        driver.VideoOwnsGlass = false;
+        Assert.True(driver.GeometryStale);
+    }
+
+    [Fact]
+    public void After_a_resume_the_settled_display_is_handshaken_again_with_its_backlight()
+    {
+        long now = 1_000;
+        var pipe = new GlassPipe { Answers = true };
+        var driver = new HydroShift2CurveLcdDriver(() => now);
+        Assert.NotNull(driver.Connect(pipe, null));
+        driver.SetBrightness(pipe, null, 60);
+        Assert.False(driver.GeometryStale);
+
+        driver.OnSystemResumed();
+        now += 11_999;
+        Assert.False(driver.GeometryStale);
+        now += 1;
+        Assert.True(driver.GeometryStale);
+
+        pipe.Commands.Clear();
+        Assert.NotNull(driver.Connect(pipe, null));
+        Assert.Contains(HydroShift2Protocol.CommandStopClock, pipe.Commands);
+        Assert.Equal(HydroShift2Protocol.CommandBrightness, pipe.Commands[^1]);
+        Assert.False(driver.GeometryStale);
+        Assert.Equal(60, driver.Brightness);
+    }
+
     // ── native video ──
 
     [Fact]

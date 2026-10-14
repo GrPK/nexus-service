@@ -237,7 +237,7 @@ public sealed class NollieLightingFrameWriter : IHostedService, IDisposable
         return true;
     }
 
-    private static DeviceFrame? FindFrame(DeviceFrame[] devices, string id)
+    internal static DeviceFrame? FindFrame(DeviceFrame[] devices, string id)
     {
         for (var i = 0; i < devices.Length; i++)
         {
@@ -256,7 +256,7 @@ public sealed class NollieLightingFrameWriter : IHostedService, IDisposable
         return buf;
     }
 
-    private static double ComputeBrightnessMul(string id,
+    internal static double ComputeBrightnessMul(string id,
         IReadOnlyList<string> disabled, IReadOnlyList<string> uncontrolled,
         IReadOnlyDictionary<string, LightingDevicePreference> prefs, float globalBrightness,
         out DeviceColorAdjust adjust)
@@ -289,7 +289,7 @@ public sealed class NollieLightingFrameWriter : IHostedService, IDisposable
     }
 
     /// <summary>Fills a slice of the port buffer starting at LED index <paramref name="dstStart"/>, so several zones can tile one port back to back.</summary>
-    private static void FillSlice(byte[] dst, int dstStart, int ledCount, DeviceFrame? frame,
+    internal static void FillSlice(byte[] dst, int dstStart, int ledCount, DeviceFrame? frame,
         double brightnessMul, DeviceColorAdjust adjust, bool hasIdentify, long identifyStartTicks, long nowTicks)
     {
         var baseOff = dstStart * 3;

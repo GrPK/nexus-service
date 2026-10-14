@@ -52,21 +52,21 @@ public sealed class StrimerLightingDeviceProvider :
         var resp = new GetLightingDevicesResponse { IsInit = true };
         if (!_hub.IsConnected) return resp;
         var settings = _store.Load();
-        // Under ARGB sync the cable plays the motherboard header, so it has no cards of its own.
-        if (settings.Devices.StrimerLighting.ArgbSync) return resp;
+        // Under ARGB sync the cable plays the motherboard header, so its cards only point at the device page.
+        var reason = settings.Devices.StrimerLighting.ArgbSync ? LightingDevice.ReasonArgbInput : null;
         var slot = 0;
         var structures = BuildStructures();
         foreach (var structure in structures)
         {
             foreach (var zone in ZoneResolution.Resolve(structure, settings))
             {
-                resp.Devices.Add(BuildCard(structure, zone, slot++, settings));
+                resp.Devices.Add(BuildCard(structure, zone, slot++, settings, reason));
             }
         }
         return resp;
     }
 
-    private static LightingDevice BuildCard(DeviceStructure structure, ResolvedZone zone, int slot, NexusSettings settings)
+    private static LightingDevice BuildCard(DeviceStructure structure, ResolvedZone zone, int slot, NexusSettings settings, string? devicePageReason)
     {
         var disabled = settings.Devices.DisabledLightingDevices;
         var prefs    = settings.Devices.LightingDevicePrefs;
@@ -105,6 +105,7 @@ public sealed class StrimerLightingDeviceProvider :
             ZoneResizable     = false,
             DeviceId          = structure.DeviceId,
             ZoneCustomizable  = true,
+            DevicePageReason  = devicePageReason,
         };
     }
 

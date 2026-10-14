@@ -301,6 +301,23 @@ public class ErrorReporterTests : IDisposable
     }
 
     [Fact]
+    public void Logger_skips_Kestrel_tls_handshake_faults()
+    {
+        var r = Reporter();
+        var logger = new ErrorLoggerProvider(new ServiceCollection().AddSingleton(r).BuildServiceProvider())
+            .CreateLogger("Microsoft.AspNetCore.Server.Kestrel");
+        var tlsFault = (Exception)Activator.CreateInstance(
+            typeof(System.Net.Security.SslStream).Assembly.GetType("System.Net.InternalException", throwOnError: true)!,
+            nonPublic: true)!;
+
+        logger.LogError(tlsFault, "Unhandled exception while processing");
+        Assert.Equal(0, r.PendingCount);
+
+        logger.LogError(new InvalidOperationException("boom"), "Unhandled exception while processing");
+        Assert.Equal(1, r.PendingCount);
+    }
+
+    [Fact]
     public async Task No_post_when_nothing_is_pending_and_one_post_per_flush()
     {
         var r = Reporter();

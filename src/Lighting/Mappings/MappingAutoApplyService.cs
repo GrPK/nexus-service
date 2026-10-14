@@ -94,6 +94,9 @@ public sealed class MappingAutoApplyService : BackgroundService
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var card in cards)
         {
+            // The engine never drives a device-page card, so a community layout has nothing to apply to.
+            if (card.DevicePageReason is not null)
+                continue;
             if (card.DeviceKey.Length > 0)
                 seenKeys.Add(card.DeviceKey);
             if (settings.Devices.MappingKnownDevices.Contains(card.Id))

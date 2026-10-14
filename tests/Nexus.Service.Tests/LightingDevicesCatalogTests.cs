@@ -45,6 +45,7 @@ public class LightingDevicesCatalogTests
     [InlineData("Lian Li", "HydroShift II LCD-S", "0x1CBE", "0xA034")]
     [InlineData("Lian Li", "HydroShift II OLED Curved", "0x1CBE", "0xA068")]
     [InlineData("Lian Li", "Strimer Wireless", "-", "-")]
+    [InlineData("Asiahorse", "Umbra V2", "0x1A86", "0xFE04")]
     [InlineData("Tryx", "Panorama", "0x391A", "0x1011")]
     [InlineData("Aftershock", "Glacier Matrix 360", "0x38C1", "0x0026")]
     [InlineData("Corsair", "iCUE LINK System Hub", "0x1B1C", "0x0C3F")]

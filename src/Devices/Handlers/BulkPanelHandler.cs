@@ -6,7 +6,8 @@ namespace Nexus.Service.Devices.Handlers;
 
 /// <summary>
 /// Device-list row for one bulk-pipe cooler LCD, so each gets its own Nexus Control toggle
-/// and Experimental badge. <see cref="HasPage"/> is false: the panel record is the page.
+/// and Experimental badge. It keeps a page while unconnected, so its row stays listed; once
+/// connected the panel record carries that page.
 /// </summary>
 public sealed class BulkPanelHandler : IDeviceHandler
 {
@@ -23,7 +24,6 @@ public sealed class BulkPanelHandler : IDeviceHandler
     public string Id => _hub.Driver.HandlerId;
     public string Name => _hub.Driver.Name;
     public string Category => "cooler";
-    public bool HasPage => false;
 
     public IReadOnlyList<UsbId> Identifiers { get; }
 

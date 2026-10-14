@@ -273,9 +273,9 @@ public class TlLcdTests
         int afterFirst = device.WriteCommands().Count;
         System.Threading.SpinWait.SpinUntil(() => Environment.TickCount64 - sentAt > TlLcdScreens.KeepaliveMs + 20);
 
-        // The background timer may already have re-sent; either way the frame went out again.
+        // A timer send holding the screen's lock makes this call skip; wait for its write.
         screens.Keepalive();
-        Assert.True(device.WriteCommands().Count > afterFirst);
+        Assert.True(System.Threading.SpinWait.SpinUntil(() => device.WriteCommands().Count > afterFirst, 2000));
 
         screens.Release("s1");
         int afterRelease = device.WriteCommands().Count;
