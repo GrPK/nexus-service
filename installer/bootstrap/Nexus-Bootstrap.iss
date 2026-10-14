@@ -34,7 +34,7 @@
   #error Channel must be "stable" or "beta"
 #endif
 ; Bump on any change to this script; it is the only version this file has.
-#define StubVersion "1.0.0"
+#define StubVersion "1.0.1"
 #define PayloadName "Nexus-Setup.exe"
 ; AppId of ..\Nexus.iss: its uninstall key holds the install location.
 #define PayloadAppId "{8F2E3A4D-9C5B-4E7A-B1F8-3C2A5E9D0F12}"
@@ -102,6 +102,21 @@ begin
   Result := True;
 end;
 
+// Antivirus false positives quarantine the freshly downloaded payload. Every
+// stub run downloads a NEW copy into a new temp folder, so restoring or
+// excluding the old file never helps; the offline installer is one file the
+// user can keep and allow.
+function AntivirusMessage(): String;
+begin
+  Result := 'Security software on this PC likely blocked or removed {#PayloadName} while Nexus was installing. '
+    + 'This is a false positive: Nexus is digitally signed and safe.'#13#10#13#10
+    + 'To finish installing:'#13#10
+    + '  1. Download the offline installer from {#PayloadUrl}'#13#10
+    + '  2. In your antivirus, allow or restore that file.'#13#10
+    + '  3. Run it.'#13#10#13#10
+    + 'Restoring the file this window downloaded will not help, because each run downloads a new copy.';
+end;
+
 procedure InitializeWizard();
 begin
   DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
@@ -164,6 +179,9 @@ begin
       DownloadPage.Clear;
       DownloadPage.Add('{#PayloadUrl}', '{#PayloadName}', Hash);
       DownloadPage.Download;
+      // Real-time scanners can remove the file the moment it lands.
+      if not FileExists(ExpandConstant('{tmp}\{#PayloadName}')) then
+        RaiseException(AntivirusMessage());
     except
       if DownloadPage.AbortedByUser then
         Log('Download aborted by user.')
@@ -217,6 +235,11 @@ begin
     // 1223 = the user declined the UAC prompt: as deliberate as a cancel.
     if ResultCode = 1223 then
       Abort;
+    // 5 = access denied, 225/226 = virus or unwanted software detected, 2/3 =
+    // file or path gone: all mean the scanner took the payload.
+    if (ResultCode = 5) or (ResultCode = 225) or (ResultCode = 226) or
+       (((ResultCode = 2) or (ResultCode = 3)) and not FileExists(ExpandConstant('{tmp}\{#PayloadName}'))) then
+      RaiseException(AntivirusMessage());
     RaiseException(Format('Could not start {#PayloadName} (error %d).', [ResultCode]));
   end;
   Log(Format('{#PayloadName} exited with code %d', [ResultCode]));
