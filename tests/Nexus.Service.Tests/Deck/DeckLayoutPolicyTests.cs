@@ -130,16 +130,16 @@ public sealed class DeckLayoutPolicyTests
     [InlineData("C:\\\\Games\\\\b.exe", false, true)]
     public void LaunchApp_ListedDirectIdsStayUnprivileged(string appId, bool listed, bool privileged)
     {
-        var previous = DeckLayoutPolicy.ListedAppResolver;
-        DeckLayoutPolicy.ListedAppResolver = id => listed;
-        try
-        {
-            var action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"" + appId + "\"}}";
-            Assert.Equal(privileged, DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), null));
-        }
-        finally
-        {
-            DeckLayoutPolicy.ListedAppResolver = previous;
-        }
+        var action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"" + appId + "\"}}";
+
+        Assert.Equal(privileged, DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), null, _ => listed));
+    }
+
+    [Fact]
+    public void LaunchApp_UnchangedDirectKeyNeverFlips()
+    {
+        const string action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"steam://rungameid/9\"}}";
+
+        Assert.False(DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), Layout(Deck(action)), _ => false));
     }
 }

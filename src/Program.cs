@@ -523,8 +523,10 @@ if (!testHost)
             .Load().StartupDelaySeconds);
 }
 
-Nexus.Service.Deck.DeckLayoutPolicy.ListedAppResolver =
-    id => app.Services.GetRequiredService<Nexus.Service.Activity.IShortcutsProvider>().GetById(id) is not null;
+if (!testHost)
+{
+    _ = app.Services.GetRequiredService<Nexus.Service.Deck.ListedAppIds>();
+}
 
 // Connect the session D-Bus once here - single-threaded, BEFORE hosted services
 // (curve engine etc.) start. A root daemon drops euid for this socket connect

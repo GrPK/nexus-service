@@ -24,13 +24,10 @@ public static class DeckLayoutPolicy
         "openFile", "openFolder", "hotkey", "hotkeySwitch", "text", "playAudio",
     };
 
-    /// <summary>Reports whether the shortcuts provider lists an app id; set at startup. Unset or false makes a direct launchApp target privileged.</summary>
-    internal static Func<string, bool>? ListedAppResolver { get; set; }
-
-    private static bool IsPrivilegedLaunchApp(DeckAction action) =>
+    private static bool IsPrivilegedLaunchApp(DeckAction action, Func<string, bool>? isListed) =>
         action.Type == "launchApp" &&
         Nexus.Service.Activity.ShortcutTargets.IsDirectTarget(action.AppId) &&
-        !(ListedAppResolver?.Invoke(action.AppId!.Trim()) ?? false);
+        !(isListed?.Invoke(action.AppId!.Trim()) ?? false);
 
     /// <summary>The deck config a deck widget carries under <c>config.deck</c>, or null for any other widget.</summary>
     public static DeckConfig? ReadDeckConfig(PanelWidgetDto widget)
@@ -59,14 +56,14 @@ public static class DeckLayoutPolicy
     /// copying, relabelling or deleting existing keys stays allowed; authoring a
     /// new file / hotkey / text / audio key, or changing what one does, does not.
     /// </summary>
-    public static bool IntroducesPrivilegedActions(PanelLayoutDto? incoming, PanelLayoutDto? stored)
+    public static bool IntroducesPrivilegedActions(PanelLayoutDto? incoming, PanelLayoutDto? stored, Func<string, bool>? isListed = null)
     {
         var known = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var action in PrivilegedActions(stored))
+        foreach (var action in PrivilegedActions(stored, isListed))
         {
             known.Add(Serialize(action));
         }
-        foreach (var action in PrivilegedActions(incoming))
+        foreach (var action in PrivilegedActions(incoming, isListed))
         {
             if (!known.Contains(Serialize(action)))
             {
@@ -76,7 +73,7 @@ public static class DeckLayoutPolicy
         return false;
     }
 
-    public static IEnumerable<DeckAction> PrivilegedActions(PanelLayoutDto? layout)
+    public static IEnumerable<DeckAction> PrivilegedActions(PanelLayoutDto? layout, Func<string, bool>? isListed = null)
     {
         if (layout is null)
         {
@@ -86,7 +83,7 @@ public static class DeckLayoutPolicy
         {
             foreach (var widget in page.Widgets)
             {
-                foreach (var action in PrivilegedActions(ReadDeckConfig(widget)))
+                foreach (var action in PrivilegedActions(ReadDeckConfig(widget), isListed))
                 {
                     yield return action;
                 }
@@ -94,7 +91,7 @@ public static class DeckLayoutPolicy
         }
     }
 
-    public static IEnumerable<DeckAction> PrivilegedActions(DeckConfig? config)
+    public static IEnumerable<DeckAction> PrivilegedActions(DeckConfig? config, Func<string, bool>? isListed = null)
     {
         if (config is null)
         {
@@ -102,22 +99,22 @@ public static class DeckLayoutPolicy
         }
         foreach (var deckPage in config.Pages)
         {
-            foreach (var action in PrivilegedActions(deckPage.Slots))
+            foreach (var action in PrivilegedActions(deckPage.Slots, isListed))
             {
                 yield return action;
             }
-            foreach (var action in PrivilegedDialActions(deckPage.Dials))
+            foreach (var action in PrivilegedDialActions(deckPage.Dials, isListed))
             {
                 yield return action;
             }
         }
     }
 
-    private static IEnumerable<DeckAction> PrivilegedDialActions(List<DeckDial>? dials)
+    private static IEnumerable<DeckAction> PrivilegedDialActions(List<DeckDial>? dials, Func<string, bool>? isListed)
     {
         foreach (var dialAction in DeckDials.AllActions(dials))
         {
-            foreach (var action in PrivilegedActions(dialAction))
+            foreach (var action in PrivilegedActions(dialAction, isListed))
             {
                 yield return action;
             }
@@ -125,14 +122,14 @@ public static class DeckLayoutPolicy
     }
 
     /// <summary>Same privileged-action-introduction check as the panel-layout overload, for a host-wide preset's own config (POST/PUT /deck/presets).</summary>
-    public static bool IntroducesPrivilegedActions(DeckConfig? incoming, DeckConfig? stored)
+    public static bool IntroducesPrivilegedActions(DeckConfig? incoming, DeckConfig? stored, Func<string, bool>? isListed = null)
     {
         var known = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var action in PrivilegedActions(stored))
+        foreach (var action in PrivilegedActions(stored, isListed))
         {
             known.Add(Serialize(action));
         }
-        foreach (var action in PrivilegedActions(incoming))
+        foreach (var action in PrivilegedActions(incoming, isListed))
         {
             if (!known.Contains(Serialize(action)))
             {
@@ -142,21 +139,21 @@ public static class DeckLayoutPolicy
         return false;
     }
 
-    private static IEnumerable<DeckAction> PrivilegedActions(List<DeckSlot> slots)
+    private static IEnumerable<DeckAction> PrivilegedActions(List<DeckSlot> slots, Func<string, bool>? isListed)
     {
         foreach (var slot in slots)
         {
-            foreach (var action in PrivilegedActions(slot.Action))
+            foreach (var action in PrivilegedActions(slot.Action, isListed))
             {
                 yield return action;
             }
             if (slot.Folder is not null)
             {
-                foreach (var action in PrivilegedActions(slot.Folder.Slots))
+                foreach (var action in PrivilegedActions(slot.Folder.Slots, isListed))
                 {
                     yield return action;
                 }
-                foreach (var action in PrivilegedDialActions(slot.Folder.Dials))
+                foreach (var action in PrivilegedDialActions(slot.Folder.Dials, isListed))
                 {
                     yield return action;
                 }
@@ -164,13 +161,13 @@ public static class DeckLayoutPolicy
         }
     }
 
-    private static IEnumerable<DeckAction> PrivilegedActions(DeckAction? action)
+    private static IEnumerable<DeckAction> PrivilegedActions(DeckAction? action, Func<string, bool>? isListed)
     {
         if (action is null)
         {
             yield break;
         }
-        if (PrivilegedTypes.Contains(action.Type) || IsPrivilegedLaunchApp(action))
+        if (PrivilegedTypes.Contains(action.Type) || IsPrivilegedLaunchApp(action, isListed))
         {
             yield return action;
             yield break;
@@ -179,17 +176,17 @@ public static class DeckLayoutPolicy
         {
             foreach (var step in action.Steps)
             {
-                foreach (var nested in PrivilegedActions(step.Action))
+                foreach (var nested in PrivilegedActions(step.Action, isListed))
                 {
                     yield return nested;
                 }
             }
         }
-        foreach (var nested in PrivilegedActions(action.On))
+        foreach (var nested in PrivilegedActions(action.On, isListed))
         {
             yield return nested;
         }
-        foreach (var nested in PrivilegedActions(action.Off))
+        foreach (var nested in PrivilegedActions(action.Off, isListed))
         {
             yield return nested;
         }

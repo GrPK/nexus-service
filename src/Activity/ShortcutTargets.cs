@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
+using System.Runtime.InteropServices;
 using System.IO;
 using System.Text;
 
 namespace Nexus.Service.Activity;
 
 /// <summary>Platform-neutral parsing for launch-app target ids: typed paths, URIs, internet shortcuts and known-folder prefixes.</summary>
-internal static class ShortcutTargets
+internal static partial class ShortcutTargets
 {
     /// <summary>Largest .url file read; real ones are well under a kilobyte.</summary>
     internal const int MaxInternetShortcutBytes = 65536;
@@ -96,6 +96,10 @@ internal static class ShortcutTargets
             scheme.Equals("steam", StringComparison.OrdinalIgnoreCase);
     }
 
+    // InvariantGlobalization pins CultureInfo's ANSI page to 1252, so ask the OS.
+    [LibraryImport("kernel32.dll")]
+    private static partial uint GetACP();
+
     /// <summary>Reads a .url file: UTF-8 when valid (or BOM-marked), else the system ANSI code page, else Latin-1.</summary>
     internal static string ReadInternetShortcutText(string path)
     {
@@ -110,10 +114,9 @@ internal static class ShortcutTargets
         try
         {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            var ansi = CultureInfo.CurrentCulture.TextInfo.ANSICodePage;
-            if (ansi > 0)
+            if (OperatingSystem.IsWindows())
             {
-                return Encoding.GetEncoding(ansi).GetString(bytes);
+                return Encoding.GetEncoding((int)GetACP()).GetString(bytes);
             }
         }
         catch (Exception)
