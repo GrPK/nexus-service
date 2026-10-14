@@ -175,8 +175,9 @@ internal static class Nexus2FanCurvePlanner
             return plan;
         }
 
-        // Nexus 2 builds its easy-mode curves from the first CPU and first GPU temperature; without both it runs the stored curves instead.
-        var easyRuns = env.Sources.Any(t => t.Category == "CPU") && env.Sources.Any(t => t.Category == "GPU");
+        // Nexus 2 builds its easy-mode curves from the first CPU and first GPU temperature and runs the stored curves when one is missing.
+        // A missing CPU source usually means sensors are not ready yet, so only a present CPU with no GPU counts. An iGPU (GpuIntel) counts as a GPU here; parity with Nexus 2 on that is unverified.
+        var easyRuns = !(env.Sources.Any(t => t.Category == "CPU") && !env.Sources.Any(t => t.Category == "GPU"));
         if (easyRuns && Nexus2Json.GetObject(cooling, "easyMode") is { } easy && Nexus2Json.GetBool(easy, "enabled", false))
         {
             // Nexus 2's easy-mode global modifier has no Nexus 3 preset equivalent and is not carried.

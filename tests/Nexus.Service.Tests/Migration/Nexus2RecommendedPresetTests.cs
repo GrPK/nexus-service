@@ -220,26 +220,25 @@ public sealed class Nexus2RecommendedPresetTests
     }
 
     [Fact]
-    public void Cooler_hub_channels_are_left_exactly_as_they_were()
+    public void Activation_with_cooler_hubs_present_equals_a_direct_profile_apply()
     {
         var (service, store, hw) = Setup("silent", (_, h) => h.AddQSeries().AddNp50());
-        var hubs = hw.Channels.Where(c => c.Id.StartsWith("qseries:", StringComparison.Ordinal) || c.Id.StartsWith("np50:", StringComparison.Ordinal)).Select(c => c.Id).ToList();
-        Assert.Contains($"np50:{Hw.Np50}:legacy", hubs);
+        service.ApplyFanCurves(Root(Text("silent")));
 
-        var result = service.ApplyFanCurves(Root(Text("silent")));
+        var (_, direct, _) = Setup("silent", (_, h) => h.AddQSeries().AddNp50());
+        FanProfiles.Apply("silent", new RecordingFans(hw), direct);
 
-        Assert.Equal("applied", result.Status);
-        var owned = store.Load().Cooling.Curves.SelectMany(c => c.Outputs).Select(o => o.Id).ToHashSet();
-        Assert.All(hubs, h => Assert.DoesNotContain(h, owned));
-        Assert.Contains($"smarthub:{Hw.SmartHub}:fan0", owned);
-        Assert.Empty(store.Load().Cooling.ManualSpeeds);
+        string Shape(InMemoryConfigStore s) => string.Join("|", s.Load().Cooling.Curves.OrderBy(c => c.Id).Select(c => $"{c.Preset}:{string.Join(",", c.Outputs.Select(o => o.Id).OrderBy(x => x))}"))
+            + "|" + s.Load().Cooling.ActivePreset;
+        Assert.Equal(Shape(direct), Shape(store));
+        Assert.Contains($"np50:{Hw.Np50}:legacy", store.Load().Cooling.Curves.SelectMany(c => c.Outputs).Select(o => o.Id));
     }
 
     [Fact]
     public void A_change_landing_between_the_plan_and_the_write_aborts_the_activation()
     {
         InMemoryConfigStore? late = null;
-        // First source read is the plan's; the hook arms a second one that fires inside FanProfiles.Apply, after the plan.
+        // The first source read is the plan's; it arms a second hook that fires on FanProfiles.Apply's own read, after the plan and before its store update.
         var (service, store, _) = FanCurveServices.Service(Fixture, configText: Text("silent"),
             configureFans: f => f.OnFirstSourceRead = () => f.OnFirstSourceRead = () => late!.Update(s => s.Cooling.FanOffsets["x"] = 5));
         late = store;
@@ -252,20 +251,54 @@ public sealed class Nexus2RecommendedPresetTests
         Assert.DoesNotContain(store.Load().Cooling.Curves, c => c.Outputs.Count > 0);
     }
 
-    [Theory]
-    [InlineData("CPU")]
-    [InlineData("GPU")]
-    public void Without_a_cpu_or_gpu_temperature_the_stored_curves_import_as_easy_mode_is_off(string missing)
+    private static string EasyModeWithOneStoredCurve()
     {
-        var (service, store, _) = Setup("silent", (_, h) => h.Sources.RemoveAll(t => t.Category == missing));
-        var cat = service.BuildFanCurvesCategory(Root(Text("silent")));
+        var points = new[] { (0.0, 30.0), (50.0, 50.0), (80.0, 80.0), (100.0, 100.0) };
+        var root = N2.Root(N2.Profile("P", true, 100, easy: true, N2.Graph("Stored", points, new[] { N2.Pwm(1) }, input: N2.Input())));
+        return root.GetRawText().Replace("\"selected\":\"balanced\"", "\"selected\":\"silent\"");
+    }
+
+    [Fact]
+    public void With_a_cpu_but_no_gpu_temperature_the_stored_curves_import_as_easy_mode_is_off()
+    {
+        var text = EasyModeWithOneStoredCurve();
+        var (service, store, _) = FanCurveServices.Service(Fixture, configText: text);
+        var gpuless = FanCurveServices.Service(Fixture, configText: text, configureFans: null);
+        gpuless.Hw.Sources.RemoveAll(t => t.Category == "GPU");
+
+        var cat = gpuless.Service.BuildFanCurvesCategory(Root(text));
         Assert.NotEqual("recommendedMode", cat.FanCurvesNote);
         Assert.Null(cat.RecommendedPreset);
+        Assert.Equal(1, cat.Count);
 
+        var result = gpuless.Service.ApplyFanCurves(Root(text));
+        Assert.Equal(("applied", 1, null), (result.Status, result.Count, result.Preset));
+        var imported = Assert.Single(gpuless.Store.Load().Cooling.Curves, c => c.Id.StartsWith("n2-", StringComparison.Ordinal));
+        Assert.Equal($"smarthub:{Hw.SmartHub}:fan0", Assert.Single(imported.Outputs).Id);
+
+        // With both sources present the same file maps to the preset instead.
+        Assert.Equal("silent", service.BuildFanCurvesCategory(Root(text)).RecommendedPreset);
+        Assert.Empty(store.Load().Cooling.Curves);
+    }
+
+    [Fact]
+    public void Without_a_cpu_temperature_the_preset_mapping_is_kept()
+    {
+        var (service, _, _) = Setup("silent", (_, h) => h.Sources.RemoveAll(t => t.Category == "CPU"));
+        var cat = service.BuildFanCurvesCategory(Root(Text("silent")));
+        Assert.Equal("recommendedMode", cat.FanCurvesNote);
+        Assert.Equal("silent", cat.RecommendedPreset);
+    }
+
+    [Fact]
+    public void A_guard_abort_with_cooling_disabled_reports_cooling_disabled()
+    {
+        InMemoryConfigStore? late = null;
+        var (service, store, _) = FanCurveServices.Service(Fixture, configText: Text("silent"),
+            configureFans: f => f.OnFirstSourceRead = () => f.OnFirstSourceRead = () => late!.Update(s => s.Features.Cooling = false));
+        late = store;
         var result = service.ApplyFanCurves(Root(Text("silent")));
-        Assert.NotEqual("recommendedMode", result.Detail);
-        Assert.Null(result.Preset);
-        Assert.Equal("off", store.Load().Cooling.ActivePreset);
+        Assert.Equal(("skipped", "coolingDisabled"), (result.Status, result.Detail));
     }
 
     [Fact]

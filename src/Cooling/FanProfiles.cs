@@ -122,17 +122,16 @@ public static class FanProfiles
     /// "auto" is treated as a synonym for "off" for backward compatibility.
     /// </summary>
     public static string Apply(string profileName, IFanControlProvider fans, IConfigStore store, bool forceCustomRestore = false)
-        => ApplyCore(profileName, fans, store, forceCustomRestore, null, null)!;
+        => ApplyCore(profileName, fans, store, forceCustomRestore, null)!;
 
     /// <summary>
     /// Apply for callers that must not race a settings change: <paramref name="guard"/> runs inside the store
-    /// update, and a false result aborts before anything is written (returns null). Channels matching
-    /// <paramref name="leaveAlone"/> are neither claimed nor detached, exactly like a pinned channel.
+    /// update, and a false result aborts before anything is written (returns null).
     /// </summary>
-    public static string? TryApplyGuarded(string profileName, IFanControlProvider fans, IConfigStore store, Func<NexusSettings, bool> guard, Func<FanChannel, bool> leaveAlone)
-        => ApplyCore(profileName, fans, store, false, guard, leaveAlone);
+    public static string? TryApplyGuarded(string profileName, IFanControlProvider fans, IConfigStore store, Func<NexusSettings, bool> guard)
+        => ApplyCore(profileName, fans, store, false, guard);
 
-    private static string? ApplyCore(string profileName, IFanControlProvider fans, IConfigStore store, bool forceCustomRestore, Func<NexusSettings, bool>? guard, Func<FanChannel, bool>? leaveAlone)
+    private static string? ApplyCore(string profileName, IFanControlProvider fans, IConfigStore store, bool forceCustomRestore, Func<NexusSettings, bool>? guard)
     {
         var canonical = Canonicalize(profileName);
         var allChannels = fans.GetFanChannels();
@@ -160,14 +159,13 @@ public static class FanProfiles
             // Dropping it here keeps it out of fanIds too, so Off neither detaches
             // nor re-releases a channel already handed back.
             uncontrolledIds = s.Cooling.UncontrolledFanChannels.ToHashSet();
-            var left = leaveAlone is null ? new List<FanChannel>() : allChannels.Where(leaveAlone).ToList();
-            channels = allChannels.Where(c => !uncontrolledIds.Contains(c.Id) && !left.Contains(c)).ToList();
+            channels = allChannels.Where(c => !uncontrolledIds.Contains(c.Id)).ToList();
             fanIds = channels.Select(c => c.Id).ToHashSet();
             // Pinned channels (pumps by default, or any channel the user pinned) are
             // excluded from the Silent/Balanced/Turbo/Max and Custom presets, which must
             // not retarget what drives them. Off still releases every channel to
             // BIOS, pinned or not.
-            pinnedIds = channels.Where(c => IsPinned(c, s.Cooling.FanPinOverrides)).Select(c => c.Id).Concat(left.Select(c => c.Id)).ToHashSet();
+            pinnedIds = channels.Where(c => IsPinned(c, s.Cooling.FanPinOverrides)).Select(c => c.Id).ToHashSet();
             s.Cooling.ClearHeal($"profile-apply:{canonical}");
             // Snapshot the user's custom mapping on the way out of "custom":
             // curve assignments and manual duties both, so Custom restores the

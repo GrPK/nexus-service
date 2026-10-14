@@ -222,16 +222,14 @@ public sealed class Nexus2MigrationService
                 if (plan.RecommendedApplies && plan.RecommendedPreset is { } preset)
                 {
                     // The untouched check re-runs inside the store update, so no change can land between it and the write.
-                    // Q-series and NP50 channels stay exactly as they were: hub writes are unverified on hardware.
                     var applied = Cooling.FanProfiles.TryApplyGuarded(
                         preset,
                         fans,
                         _store,
-                        s => s.Features.Cooling && Nexus2RecommendedPreset.IsUntouched(s.Cooling, preset),
-                        c => c.Id.StartsWith("qseries:", StringComparison.Ordinal) || c.Id.StartsWith("np50:", StringComparison.Ordinal));
+                        s => s.Features.Cooling && Nexus2RecommendedPreset.IsUntouched(s.Cooling, preset));
                     if (applied is null)
                     {
-                        return Skip(id, Nexus2FanCurveReasons.NoteCoolingCustomized);
+                        return Skip(id, _store.Load().Features.Cooling ? Nexus2FanCurveReasons.NoteCoolingCustomized : Nexus2FanCurveReasons.NoteCoolingDisabled);
                     }
                     lock (_fanCurveCheckLock)
                     {
