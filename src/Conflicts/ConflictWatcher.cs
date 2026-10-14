@@ -309,6 +309,8 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
                             Category = def.Category,
                             ProcessName = procName,
                             Pid = hit.Pid,
+                            DeviceOverlapKnown = ConflictDeviceOwnership.DeviceOverlapKnown(def),
+                            ClaimsAllRgb = def.ClaimsAllRgb,
                         };
                     }
                 }
