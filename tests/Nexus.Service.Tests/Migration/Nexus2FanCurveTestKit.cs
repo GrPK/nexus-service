@@ -35,6 +35,7 @@ internal sealed class Hw
     public bool CoolingEnabled { get; set; } = true;
     public bool GuardEnabled { get; set; } = true;
     public bool AllowHubs { get; set; }
+    public bool CoolingUntouched { get; set; } = true;
 
     public static Hw Y70()
     {
@@ -103,6 +104,7 @@ internal sealed class Hw
         ManualDriven = ManualDriven,
         HealedChannelIds = HealedIds,
         CoolingEnabled = CoolingEnabled,
+        IsCoolingUntouched = _ => CoolingUntouched,
         ThermalGuardEnabled = GuardEnabled,
         AllowCoolerHubTargets = AllowHubs,
         BuildLint = Lint ?? ((curves, scope) => new LintInput { Curves = curves, Channels = Channels, Sources = Sources, Uncontrolled = Uncontrolled.ToList(), FanRoles = FanRoles, Scope = scope }),

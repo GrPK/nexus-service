@@ -299,8 +299,82 @@ public sealed class Nexus2MigrationRoutesTests
         }
     }
 
+    [Fact]
+    public async Task Recommended_mode_flows_through_status_preview_apply_and_the_cooling_routes()
+    {
+        var hw = Nexus.Service.Tests.Migration.Hw.Y70().AddQSeries();
+        var reader = new Nexus.Service.Tests.Migration.FakeNexus2ConfigReader
+        {
+            ConfigText = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Nexus2", "cooling", "n2-217-easy-mode.json")).Replace("\"selected\": \"balanced\"", "\"selected\": \"performance\""),
+        };
+        var factory = new NexusAppFactory().WithWebHostBuilder(b =>
+            b.ConfigureTestServices(s =>
+            {
+                s.RemoveAll<INexus2Detector>();
+                s.AddSingleton<INexus2Detector>(_detector);
+                s.RemoveAll<INexus2ConfigReader>();
+                s.AddSingleton<INexus2ConfigReader>(reader);
+                s.RemoveAll<Nexus.Service.Cooling.IFanControlProvider>();
+                s.AddSingleton<Nexus.Service.Cooling.IFanControlProvider>(new Nexus.Service.Tests.Migration.RecordingFans(hw));
+            }));
+        using (factory)
+        {
+            var client = factory.CreateClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", factory.Services.GetRequiredService<TokenService>().Token);
+            _detector.Result = new Nexus2DetectionResult(true, true, "2.17.1", true);
+            var store = factory.Services.GetRequiredService<IConfigStore>();
+            store.Update(s => s.Features.Cooling = true);
+            var before = store.Load().Cooling.ActivePreset;
+
+            using (var status = JsonDocument.Parse(await (await client.GetAsync("/migration/nexus2")).Content.ReadAsStringAsync()))
+            {
+                Assert.True(status.RootElement.GetProperty("pending").GetBoolean());
+            }
+
+            using (var preview = JsonDocument.Parse(await (await client.PostAsync("/migration/nexus2/preview", null)).Content.ReadAsStringAsync()))
+            {
+                var cat = preview.RootElement.GetProperty("categories").EnumerateArray().Single(c => c.GetProperty("id").GetString() == "fanCurves");
+                Assert.True(cat.GetProperty("available").GetBoolean());
+                Assert.Equal("performance", cat.GetProperty("recommendedFrom").GetString());
+                Assert.Equal("turbo", cat.GetProperty("recommendedPreset").GetString());
+                Assert.Equal("recommendedMode", cat.GetProperty("fanCurvesNote").GetString());
+            }
+
+            var applyRes = await client.PostAsync("/migration/nexus2/apply", new StringContent("{\"categories\":[\"fanCurves\"]}", System.Text.Encoding.UTF8, "application/json"));
+            using (var apply = JsonDocument.Parse(await applyRes.Content.ReadAsStringAsync()))
+            {
+                var r = apply.RootElement.GetProperty("results")[0];
+                Assert.Equal("applied", r.GetProperty("status").GetString());
+                Assert.Equal("turbo", r.GetProperty("preset").GetString());
+            }
+
+            using (var profiles = JsonDocument.Parse(await (await client.GetAsync("/cooling/profiles")).Content.ReadAsStringAsync()))
+            {
+                Assert.Equal("turbo", profiles.RootElement.GetProperty("active").GetString());
+            }
+            Assert.NotEqual("turbo", before);
+
+            using var after = JsonDocument.Parse(await (await client.PostAsync("/migration/nexus2/preview", null)).Content.ReadAsStringAsync());
+            var again = after.RootElement.GetProperty("categories").EnumerateArray().Single(c => c.GetProperty("id").GetString() == "fanCurves");
+            Assert.True(again.GetProperty("available").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public async Task Status_pending_without_a_panel_record_when_recommended_mode_would_apply()
+    {
+        var (factory, client) = BootWithFanCurves("n2-217-easy-mode.json");
+        using (factory)
+        {
+            _detector.Result = new Nexus2DetectionResult(true, true, "2.17.1", true);
+
+            using var doc = JsonDocument.Parse(await (await client.GetAsync("/migration/nexus2")).Content.ReadAsStringAsync());
+            Assert.False(doc.RootElement.GetProperty("deviceEligible").GetBoolean());
+            Assert.True(doc.RootElement.GetProperty("pending").GetBoolean());
+        }
+    }
+
     [Theory]
-    [InlineData("n2-217-easy-mode.json")]
     [InlineData("n2-216-seeded.json")]
     public async Task Status_not_pending_without_a_panel_record_when_no_fan_curve_would_import(string fixture)
     {
