@@ -36,6 +36,7 @@ internal static class Nexus2FanCurveReasons
     public const string NoteRecommendedMode = "recommendedMode";
     public const string NoteNoUserCurves = "noUserCurves";
     public const string NoteCoolingDisabled = "coolingDisabled";
+    public const string NoteCoolingCustomized = "nexus3CoolingCustomized";
 }
 
 /// <summary>Safety numbers an imported curve must clear. Points are baked with Nexus 2's modifiers, then raised to the stop duty; the hot and flat checks scale that result by at most one of Nexus 3's global modifier.</summary>
@@ -74,6 +75,8 @@ internal sealed class Nexus2FanCurveEnvironment
     /// <summary>Channels the thermal guard's heal moved onto its shared curve.</summary>
     public IReadOnlySet<string> HealedChannelIds { get; init; } = new HashSet<string>();
     public bool CoolingEnabled { get; init; } = true;
+    /// <summary>Whether Nexus 3's cooling is still a fresh install for the given target preset; null counts as customized.</summary>
+    public Func<string, bool>? IsCoolingUntouched { get; init; }
     /// <summary>A constant duty is only safe with the thermal guard running behind it.</summary>
     public bool ThermalGuardEnabled { get; init; } = true;
     /// <summary>Q-series and NP50 targets stay unsupported until a curve write is verified on that hardware.</summary>
@@ -108,6 +111,12 @@ internal sealed class Nexus2FanCurvePlan
 {
     public string? Note { get; set; }
     public int OtherProfiles { get; set; }
+    /// <summary>The Nexus 2 easy-mode value ("silent" | "balanced" | "performance") when it maps to a Nexus 3 preset.</summary>
+    public string? RecommendedFrom { get; set; }
+    /// <summary>The Nexus 3 preset ("silent" | "balanced" | "turbo") for <see cref="RecommendedFrom"/>.</summary>
+    public string? RecommendedPreset { get; set; }
+    /// <summary>True when the preset would be activated: mappable and Nexus 3 cooling untouched.</summary>
+    public bool RecommendedApplies { get; set; }
     public List<Nexus2PlannedCurve> Curves { get; } = new();
     public int ImportableCount => Curves.Count(c => c.Import);
 }
@@ -166,9 +175,27 @@ internal static class Nexus2FanCurvePlanner
             return plan;
         }
 
-        if (Nexus2Json.GetObject(cooling, "easyMode") is { } easy && Nexus2Json.GetBool(easy, "enabled", false))
+        // Nexus 2 builds its easy-mode curves from the first CPU and first GPU temperature and runs the stored curves when one is missing.
+        // A missing CPU source usually means sensors are not ready yet, so only a present CPU with no GPU counts. An iGPU (GpuIntel) counts as a GPU here; parity with Nexus 2 on that is unverified.
+        var easyRuns = !(env.Sources.Any(t => t.Category == "CPU") && !env.Sources.Any(t => t.Category == "GPU"));
+        if (easyRuns && Nexus2Json.GetObject(cooling, "easyMode") is { } easy && Nexus2Json.GetBool(easy, "enabled", false))
         {
+            // Nexus 2's easy-mode global modifier has no Nexus 3 preset equivalent and is not carried.
             plan.Note = Nexus2FanCurveReasons.NoteRecommendedMode;
+            var selected = Nexus2Json.GetString(easy, "selected");
+            if (Nexus2RecommendedPreset.Map(selected) is { } preset)
+            {
+                plan.RecommendedFrom = selected;
+                plan.RecommendedPreset = preset;
+                if (env.IsCoolingUntouched?.Invoke(preset) == true)
+                {
+                    plan.RecommendedApplies = true;
+                }
+                else
+                {
+                    plan.Note = Nexus2FanCurveReasons.NoteCoolingCustomized;
+                }
+            }
             return plan;
         }
 

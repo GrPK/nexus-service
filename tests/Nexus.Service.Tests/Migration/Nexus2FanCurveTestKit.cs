@@ -35,6 +35,7 @@ internal sealed class Hw
     public bool CoolingEnabled { get; set; } = true;
     public bool GuardEnabled { get; set; } = true;
     public bool AllowHubs { get; set; }
+    public bool CoolingUntouched { get; set; } = true;
 
     public static Hw Y70()
     {
@@ -103,6 +104,7 @@ internal sealed class Hw
         ManualDriven = ManualDriven,
         HealedChannelIds = HealedIds,
         CoolingEnabled = CoolingEnabled,
+        IsCoolingUntouched = _ => CoolingUntouched,
         ThermalGuardEnabled = GuardEnabled,
         AllowCoolerHubTargets = AllowHubs,
         BuildLint = Lint ?? ((curves, scope) => new LintInput { Curves = curves, Channels = Channels, Sources = Sources, Uncontrolled = Uncontrolled.ToList(), FanRoles = FanRoles, Scope = scope }),
@@ -271,10 +273,12 @@ internal sealed class RecordingFans : IFanControlProvider
     }
 
     public float? ReadTemperature(string sensorId) => _hw.Sources.FirstOrDefault(s => s.Id == sensorId)?.Value;
-    public int SetFanSpeed(string channelId, int dutyPercent) => dutyPercent;
-    public void DriveFanSpeed(string channelId, int dutyPercent) { }
-    public void ReleaseFan(string channelId) { }
-    public void ReleaseAll() { }
+    /// <summary>Every hardware-facing call in order, so two activation paths can be compared.</summary>
+    public List<string> Calls { get; } = new();
+    public int SetFanSpeed(string channelId, int dutyPercent) { Calls.Add($"set:{channelId}:{dutyPercent}"); return dutyPercent; }
+    public void DriveFanSpeed(string channelId, int dutyPercent) => Calls.Add($"drive:{channelId}:{dutyPercent}");
+    public void ReleaseFan(string channelId) => Calls.Add($"release:{channelId}");
+    public void ReleaseAll() => Calls.Add("releaseAll");
     public Task<IReadOnlyList<FanCalibration>> CalibrateAsync(IReadOnlyList<string> fanIds, IProgress<FanCalibrationProgress> progress, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<FanCalibration>>(Array.Empty<FanCalibration>());
 }

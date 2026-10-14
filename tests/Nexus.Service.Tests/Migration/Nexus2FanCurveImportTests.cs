@@ -350,8 +350,10 @@ public class Nexus2FanCurveImportTests
         var json = JsonSerializer.Serialize(cat, Nexus.Service.Serialization.AppJsonContext.Default.Nexus2PreviewCategoryDto);
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("fanCurves", doc.RootElement.GetProperty("id").GetString());
-        Assert.False(doc.RootElement.GetProperty("available").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("available").GetBoolean());
         Assert.Equal("recommendedMode", doc.RootElement.GetProperty("fanCurvesNote").GetString());
+        Assert.Equal("balanced", doc.RootElement.GetProperty("recommendedFrom").GetString());
+        Assert.Equal("balanced", doc.RootElement.GetProperty("recommendedPreset").GetString());
         Assert.False(doc.RootElement.TryGetProperty("fanCurves", out _));
     }
 
@@ -369,16 +371,6 @@ public class Nexus2FanCurveImportTests
         Assert.Equal("custom", cooling.ActivePreset);
         Assert.Equal(1.0, cooling.GlobalSpeedModifier);
         Assert.Equal(3, cooling.Curves.SelectMany(c => c.Outputs).Count(o => o.Id.StartsWith("smarthub:", StringComparison.Ordinal)));
-    }
-
-    [Fact]
-    public void Apply_with_easy_mode_on_skips_and_writes_nothing()
-    {
-        var (service, store, _) = FanCurveServices.Service("n2-217-easy-mode.json");
-        var root = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Nexus2", "cooling", "n2-217-easy-mode.json"))).RootElement;
-        var result = service.ApplyFanCurves(root);
-        Assert.Equal(("skipped", "recommendedMode"), (result.Status, result.Detail));
-        Assert.Empty(store.Load().Cooling.Curves);
     }
 
     [Fact]
@@ -401,7 +393,6 @@ public class Nexus2FanCurveImportTests
     }
 
     [Theory]
-    [InlineData("n2-217-easy-mode.json")]
     [InlineData("n2-216-seeded.json")]
     public void The_offer_stays_off_when_no_curve_would_import(string fixture)
     {

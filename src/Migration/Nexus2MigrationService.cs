@@ -93,7 +93,7 @@ public sealed class Nexus2MigrationService
         try
         {
             using var read = _reader.Read();
-            result = read is not null && PlanFanCurves(read.Document.RootElement, out _, out _) is { ImportableCount: > 0 };
+            result = read is not null && PlanFanCurves(read.Document.RootElement, out _, out _) is { } plan && (plan.ImportableCount > 0 || plan.RecommendedApplies);
         }
         catch (Exception ex)
         {
@@ -131,6 +131,7 @@ public sealed class Nexus2MigrationService
             Channels = readChannels,
             Sources = sources,
             CoolingEnabled = settings.Features.Cooling,
+            IsCoolingUntouched = target => Nexus2RecommendedPreset.IsUntouched(settings.Cooling, target),
             ThermalGuardEnabled = settings.Cooling.ThermalGuardEnabled,
             FanRoles = Cooling.CoolingSnapshots.FanRoles(settings.Cooling),
             ManualDriven = Cooling.CoolingSnapshots.ManualSpeeds(settings.Cooling).Keys.ToHashSet(StringComparer.Ordinal),
@@ -168,10 +169,12 @@ public sealed class Nexus2MigrationService
                 return cat;
             }
             cat.Count = plan.ImportableCount;
-            cat.Available = plan.ImportableCount > 0;
+            cat.Available = plan.ImportableCount > 0 || plan.RecommendedApplies;
             cat.FanCurvesNote = plan.Note;
+            cat.RecommendedFrom = plan.RecommendedFrom;
+            cat.RecommendedPreset = plan.RecommendedPreset;
             cat.OtherProfiles = plan.OtherProfiles > 0 ? plan.OtherProfiles : null;
-            if (plan.Note is not (Nexus2FanCurveReasons.NoteRecommendedMode or Nexus2FanCurveReasons.NoteCoolingDisabled))
+            if (plan.Note is not (Nexus2FanCurveReasons.NoteRecommendedMode or Nexus2FanCurveReasons.NoteCoolingDisabled or Nexus2FanCurveReasons.NoteCoolingCustomized))
             {
                 cat.FanCurves = plan.Curves.ConvertAll(c => new Nexus2FanCurvePreviewDto
                 {
@@ -215,6 +218,24 @@ public sealed class Nexus2MigrationService
                 if (PlanFanCurves(root, out var fans, out var channels) is not { } plan || fans is null)
                 {
                     return Fail(id, "no-cooling-provider");
+                }
+                if (plan.RecommendedApplies && plan.RecommendedPreset is { } preset)
+                {
+                    // The untouched check re-runs inside the store update, so no change can land between it and the write.
+                    var applied = Cooling.FanProfiles.TryApplyGuarded(
+                        preset,
+                        fans,
+                        _store,
+                        s => s.Features.Cooling && Nexus2RecommendedPreset.IsUntouched(s.Cooling, preset));
+                    if (applied is null)
+                    {
+                        return Skip(id, _store.Load().Features.Cooling ? Nexus2FanCurveReasons.NoteCoolingCustomized : Nexus2FanCurveReasons.NoteCoolingDisabled);
+                    }
+                    lock (_fanCurveCheckLock)
+                    {
+                        _fanCurveCheck = null;
+                    }
+                    return new Nexus2ApplyResultDto { Id = id, Status = "applied", Preset = preset };
                 }
                 if (plan.Note is not null)
                 {

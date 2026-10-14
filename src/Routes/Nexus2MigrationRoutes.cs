@@ -148,8 +148,12 @@ public sealed class Nexus2PreviewCategoryDto
     public string? Value { get; set; }
     // fanCurves (Count: importable curves)
     public List<Nexus2FanCurvePreviewDto>? FanCurves { get; set; }
-    /// <summary>"recommendedMode" | "noUserCurves" | "coolingDisabled"; set when the category is unavailable for a reason the web explains.</summary>
+    /// <summary>"recommendedMode" | "noUserCurves" | "coolingDisabled" | "nexus3CoolingCustomized"; set when the category is unavailable for a reason the web explains.</summary>
     public string? FanCurvesNote { get; set; }
+    /// <summary>Recommended mode only, when mappable: the Nexus 2 value ("silent" | "balanced" | "performance").</summary>
+    public string? RecommendedFrom { get; set; }
+    /// <summary>Recommended mode only, when mappable: the Nexus 3 preset ("silent" | "balanced" | "turbo").</summary>
+    public string? RecommendedPreset { get; set; }
     /// <summary>Inactive Nexus 2 profiles with curves; only the active profile imports.</summary>
     public int? OtherProfiles { get; set; }
 }
@@ -197,6 +201,8 @@ public sealed class Nexus2ApplyResultDto
     public string? Detail { get; set; }
     /// <summary>fanCurves: curves applied.</summary>
     public int? Count { get; set; }
+    /// <summary>fanCurves: the Nexus 3 preset activated from Recommended mode ("silent" | "balanced" | "turbo").</summary>
+    public string? Preset { get; set; }
 }
 
 public sealed class Nexus2ApplyResponse
