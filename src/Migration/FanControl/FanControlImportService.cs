@@ -137,7 +137,12 @@ public sealed class FanControlImportService
                 response.NamesImported = plan.Names.Count;
             }
 
-            if (!wantsPreset)
+            // A preset with nothing bound would replace the active one and
+            // hand the unlisted fans back to BIOS control.
+            var hasBindings = (wanted.Contains(CategoryCurves) && assignments.Count > 0)
+                || (wanted.Contains(CategoryOffsets) && plan.Offsets.Count > 0)
+                || (wanted.Contains(CategoryManual) && plan.ManualSpeeds.Count > 0);
+            if (!wantsPreset || !hasBindings)
             {
                 return;
             }

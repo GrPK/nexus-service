@@ -394,4 +394,56 @@ public class FanControlImportEndToEndTests
         Assert.False(result.Error);
         Assert.False(store.Load().FanControlImportCompleted);
     }
+
+    private static readonly string[] BindingCategories =
+    {
+        FanControlImportService.CategoryCurves,
+        FanControlImportService.CategoryOffsets,
+        FanControlImportService.CategoryManual,
+    };
+
+    [Fact]
+    public void Apply_ThatBindsNoFan_NeverCreatesOrActivatesAPreset()
+    {
+        // No channel matches the config, so nothing can bind.
+        var (import, fans, store) = Build();
+        fans.Channels.Clear();
+        store.Update(s =>
+        {
+            s.Cooling.Presets.Add(new CoolingPreset { Id = "mine", Name = "Mine", Mode = "custom" });
+            s.Cooling.ActivePresetId = "mine";
+            s.Cooling.ActivePreset = "custom";
+            s.Cooling.CustomFanCurveAssignments = new Dictionary<string, string> { ["/lpc/nct6797d/0/control/0"] = "user-curve" };
+            s.Cooling.FanOffsets = new Dictionary<string, int> { ["/lpc/nct6797d/0/control/0"] = 7 };
+        });
+        var before = store.Load().Cooling;
+        var activeBefore = before.ActivePreset;
+        var assignmentsBefore = new Dictionary<string, string>(before.CustomFanCurveAssignments);
+        var offsetsBefore = new Dictionary<string, int>(before.FanOffsets);
+
+        var result = import.Apply(null, BindingCategories);
+
+        Assert.False(result.Error);
+        Assert.Null(result.PresetId);
+        var after = store.Load().Cooling;
+        Assert.Equal("Mine", Assert.Single(after.Presets).Name);
+        Assert.Equal("mine", after.ActivePresetId);
+        Assert.Equal(activeBefore, after.ActivePreset);
+        Assert.Equal(assignmentsBefore, after.CustomFanCurveAssignments);
+        Assert.Equal(offsetsBefore, after.FanOffsets);
+    }
+
+    [Fact]
+    public void Apply_ThatBindsAFan_StillCreatesAndActivatesThePreset()
+    {
+        var (import, _, store) = Build();
+
+        var result = import.Apply(null, BindingCategories);
+
+        var cooling = store.Load().Cooling;
+        var preset = Assert.Single(cooling.Presets);
+        Assert.NotNull(result.PresetId);
+        Assert.Equal(preset.Id, cooling.ActivePresetId);
+        Assert.NotEmpty(preset.FanCurveAssignments);
+    }
 }
