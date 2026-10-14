@@ -85,14 +85,30 @@ public sealed class GitHubReleaseProvider : IUpdateSource
         // 404: the repo has no stable release yet.
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
         // Any other refusal (a rate limit, an outage) is a failed check, never "nothing newer".
+        await ThrowIfRateLimitedAsync(resp, ct);
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync(AppJsonContext.Default.GitHubRelease, ct);
+    }
+
+    private static async Task ThrowIfRateLimitedAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
+        if (resp.StatusCode is not (HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests))
+        {
+            return;
+        }
+
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (RateLimitBackoff.TryGetRetryTime(resp, body, DateTimeOffset.UtcNow) is { } until)
+        {
+            throw new RateLimitedException(until);
+        }
     }
 
     private async Task<GitHubRelease?> GetNewestBetaAsync(HttpClient client, CancellationToken ct)
     {
         var url = $"{_apiBase}/releases?per_page=100";
         using var resp = await client.GetAsync(url, ct);
+        await ThrowIfRateLimitedAsync(resp, ct);
         resp.EnsureSuccessStatusCode();
         var releases = await resp.Content.ReadFromJsonAsync(AppJsonContext.Default.ListGitHubRelease, ct);
         return SelectNewestBeta(releases, CurrentRuntimePlatform());
