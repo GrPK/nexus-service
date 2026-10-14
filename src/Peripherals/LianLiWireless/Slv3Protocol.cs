@@ -736,6 +736,41 @@ public static class Slv3Protocol
         return true;
     }
 
+    /// <summary>Most flipped bits a reported master may differ from ours by and still read as a corrupted copy of it.</summary>
+    public const int MaxMasterBitErrors = 2;
+
+    /// <summary>Fewest bytes a zero-damaged master must still share with ours.</summary>
+    public const int MinMasterBytesKept = 3;
+
+    /// <summary>
+    /// True when <paramref name="reported"/> is a damaged copy of <paramref name="ours"/>: not equal and not
+    /// zero, yet either within <see cref="MaxMasterBitErrors"/> flipped bits, or made only of our bytes and
+    /// zeros with at least <see cref="MinMasterBytesKept"/> of ours intact.
+    /// </summary>
+    public static bool IsCorruptedMasterCopy(ReadOnlySpan<byte> reported, ReadOnlySpan<byte> ours)
+    {
+        if (reported.Length < MacLength || ours.Length < MacLength || MacIsZero(reported) || MacEquals(reported, ours))
+        {
+            return false;
+        }
+        var bits = 0;
+        var kept = 0;
+        var zeroDamage = true;
+        for (var i = 0; i < MacLength; i++)
+        {
+            bits += System.Numerics.BitOperations.PopCount((uint)(reported[i] ^ ours[i]));
+            if (reported[i] == ours[i])
+            {
+                kept++;
+            }
+            else if (reported[i] != 0)
+            {
+                zeroDamage = false;
+            }
+        }
+        return bits <= MaxMasterBitErrors || (zeroDamage && kept >= MinMasterBytesKept);
+    }
+
     /// <summary>True when the MAC is all zeros (an unbound device reports a zero master MAC).</summary>
     public static bool MacIsZero(ReadOnlySpan<byte> mac)
     {
