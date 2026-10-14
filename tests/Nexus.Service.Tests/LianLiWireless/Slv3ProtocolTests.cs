@@ -9,6 +9,24 @@ public class Slv3ProtocolTests
     private static readonly byte[] FanMac = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 };
     private static readonly byte[] MasterMac = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
 
+    [Theory]
+    [InlineData("D8F088E566E4", "D8F088E566E4", false)]
+    [InlineData("D8F088E5E6E4", "D8F088E566E4", true)]
+    [InlineData("D8F088E566E5", "D8F088E566E4", true)]
+    [InlineData("D8F088E5E6E5", "D8F088E566E4", true)]
+    [InlineData("D8F088E5E6E7", "D8F088E566E4", false)]
+    [InlineData("D800000066E4", "D8F088E566E4", true)]
+    [InlineData("D8F000E566E4", "D8F088E566E4", true)]
+    [InlineData("000000000000", "D8F088E566E4", false)]
+    [InlineData("D800000000E4", "D8F088E566E4", false)]
+    [InlineData("000000000001", "D8F088E566E4", false)]
+    [InlineData("0102030405FF", "D8F088E566E4", false)]
+    [InlineData("D8F088E56000", "D8F088E566E4", false)]
+    public void A_corrupted_master_copy_is_a_few_flipped_bits_or_zeroed_bytes_of_ours(string reported, string ours, bool expected)
+    {
+        Assert.Equal(expected, Slv3Protocol.IsCorruptedMasterCopy(Convert.FromHexString(reported), Convert.FromHexString(ours)));
+    }
+
     // ── Constants ──
 
     [Fact]
