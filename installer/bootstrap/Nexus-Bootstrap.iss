@@ -118,12 +118,13 @@ begin
 end;
 
 // Interactive runs show the message and may start the offline installer
-// download. Silent runs (any /SILENT or /VERYSILENT) show nothing; the caller
+// download. Silent runs (any /SILENT or /VERYSILENT) only log it; the caller
 // still fails.
 procedure ShowAntivirusBlock();
 var
   ErrCode: Integer;
 begin
+  Log(AntivirusMessage());
   if WizardSilent then
     Exit;
   if MsgBox(AntivirusMessage() + #13#10#13#10 + 'Download the offline installer now?',
@@ -294,10 +295,8 @@ begin
        (((ResultCode = 2) or (ResultCode = 3)) and not FileExists(ExpandConstant('{tmp}\{#PayloadName}'))) then
     begin
       Log('Payload blocked, ShellExec error ' + IntToStr(ResultCode));
-      // A silent run raises (nothing can be shown); interactive ends after
-      // the prompt, like a declined UAC (still a failed exit).
-      if WizardSilent then
-        RaiseException(AntivirusMessage());
+      // Abort, not RaiseException: a raise pops a blocking error box even
+      // under /VERYSILENT. Both paths end as a failed run, like a declined UAC.
       ShowAntivirusBlock;
       Abort;
     end;
