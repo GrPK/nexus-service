@@ -91,21 +91,22 @@ public class RgbBridgeDeviceSetChangedTests : IDisposable
     }
 
     [Fact]
-    public async Task Fires_once_per_device_set_change_and_not_for_an_unchanged_refresh()
+    public async Task Fires_once_per_device_set_change_and_not_for_an_unchanged_periodic_refresh()
     {
         _hub.Ids = new[] { "hub:a" };
         _bridge.Activate();
         Assert.True(await _setChanged.WaitAsync(TimeSpan.FromSeconds(5)));
 
-        // Same set: the refresh runs (it fetches devices) but raises nothing. It
-        // holds the refresh lock from the fetch on, so it finishes before the
-        // next refresh can raise.
+        // Same set from a contributor change: the refresh runs and the lighting views are
+        // told once, because the change may touch only cards with no engine frame.
         while (_controller.GetDevicesCalled.CurrentCount > 0)
         {
             await _controller.GetDevicesCalled.WaitAsync();
         }
         _hub.Raise();
         Assert.True(await _controller.GetDevicesCalled.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await _setChanged.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(new[] { 1, 1 }, FramesAtEvent());
 
         _hub.Ids = new[] { "hub:a", "hub:b" };
         _hub.Raise();
@@ -113,7 +114,7 @@ public class RgbBridgeDeviceSetChangedTests : IDisposable
         {
             Assert.True(await _setChanged.WaitAsync(TimeSpan.FromSeconds(5)));
         }
-        Assert.Equal(new[] { 1, 2 }, FramesAtEvent());
+        Assert.Equal(new[] { 1, 1, 2 }, FramesAtEvent());
     }
 
     [Fact]

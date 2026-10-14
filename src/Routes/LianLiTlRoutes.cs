@@ -76,7 +76,7 @@ public static partial class DevicesRoutes
         });
 
         // PUT /devices/lianli-tl/lighting - patch the look; the writer commits it.
-        app.MapPut("/devices/lianli-tl/lighting", (LianLiTlLightingRequest body, IConfigStore store) =>
+        app.MapPut("/devices/lianli-tl/lighting", (LianLiTlLightingRequest body, IConfigStore store, Nexus.Service.Sockets.MultiplexHub hub) =>
         {
             if (body.Mode is not null && Nexus.Service.Lighting.TlLightingModes.Find(body.Mode).Key != body.Mode)
             {
@@ -124,6 +124,11 @@ public static partial class DevicesRoutes
                 if (body.Colors is not null) { ls.Colors = new List<string>(body.Colors); }
                 if (body.ArgbSync is { } argbSync) { ls.ArgbSync = argbSync; }
             });
+            // The Lighting page card's device page reason follows ArgbSync.
+            if (body.ArgbSync is not null)
+            {
+                Nexus.Service.Sockets.PanelTopics.BroadcastLighting(hub);
+            }
             return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
         });
     }

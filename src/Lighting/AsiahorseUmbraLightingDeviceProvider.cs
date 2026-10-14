@@ -11,7 +11,7 @@ using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Lighting;
 
-/// <summary>One resizable card per Umbra port with LEDs, published only while the lighting source is "nexus".</summary>
+/// <summary>One card per Umbra port with LEDs. The engine drives them only while the lighting source is "nexus"; otherwise they stay listed, marked as set on the device page.</summary>
 public sealed class AsiahorseUmbraLightingDeviceProvider :
     ILightingDeviceProvider, ILightingFrameContributor, IDeviceStructureSource
 {

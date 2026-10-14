@@ -103,8 +103,8 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
 
     /// <summary>
     /// The TL controller has no per-LED path, so while connected it gets one card that only points at its device page.
-    /// The protocol carries no LED count, so the count is the fan total (at least 1), which keeps the page from reading
-    /// the card as a failed detection.
+    /// The protocol carries no LED count, so the count is the fan total, floored to a positive value so the page does not
+    /// read the card as a failed detection.
     /// </summary>
     internal static LightingDevice? BuildTlCard(bool connected, Peripherals.LianLiTl.TlHubSnapshot snapshot, NexusSettings settings)
     {
@@ -120,6 +120,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
         }
         var ledCount = Math.Max(1, fans);
         settings.Lighting.DeviceLayouts.TryGetValue(id, out var layout);
+        settings.Devices.LightingDevicePrefs.TryGetValue(id, out var pref);
         return new LightingDevice
         {
             Id = id,
@@ -128,9 +129,10 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
             Name = Devices.Handlers.LianLiTlHandler.DisplayName,
             Type = "ledstrip",
             IconType = "fan",
-            LedsOn = true,
-            Brightness = 100,
-            Saturation = 1f,
+            LedsOn = !settings.Devices.DisabledLightingDevices.Contains(id),
+            Brightness = pref?.Brightness ?? 100,
+            Hue = pref?.Hue ?? 0f,
+            Saturation = pref?.Saturation ?? 1f,
             LedCount = ledCount,
             EnabledLedCount = ledCount,
             CanvasX = layout?.X ?? 0f,

@@ -135,7 +135,7 @@ internal sealed class SystemProfileService : BackgroundService
         // would churn the dedupe signature into an extra $identify each time.
         // Null omits the property instead.
         int? lightingCount = null;
-        try { lightingCount = _lighting.GetAll().Devices.Count; }
+        try { lightingCount = _lighting.GetAll().Devices.Count(d => d.DevicePageReason is null); }
         catch (Exception ex) { Console.Error.WriteLine($"[profile] lighting count: {ex.GetType().Name}: {ex.Message}"); }
         int? fanCount = null;
         try { fanCount = _fans.GetFanChannels().Count; }

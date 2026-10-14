@@ -30,6 +30,14 @@ public sealed class TlFanHub : IDisposable
 
     public bool IsConnected => _isConnected;
 
+    /// <summary>Raised when the hub connects or detaches, so a view listing its fan topology can refetch. Runs under the hub lock; subscribers must not block.</summary>
+    public event Action? TopologyChanged;
+
+    private void RaiseTopologyChanged()
+    {
+        try { TopologyChanged?.Invoke(); } catch { /* swallow subscriber failures */ }
+    }
+
     /// <summary>Bumped on every successful discovery; a change means the controller lost its committed state.</summary>
     public int ConnectGeneration => Volatile.Read(ref _connectGeneration);
 
@@ -109,6 +117,7 @@ public sealed class TlFanHub : IDisposable
 
             Interlocked.Increment(ref _connectGeneration);
             _isConnected = true;
+            RaiseTopologyChanged();
             return true;
         }
     }
@@ -304,6 +313,7 @@ public sealed class TlFanHub : IDisposable
             _snapshot = TlHubSnapshot.Empty;
             _device?.Dispose();
             _device = null;
+            RaiseTopologyChanged();
         }
     }
 

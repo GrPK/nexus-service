@@ -71,6 +71,19 @@ public class TlLightingCardTests
     }
 
     [Fact]
+    public void Saved_power_and_prefs_show_on_the_card()
+    {
+        var settings = new NexusSettings();
+        settings.Devices.DisabledLightingDevices.Add("lianli-tl");
+        settings.Devices.LightingDevicePrefs["lianli-tl"] = new LightingDevicePreference { Brightness = 40 };
+
+        var card = CompositeLightingDeviceProvider.BuildTlCard(true, Fans(1), settings)!;
+
+        Assert.False(card.LedsOn);
+        Assert.Equal(40, card.Brightness);
+    }
+
+    [Fact]
     public void Disconnected_hub_has_no_card()
     {
         Assert.Null(CompositeLightingDeviceProvider.BuildTlCard(false, Fans(2), new NexusSettings()));

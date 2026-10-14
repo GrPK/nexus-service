@@ -132,16 +132,12 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
         foreach (var fan in _hub.State.Fans)
         {
             if (!fan.BoundToUs) continue;
-            if (PlaysMotherboardArgb(fan, chains))
-            {
-                sb.Append('|').Append(fan.Mac).Append(":argb");
-                continue;
-            }
+            var argb = PlaysMotherboardArgb(fan, chains) ? ":argb" : "";
             // FanType is part of the signature because the family sets the LED
             // count: a chain first seen with a starved beacon (fans_type all 0,
             // Unknown family) rebuilds once the real subtype arrives. DevType
             // tells a Strimer (and its lane geometry) from a fan chain.
-            sb.Append('|').Append(fan.Mac).Append(':').Append(fan.FanCount).Append(':').Append(fan.FanType).Append(':').Append(fan.DevType);
+            sb.Append('|').Append(fan.Mac).Append(argb).Append(':').Append(fan.FanCount).Append(':').Append(fan.FanType).Append(':').Append(fan.DevType);
         }
         return sb.ToString();
     }
