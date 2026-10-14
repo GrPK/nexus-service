@@ -206,7 +206,7 @@ public sealed class RgbBridge : IDisposable
     // Written by RefreshDevicesAsync (serialized by _refreshSemaphore); Deactivate resets it.
     private string _frameIdSignature = "";
 
-    /// <summary>Raised under the refresh lock when the engine's frame set changes (a device or zone appears, goes away, or gains its LEDs); handlers must not block.</summary>
+    /// <summary>Raised when the engine's frame set changes (a device or zone appears, goes away, or gains its LEDs), under the refresh lock, and after a contributor change even when the frame set did not change, outside the lock; handlers must not block.</summary>
     public event Action? DeviceSetChanged;
 
     private readonly IReadOnlyList<ILightingFrameContributor> _frameContributors;

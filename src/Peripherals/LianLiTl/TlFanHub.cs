@@ -309,11 +309,16 @@ public sealed class TlFanHub : IDisposable
     {
         lock (_lock)
         {
+            var wasConnected = _isConnected;
             _isConnected = false;
             _snapshot = TlHubSnapshot.Empty;
             _device?.Dispose();
             _device = null;
-            RaiseTopologyChanged();
+            // The worker detaches after every attach, so a failed handshake must not announce a change.
+            if (wasConnected)
+            {
+                RaiseTopologyChanged();
+            }
         }
     }
 

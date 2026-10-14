@@ -91,7 +91,7 @@ public class RgbBridgeDeviceSetChangedTests : IDisposable
     }
 
     [Fact]
-    public async Task Fires_once_per_device_set_change_and_not_for_an_unchanged_periodic_refresh()
+    public async Task Fires_per_device_set_change_and_once_per_contributor_change_with_the_same_set()
     {
         _hub.Ids = new[] { "hub:a" };
         _bridge.Activate();
