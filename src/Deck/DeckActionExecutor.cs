@@ -150,7 +150,7 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
             case "launchApp":
                 if (!string.IsNullOrEmpty(action.AppId))
                 {
-                    _system.LaunchShortcut(action.AppId);
+                    await LaunchAppAsync(action.AppId).ConfigureAwait(false);
                 }
                 return DispatchOutcome.Ok;
             case "openFile":
@@ -233,6 +233,34 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
                 // "pageIndicator" is display-only - both fall through to
                 // Unknown here rather than getting a dedicated case.
                 return DispatchOutcome.Unknown;
+        }
+    }
+
+    /// <summary>
+    /// A Start-Menu id launches through the shortcuts provider. Anything it does
+    /// not know (a typed file path, or a URI such as steam://rungameid/730) is
+    /// opened like an openFile / openUrl action, so a saved layout can point a
+    /// launchApp key at it. The path is the one saved in the layout, never one
+    /// supplied by a panel request: /shortcuts/launch still resolves list ids only.
+    /// </summary>
+    private async Task LaunchAppAsync(string appId)
+    {
+        if (_system.LaunchShortcut(appId))
+        {
+            return;
+        }
+        var target = Nexus.Service.Activity.ShortcutTargets.Normalize(appId);
+        var isUri = Nexus.Service.Activity.ShortcutTargets.IsLaunchUri(target);
+        if (!isUri && !Path.IsPathFullyQualified(target))
+        {
+            return;
+        }
+        var response = isUri
+            ? await _system.LaunchUrlAsync(target).ConfigureAwait(false)
+            : await _system.OpenPathAsync(target).ConfigureAwait(false);
+        if (response.Error)
+        {
+            ServiceLog.Warn($"[streamdeck] launchApp could not open target: {response.Msg}");
         }
     }
 
