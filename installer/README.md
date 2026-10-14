@@ -94,7 +94,10 @@ They carry no payload. On Install they fetch the site's
 downloaded `Nexus-Setup.exe` (its own UAC prompt, its own wizard). A silent
 stub run (`Nexus-Installer.exe /VERYSILENT`) passes `/VERYSILENT` through and
 exits non-zero on failure: 1 if the download or the hash check fails, 3 if
-the payload fails, is cancelled, or the UAC prompt is declined. When the payload is missing or unrunnable after the download (antivirus quarantine, a false positive), the stub says so and points to the offline installer, a single file the user can allow in their antivirus. The payload is downloaded without Mark-of-the-Web, the same as the
+the payload fails, is cancelled, or the UAC prompt is declined. When the
+payload is blocked or removed around the download (antivirus quarantine, a
+false positive), the stub says so and offers the offline installer, a single
+file the user can allow in their antivirus. The payload is downloaded without Mark-of-the-Web, the same as the
 in-app OTA, so it is not subject to a per-release SmartScreen check - which is
 the point: SmartScreen reputation is keyed on the downloaded file's hash, and
 a release every day or two never lets `Nexus-Setup.exe` accrue any. The web

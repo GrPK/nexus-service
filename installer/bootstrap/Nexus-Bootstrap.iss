@@ -109,12 +109,34 @@ end;
 function AntivirusMessage(): String;
 begin
   Result := 'Security software on this PC likely blocked or removed {#PayloadName} while Nexus was installing. '
-    + 'This is a false positive: Nexus is digitally signed and safe.'#13#10#13#10
+    + 'This is almost always a false positive: Nexus is digitally signed and safe.'#13#10#13#10
     + 'To finish installing:'#13#10
     + '  1. Download the offline installer from {#PayloadUrl}'#13#10
     + '  2. In your antivirus, allow or restore that file.'#13#10
     + '  3. Run it.'#13#10#13#10
     + 'Restoring the file this window downloaded will not help, because each run downloads a new copy.';
+end;
+
+// Shows the message; interactive runs may open the offline download page.
+// Silent runs get no dialog (IDNO) and the caller still fails.
+procedure ShowAntivirusBlock();
+var
+  ErrCode: Integer;
+begin
+  if SuppressibleMsgBox(AntivirusMessage() + #13#10#13#10 + 'Open the download page now?',
+    mbError, MB_YESNO, IDNO) = IDYES then
+    ShellExec('open', '{#PayloadUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
+end;
+
+// True when a payload download error reads like a scanner interfering with
+// the temp file (open or rename refused), not a network or hash failure.
+function LooksLikeFileBlock(const Msg: String): Boolean;
+var
+  M: String;
+begin
+  M := Lowercase(Msg);
+  Result := (Pos('movefile', M) > 0) or (Pos('could not open', M) > 0) or
+            (Pos('access is denied', M) > 0) or (Pos('virus', M) > 0);
 end;
 
 procedure InitializeWizard();
@@ -163,8 +185,11 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Hash: String;
+  InPayload, Downloaded: Boolean;
 begin
   Result := True;
+  InPayload := False;
+  Downloaded := False;
   if CurPageID <> wpReady then
     Exit;
   DownloadPage.Clear;
@@ -178,13 +203,20 @@ begin
         RaiseException('The release checksum list has no entry for {#PayloadName}.');
       DownloadPage.Clear;
       DownloadPage.Add('{#PayloadUrl}', '{#PayloadName}', Hash);
+      InPayload := True;
       DownloadPage.Download;
+      Downloaded := True;
       // Real-time scanners can remove the file the moment it lands.
       if not FileExists(ExpandConstant('{tmp}\{#PayloadName}')) then
-        RaiseException(AntivirusMessage());
+        RaiseException('{#PayloadName} is missing after download.');
     except
       if DownloadPage.AbortedByUser then
         Log('Download aborted by user.')
+      else if InPayload and (Downloaded or LooksLikeFileBlock(GetExceptionMessage)) then
+      begin
+        Log('Payload blocked during or after download: ' + GetExceptionMessage);
+        ShowAntivirusBlock;
+      end
       else
         SuppressibleMsgBox(AddPeriod(GetExceptionMessage), mbCriticalError, MB_OK, IDOK);
       Result := False;
@@ -239,7 +271,15 @@ begin
     // file or path gone: all mean the scanner took the payload.
     if (ResultCode = 5) or (ResultCode = 225) or (ResultCode = 226) or
        (((ResultCode = 2) or (ResultCode = 3)) and not FileExists(ExpandConstant('{tmp}\{#PayloadName}'))) then
-      RaiseException(AntivirusMessage());
+    begin
+      Log('Payload blocked, ShellExec error ' + IntToStr(ResultCode));
+      // A silent run raises (nothing can be shown); interactive ends after
+      // the prompt, like a declined UAC (still a failed exit).
+      if WizardSilent then
+        RaiseException(AntivirusMessage());
+      ShowAntivirusBlock;
+      Abort;
+    end;
     RaiseException(Format('Could not start {#PayloadName} (error %d).', [ResultCode]));
   end;
   Log(Format('{#PayloadName} exited with code %d', [ResultCode]));
