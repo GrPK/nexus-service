@@ -12,11 +12,22 @@ internal static class Nexus2FanCurveApplier
     private const string KeptSuffix = "-kept";
 
     /// <summary>The curve list after importing; pure, so the lint pass and the real write build the same config.</summary>
-    public static List<CurveDocument> Compose(IReadOnlyList<CurveDocument> current, IReadOnlyList<CurveDocument> imported)
+    public static List<CurveDocument> Compose(
+        IReadOnlyList<CurveDocument> current,
+        IReadOnlyList<CurveDocument> imported,
+        string prefix = Nexus2FanCurvePlanner.ImportedIdPrefix,
+        IReadOnlySet<string>? extraClaimed = null)
     {
         var claimed = imported.SelectMany(c => c.Outputs.Select(o => o.Id)).ToHashSet(StringComparer.Ordinal);
+        if (extraClaimed is not null)
+        {
+            claimed.UnionWith(extraClaimed);
+        }
         // A Mixed curve reads its members by id, so a referenced import keeps its id and document.
-        var referenced = current.Where(c => c?.Mixed is not null).SelectMany(c => c.Mixed!.CurveIds).ToHashSet(StringComparer.Ordinal);
+        // An earlier import's own Mixed curve counts only while it survives on leftover channels; one this import replaces would otherwise pin its members and make the new copies collide with them.
+        var referenced = current
+            .Where(c => c?.Mixed is not null && (!IsImported(c, prefix) || c.Outputs.Any(o => !claimed.Contains(o.Id))))
+            .SelectMany(c => c.Mixed!.CurveIds).ToHashSet(StringComparer.Ordinal);
         var result = new List<CurveDocument>();
         var kept = new List<CurveDocument>();
 
@@ -24,7 +35,7 @@ internal static class Nexus2FanCurveApplier
         var taken = new HashSet<string>(StringComparer.Ordinal);
         foreach (var curve in current)
         {
-            if (curve is not null && (!IsImported(curve) || referenced.Contains(curve.Id)))
+            if (curve is not null && (!IsImported(curve, prefix) || referenced.Contains(curve.Id)))
             {
                 taken.Add(curve.Id);
             }
@@ -33,7 +44,7 @@ internal static class Nexus2FanCurveApplier
         // An existing kept copy that still has leftovers keeps its own id.
         foreach (var curve in current)
         {
-            if (curve is not null && IsImported(curve) && !referenced.Contains(curve.Id) && curve.Id.EndsWith(KeptSuffix, StringComparison.Ordinal)
+            if (curve is not null && IsImported(curve, prefix) && !referenced.Contains(curve.Id) && curve.Id.EndsWith(KeptSuffix, StringComparison.Ordinal)
                 && curve.Outputs.Any(o => !claimed.Contains(o.Id)))
             {
                 taken.Add(curve.Id);
@@ -46,7 +57,7 @@ internal static class Nexus2FanCurveApplier
             {
                 continue;
             }
-            if (!IsImported(curve) || referenced.Contains(curve.Id))
+            if (!IsImported(curve, prefix) || referenced.Contains(curve.Id))
             {
                 result.Add(RemoveOutputs(curve, claimed));
                 continue;
@@ -66,12 +77,27 @@ internal static class Nexus2FanCurveApplier
         }
 
         result.AddRange(kept);
+        var renamed = new Dictionary<string, string>(StringComparer.Ordinal);
+        var added = new List<CurveDocument>();
         foreach (var curve in imported)
         {
             var copy = CoolingConfigLint.CloneCurve(curve);
             copy.Id = Allocate(copy.Id, taken);
-            result.Add(copy);
+            if (copy.Id != curve.Id)
+            {
+                renamed[curve.Id] = copy.Id;
+            }
+            added.Add(copy);
         }
+        // An imported Mixed curve must keep reading its own members after an id moved.
+        if (renamed.Count > 0)
+        {
+            foreach (var copy in added.Where(c => c.Mixed is not null))
+            {
+                copy.Mixed!.CurveIds = copy.Mixed.CurveIds.Select(id => renamed.TryGetValue(id, out var to) ? to : id).ToList();
+            }
+        }
+        result.AddRange(added);
         return result;
     }
 
@@ -85,8 +111,8 @@ internal static class Nexus2FanCurveApplier
         return id;
     }
 
-    private static bool IsImported(CurveDocument curve) =>
-        curve.Id.StartsWith(Nexus2FanCurvePlanner.ImportedIdPrefix, StringComparison.Ordinal);
+    private static bool IsImported(CurveDocument curve, string prefix) =>
+        curve.Id.StartsWith(prefix, StringComparison.Ordinal);
 
     private static CurveDocument RemoveOutputs(CurveDocument curve, HashSet<string> claimed)
     {
