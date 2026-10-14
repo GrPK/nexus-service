@@ -221,15 +221,17 @@ public sealed class Nexus2MigrationService
                 }
                 if (plan.RecommendedApplies && plan.RecommendedPreset is { } preset)
                 {
-                    // Settings are re-read right before the write; FanProfiles.Apply is the UI preset tab's path and takes its own store updates.
-                    if (CoolingFingerprint(_store.Load()) != fingerprint)
+                    // The untouched check re-runs inside the store update, so no change can land between it and the write.
+                    // Q-series and NP50 channels stay exactly as they were: hub writes are unverified on hardware.
+                    var applied = Cooling.FanProfiles.TryApplyGuarded(
+                        preset,
+                        fans,
+                        _store,
+                        s => s.Features.Cooling && Nexus2RecommendedPreset.IsUntouched(s.Cooling, preset),
+                        c => c.Id.StartsWith("qseries:", StringComparison.Ordinal) || c.Id.StartsWith("np50:", StringComparison.Ordinal));
+                    if (applied is null)
                     {
-                        continue;
-                    }
-                    var applied = Cooling.FanProfiles.Apply(preset, fans, _store);
-                    if (applied != preset)
-                    {
-                        return Fail(id, "preset-not-applied");
+                        return Skip(id, Nexus2FanCurveReasons.NoteCoolingCustomized);
                     }
                     lock (_fanCurveCheckLock)
                     {

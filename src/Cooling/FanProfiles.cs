@@ -122,30 +122,52 @@ public static class FanProfiles
     /// "auto" is treated as a synonym for "off" for backward compatibility.
     /// </summary>
     public static string Apply(string profileName, IFanControlProvider fans, IConfigStore store, bool forceCustomRestore = false)
+        => ApplyCore(profileName, fans, store, forceCustomRestore, null, null)!;
+
+    /// <summary>
+    /// Apply for callers that must not race a settings change: <paramref name="guard"/> runs inside the store
+    /// update, and a false result aborts before anything is written (returns null). Channels matching
+    /// <paramref name="leaveAlone"/> are neither claimed nor detached, exactly like a pinned channel.
+    /// </summary>
+    public static string? TryApplyGuarded(string profileName, IFanControlProvider fans, IConfigStore store, Func<NexusSettings, bool> guard, Func<FanChannel, bool> leaveAlone)
+        => ApplyCore(profileName, fans, store, false, guard, leaveAlone);
+
+    private static string? ApplyCore(string profileName, IFanControlProvider fans, IConfigStore store, bool forceCustomRestore, Func<NexusSettings, bool>? guard, Func<FanChannel, bool>? leaveAlone)
     {
         var canonical = Canonicalize(profileName);
-        // A channel the user marked not controlled is not this preset's to
-        // retarget - that marker outliving a preset apply is the whole point of
-        // it, and is what BIOS Control (a bare absence of assignment) cannot do.
-        // Dropping it here keeps it out of fanIds too, so Off neither detaches
-        // nor re-releases a channel already handed back.
-        var uncontrolledIds = store.Load().Cooling.UncontrolledFanChannels;
-        var channels = uncontrolledIds.Count == 0
-            ? fans.GetFanChannels()
-            : fans.GetFanChannels().Where(c => !uncontrolledIds.Contains(c.Id)).ToList();
+        var allChannels = fans.GetFanChannels();
         var temps = fans.GetTemperatureSources();
         var inputSensor = PreferredInput(temps);
-        var fanIds = channels.Select(c => c.Id).ToHashSet();
-        // Pinned channels (pumps by default, or any channel the user pinned) are
-        // excluded from the Silent/Balanced/Turbo/Max and Custom presets, which must
-        // not retarget what drives them. Off still releases every channel to
-        // BIOS, pinned or not.
-        var pinOverrides = store.Load().Cooling.FanPinOverrides;
-        var pinnedIds = channels.Where(c => IsPinned(c, pinOverrides)).Select(c => c.Id).ToHashSet();
+
+        // Settings-dependent sets are read inside the update below, so they match what is written.
+        HashSet<string> uncontrolledIds = new();
+        IReadOnlyList<FanChannel> channels = allChannels;
+        HashSet<string> fanIds = new();
+        HashSet<string> pinnedIds = new();
+        var aborted = false;
 
         List<(string FanId, int Duty)>? restoredManual = null;
         store.Update(s =>
         {
+            if (guard is not null && !guard(s))
+            {
+                aborted = true;
+                return;
+            }
+            // A channel the user marked not controlled is not this preset's to
+            // retarget - that marker outliving a preset apply is the whole point of
+            // it, and is what BIOS Control (a bare absence of assignment) cannot do.
+            // Dropping it here keeps it out of fanIds too, so Off neither detaches
+            // nor re-releases a channel already handed back.
+            uncontrolledIds = s.Cooling.UncontrolledFanChannels.ToHashSet();
+            var left = leaveAlone is null ? new List<FanChannel>() : allChannels.Where(leaveAlone).ToList();
+            channels = allChannels.Where(c => !uncontrolledIds.Contains(c.Id) && !left.Contains(c)).ToList();
+            fanIds = channels.Select(c => c.Id).ToHashSet();
+            // Pinned channels (pumps by default, or any channel the user pinned) are
+            // excluded from the Silent/Balanced/Turbo/Max and Custom presets, which must
+            // not retarget what drives them. Off still releases every channel to
+            // BIOS, pinned or not.
+            pinnedIds = channels.Where(c => IsPinned(c, s.Cooling.FanPinOverrides)).Select(c => c.Id).Concat(left.Select(c => c.Id)).ToHashSet();
             s.Cooling.ClearHeal($"profile-apply:{canonical}");
             // Snapshot the user's custom mapping on the way out of "custom":
             // curve assignments and manual duties both, so Custom restores the
@@ -284,6 +306,10 @@ public static class FanProfiles
                     }
             }
         });
+        if (aborted)
+        {
+            return null;
+        }
 
         // Off: also actively release fans at the hardware layer so any prior
         // manual override stops holding the duty.

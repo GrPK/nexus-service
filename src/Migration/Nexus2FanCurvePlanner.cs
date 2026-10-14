@@ -175,8 +175,11 @@ internal static class Nexus2FanCurvePlanner
             return plan;
         }
 
-        if (Nexus2Json.GetObject(cooling, "easyMode") is { } easy && Nexus2Json.GetBool(easy, "enabled", false))
+        // Nexus 2 builds its easy-mode curves from the first CPU and first GPU temperature; without both it runs the stored curves instead.
+        var easyRuns = env.Sources.Any(t => t.Category == "CPU") && env.Sources.Any(t => t.Category == "GPU");
+        if (easyRuns && Nexus2Json.GetObject(cooling, "easyMode") is { } easy && Nexus2Json.GetBool(easy, "enabled", false))
         {
+            // Nexus 2's easy-mode global modifier has no Nexus 3 preset equivalent and is not carried.
             plan.Note = Nexus2FanCurveReasons.NoteRecommendedMode;
             var selected = Nexus2Json.GetString(easy, "selected");
             if (Nexus2RecommendedPreset.Map(selected) is { } preset)

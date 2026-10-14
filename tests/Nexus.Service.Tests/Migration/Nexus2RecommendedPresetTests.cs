@@ -84,6 +84,8 @@ public sealed class Nexus2RecommendedPresetTests
         Assert.Equal("off", store.Load().Cooling.ActivePreset);
     }
 
+    private static void Seed(CoolingSettings c) => FanProfiles.SeedDefaultPresetCurves(new RecordingFans(Hw.Y70()), new SingleStore(c));
+
     private static void Customize(string how, CoolingSettings c)
     {
         switch (how)
@@ -102,8 +104,25 @@ public sealed class Nexus2RecommendedPresetTests
             case "customMode": c.ActivePreset = "custom"; break;
             case "modifier": c.GlobalSpeedModifier = 0.8; break;
             case "customAssignment": c.CustomFanCurveAssignments["x"] = "y"; break;
+            case "healedChannels": c.HealedChannels.Add(new HealedChannelRecord { Id = "x", Name = "X" }); break;
+            case "healSnapshot": c.HealSnapshot = new List<CurveDocument>(); break;
+            case "fanLockOverrides": c.FanLockOverrides = new Dictionary<string, bool> { ["x"] = true }; break;
+            case "duplicatePresetCurve":
+                Seed(c);
+                c.Curves.Add(CoolingConfigLint.CloneCurve(c.Curves.First(k => k.Preset == "silent")));
+                c.Curves[^1].Id = "dup";
+                break;
+            case "outputsWhileOff":
+                Seed(c);
+                c.Curves.First(k => k.Preset == "silent").Outputs.Add(new CurveOutputDocument { Id = "x", Type = "Fan" });
+                break;
+            case "outputsOnInactivePresetCurve":
+                Seed(c);
+                c.ActivePreset = "silent";
+                c.Curves.First(k => k.Preset == "balanced").Outputs.Add(new CurveOutputDocument { Id = "x", Type = "Fan" });
+                break;
             case "editedPresetCurve":
-                FanProfiles.SeedDefaultPresetCurves(new RecordingFans(Hw.Y70()), new SingleStore(c));
+                Seed(c);
                 c.Curves.First(k => k.Preset == "silent").Graph!.Points[0].Speed += 7;
                 break;
             default: throw new ArgumentException(how);
@@ -124,6 +143,12 @@ public sealed class Nexus2RecommendedPresetTests
     [InlineData("modifier")]
     [InlineData("customAssignment")]
     [InlineData("editedPresetCurve")]
+    [InlineData("healedChannels")]
+    [InlineData("healSnapshot")]
+    [InlineData("fanLockOverrides")]
+    [InlineData("duplicatePresetCurve")]
+    [InlineData("outputsWhileOff")]
+    [InlineData("outputsOnInactivePresetCurve")]
     public void Customized_nexus3_cooling_skips_and_changes_nothing(string how)
     {
         var (service, store, _) = Setup("silent", (s, _) => s.Update(x => Customize(how, x.Cooling)));
@@ -183,15 +208,64 @@ public sealed class Nexus2RecommendedPresetTests
     [Fact]
     public void Activation_runs_the_ui_preset_path_so_it_matches_a_direct_profile_apply()
     {
-        var (service, store, hw) = Setup("performance", (_, h) => h.AddQSeries());
+        var (service, store, hw) = Setup("performance");
         service.ApplyFanCurves(Root(Text("performance")));
 
-        var (_, direct, _) = Setup("performance", (_, h) => h.AddQSeries());
+        var (_, direct, _) = Setup("performance");
         FanProfiles.Apply("turbo", new RecordingFans(hw), direct);
 
         string Shape(InMemoryConfigStore s) => string.Join("|", s.Load().Cooling.Curves.OrderBy(c => c.Id).Select(c => $"{c.Preset}:{string.Join(",", c.Outputs.Select(o => o.Id).OrderBy(x => x))}"))
             + "|" + s.Load().Cooling.ActivePreset;
         Assert.Equal(Shape(direct), Shape(store));
+    }
+
+    [Fact]
+    public void Cooler_hub_channels_are_left_exactly_as_they_were()
+    {
+        var (service, store, hw) = Setup("silent", (_, h) => h.AddQSeries().AddNp50());
+        var hubs = hw.Channels.Where(c => c.Id.StartsWith("qseries:", StringComparison.Ordinal) || c.Id.StartsWith("np50:", StringComparison.Ordinal)).Select(c => c.Id).ToList();
+        Assert.Contains($"np50:{Hw.Np50}:legacy", hubs);
+
+        var result = service.ApplyFanCurves(Root(Text("silent")));
+
+        Assert.Equal("applied", result.Status);
+        var owned = store.Load().Cooling.Curves.SelectMany(c => c.Outputs).Select(o => o.Id).ToHashSet();
+        Assert.All(hubs, h => Assert.DoesNotContain(h, owned));
+        Assert.Contains($"smarthub:{Hw.SmartHub}:fan0", owned);
+        Assert.Empty(store.Load().Cooling.ManualSpeeds);
+    }
+
+    [Fact]
+    public void A_change_landing_between_the_plan_and_the_write_aborts_the_activation()
+    {
+        InMemoryConfigStore? late = null;
+        // First source read is the plan's; the hook arms a second one that fires inside FanProfiles.Apply, after the plan.
+        var (service, store, _) = FanCurveServices.Service(Fixture, configText: Text("silent"),
+            configureFans: f => f.OnFirstSourceRead = () => f.OnFirstSourceRead = () => late!.Update(s => s.Cooling.FanOffsets["x"] = 5));
+        late = store;
+
+        var result = service.ApplyFanCurves(Root(Text("silent")));
+
+        Assert.Equal(("skipped", "nexus3CoolingCustomized"), (result.Status, result.Detail));
+        Assert.Equal("off", store.Load().Cooling.ActivePreset);
+        Assert.Equal(5, store.Load().Cooling.FanOffsets["x"]);
+        Assert.DoesNotContain(store.Load().Cooling.Curves, c => c.Outputs.Count > 0);
+    }
+
+    [Theory]
+    [InlineData("CPU")]
+    [InlineData("GPU")]
+    public void Without_a_cpu_or_gpu_temperature_the_stored_curves_import_as_easy_mode_is_off(string missing)
+    {
+        var (service, store, _) = Setup("silent", (_, h) => h.Sources.RemoveAll(t => t.Category == missing));
+        var cat = service.BuildFanCurvesCategory(Root(Text("silent")));
+        Assert.NotEqual("recommendedMode", cat.FanCurvesNote);
+        Assert.Null(cat.RecommendedPreset);
+
+        var result = service.ApplyFanCurves(Root(Text("silent")));
+        Assert.NotEqual("recommendedMode", result.Detail);
+        Assert.Null(result.Preset);
+        Assert.Equal("off", store.Load().Cooling.ActivePreset);
     }
 
     [Fact]
