@@ -580,4 +580,25 @@ public class FanControlImportEndToEndTests
 
         Assert.Equal("custom", store.Load().Cooling.ActivePreset);
     }
+
+    [Fact]
+    public void Apply_OnUnresponsiveFans_LabelsCustomAndSurvivesABootReapply()
+    {
+        var (import, fans, store) = Build();
+        foreach (var c in fans.Channels.Where(c => c.Id != Other))
+        {
+            c.Classification = "Unresponsive";
+        }
+        FanProfiles.Apply("silent", fans, store);
+
+        import.Apply(null, AllCategories);
+
+        Assert.Equal("custom", store.Load().Cooling.ActivePreset);
+        // Boot re-applies the stored built-in label; custom must leave the bindings alone.
+        FanProfiles.Apply(store.Load().Cooling.ActivePreset, fans, store);
+        var cooling = store.Load().Cooling;
+        Assert.Equal("fc-cpu-graph", Effective(cooling, Fan0).Curve);
+        Assert.Equal("fc-case-trigger", Effective(cooling, Fan1).Curve);
+        Assert.StartsWith("fc-", Effective(cooling, "/lpc/nct6797d/0/control/3").Curve);
+    }
 }
