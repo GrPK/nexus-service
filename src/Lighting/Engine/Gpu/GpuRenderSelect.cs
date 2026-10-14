@@ -138,7 +138,7 @@ internal static class GpuRenderSelect
 
     // The kernel's boot counter; a tick-derived boot minute when it cannot be
     // read, which two reboots inside a minute would tell apart wrong.
-    private static string BootStamp()
+    internal static string BootStamp()
     {
         try
         {
