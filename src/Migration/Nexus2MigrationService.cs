@@ -137,6 +137,7 @@ public sealed class Nexus2MigrationService
             ManualDriven = Cooling.CoolingSnapshots.ManualSpeeds(settings.Cooling).Keys.ToHashSet(StringComparer.Ordinal),
             HealedChannelIds = settings.Cooling.HealedChannels.Select(h => h.Id).ToHashSet(StringComparer.Ordinal),
             Uncontrolled = Cooling.CoolingSnapshots.Uncontrolled(settings.Cooling),
+            PinOverrides = new Dictionary<string, bool>(settings.Cooling.FanPinOverrides, StringComparer.Ordinal),
             FanNames = Cooling.CoolingSnapshots.FanNames(settings.Cooling),
             CpuModel = sensors?.GetCpuModelCached() ?? "",
             BoardModel = sensors?.GetMotherboardModel() ?? "",

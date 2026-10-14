@@ -597,6 +597,16 @@ public class Nexus2FanCurvePlannerTests
     }
 
     [Fact]
+    public void A_channel_the_user_pinned_is_not_claimed()
+    {
+        var hw = Hw.Y70();
+        hw.PinOverrides[$"smarthub:{Hw.SmartHub}:fan0"] = true;
+        var curve = Only(Plan(hw, N2.Graph("G", SafePoints, new[] { N2.Pwm(1) })));
+        Assert.Equal("uncontrolledChannel", Assert.Single(curve.Targets).Reason);
+        Assert.Equal("noTargets", curve.Reason);
+    }
+
+    [Fact]
     public void A_flat_curve_skips_a_gpu_fan_but_keeps_its_other_targets()
     {
         var curve = Only(Plan(Hw.Y70(), N2.Flat("F", 60, new[] { N2.Gpu(1), N2.Pwm(1) })));

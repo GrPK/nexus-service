@@ -23,6 +23,7 @@ internal sealed class Hw
     public List<FanChannel> Channels { get; } = new();
     public List<TemperatureSource> Sources { get; } = new();
     public HashSet<string> Uncontrolled { get; } = new();
+    public Dictionary<string, bool> PinOverrides { get; } = new();
     public List<CurveDocument> Curves { get; } = new();
     public string CpuModel { get; set; } = Cpu;
     public string BoardModel { get; set; } = Board;
@@ -95,6 +96,7 @@ internal sealed class Hw
         Channels = Channels,
         Sources = Sources,
         Uncontrolled = Uncontrolled,
+        PinOverrides = PinOverrides,
         CpuModel = CpuModel,
         BoardModel = BoardModel,
         GpuModels = GpuModels,

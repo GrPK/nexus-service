@@ -62,6 +62,7 @@ internal sealed class Nexus2FanCurveEnvironment
     public IReadOnlyList<FanChannel> Channels { get; init; } = Array.Empty<FanChannel>();
     public IReadOnlyList<TemperatureSource> Sources { get; init; } = Array.Empty<TemperatureSource>();
     public IReadOnlySet<string> Uncontrolled { get; init; } = new HashSet<string>();
+    public IReadOnlyDictionary<string, bool> PinOverrides { get; init; } = new Dictionary<string, bool>();
     public IReadOnlyDictionary<string, string> FanNames { get; init; } = new Dictionary<string, string>();
     public string CpuModel { get; init; } = "";
     public string BoardModel { get; init; } = "";
@@ -772,6 +773,11 @@ internal static class Nexus2FanCurvePlanner
         }
         else if (env.Uncontrolled.Contains(channel.Id))
         {
+            target.Reason = Nexus2FanCurveReasons.UncontrolledChannel;
+        }
+        else if (env.PinOverrides.TryGetValue(channel.Id, out var pinned) && pinned)
+        {
+            // Only the user's own pin counts: GPU fans are pinned by default yet are valid targets here.
             target.Reason = Nexus2FanCurveReasons.UncontrolledChannel;
         }
         else if (channel.ReadOnly)

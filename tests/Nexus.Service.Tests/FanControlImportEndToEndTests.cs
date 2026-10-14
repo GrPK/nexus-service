@@ -167,6 +167,24 @@ public class FanControlImportEndToEndTests
     }
 
     [Fact]
+    public void Apply_DrivesAManualFanTheEngineAlreadyReplayedAtAnotherDuty()
+    {
+        var (import, fans, store) = Build();
+        store.Update(s =>
+        {
+            s.Cooling.ManualSpeeds[Fan2] = 40;
+            s.Cooling.CustomManualSpeeds[Fan2] = 40;
+        });
+        var engine = new CurveEngine(fans, store, new MultiplexHub());
+        engine.Tick();
+        Assert.Equal(40, fans.Duty[Fan2]);
+
+        import.Apply(null, AllCategories);
+
+        Assert.Equal(65, fans.Duty[Fan2]);
+    }
+
+    [Fact]
     public void Apply_ImportsTheManualFanAndTheEngineReplaysIt()
     {
         var (import, fans, store) = Build();
