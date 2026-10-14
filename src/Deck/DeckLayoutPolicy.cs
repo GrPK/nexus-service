@@ -162,7 +162,8 @@ public static class DeckLayoutPolicy
         {
             yield break;
         }
-        if (PrivilegedTypes.Contains(action.Type))
+        if (PrivilegedTypes.Contains(action.Type) ||
+            (action.Type == "launchApp" && Nexus.Service.Activity.ShortcutTargets.IsDirectTarget(action.AppId)))
         {
             yield return action;
             yield break;

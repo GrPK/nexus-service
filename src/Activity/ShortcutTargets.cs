@@ -1,12 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Text;
 
 namespace Nexus.Service.Activity;
 
 /// <summary>Platform-neutral parsing for launch-app target ids: typed paths, URIs, internet shortcuts and known-folder prefixes.</summary>
 internal static class ShortcutTargets
 {
+    /// <summary>Largest .url file read; real ones are well under a kilobyte.</summary>
+    internal const int MaxInternetShortcutBytes = 65536;
+
+    private const int GuidLength = 36;
+    private const int GuidPrefixLength = GuidLength + 2;
+    private const int GuidCloseBraceIndex = GuidLength + 1;
+    private const int GuidSeparatorIndex = GuidPrefixLength;
+    private const int GuidPrefixWithSeparatorLength = GuidPrefixLength + 1;
+
     private static readonly Dictionary<string, Func<string>> KnownFolders = new(StringComparer.OrdinalIgnoreCase)
     {
         ["6D809377-6AF0-444B-8957-A3773F02200E"] = () => Environment.GetEnvironmentVariable("ProgramW6432") ?? "",
@@ -26,13 +37,89 @@ internal static class ShortcutTargets
             return s;
         }
         s = Environment.ExpandEnvironmentVariables(s);
-        if (s.Length > 38 && s[0] == '{' && s[37] == '}' && (s[38] == '\\' || s[38] == '/') &&
-            KnownFolders.TryGetValue(s.Substring(1, 36), out var resolve) &&
+        if (HasKnownFolderPrefix(s) &&
+            KnownFolders.TryGetValue(s.Substring(1, GuidLength), out var resolve) &&
             resolve() is { Length: > 0 } dir)
         {
-            s = Path.Combine(dir, s.Substring(39));
+            s = Path.Combine(dir, s.Substring(GuidPrefixWithSeparatorLength));
         }
         return s;
+    }
+
+    private static bool HasKnownFolderPrefix(string s) =>
+        s.Length > GuidSeparatorIndex && s[0] == '{' && s[GuidCloseBraceIndex] == '}' &&
+        (s[GuidSeparatorIndex] == '\\' || s[GuidSeparatorIndex] == '/');
+
+    /// <summary>A fully-qualified path on a local drive ("C:\..."), excluding UNC and device paths.</summary>
+    internal static bool IsLocalDrivePath(string path)
+    {
+        if (!Path.IsPathFullyQualified(path))
+        {
+            return false;
+        }
+        var root = Path.GetPathRoot(path);
+        return root is not null && root.Length >= 2 && char.IsLetter(root[0]) && root[1] == ':';
+    }
+
+    /// <summary>
+    /// True when a launchApp id names a file or URI directly instead of a
+    /// Get-StartApps entry. Listed Win32 ids carry a known-folder GUID prefix
+    /// (and UWP ids are Package!App), so those stay false without needing the
+    /// helper's list. A GUID-prefixed id with a ".." segment is not trusted.
+    /// </summary>
+    internal static bool IsDirectTarget(string? id)
+    {
+        var raw = (id ?? "").Trim().Trim('"').Trim();
+        if (raw.Length == 0)
+        {
+            return false;
+        }
+        if (HasKnownFolderPrefix(raw) && raw.Split('\\', '/').AsSpan().IndexOf("..") < 0)
+        {
+            return false;
+        }
+        var s = Normalize(raw);
+        return IsLaunchUri(s) || s.IndexOfAny(['\\', '/']) >= 0 || Path.IsPathFullyQualified(s);
+    }
+
+    /// <summary>Schemes the launch-app fallback may hand to the shell.</summary>
+    internal static bool IsAllowedLaunchScheme(string uri)
+    {
+        var colon = uri.IndexOf(':');
+        if (colon <= 0)
+        {
+            return false;
+        }
+        var scheme = uri.Substring(0, colon);
+        return scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
+            scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
+            scheme.Equals("steam", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Reads a .url file: UTF-8 when valid (or BOM-marked), else the system ANSI code page, else Latin-1.</summary>
+    internal static string ReadInternetShortcutText(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        try
+        {
+            return new UTF8Encoding(false, true).GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+        }
+        try
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            var ansi = CultureInfo.CurrentCulture.TextInfo.ANSICodePage;
+            if (ansi > 0)
+            {
+                return Encoding.GetEncoding(ansi).GetString(bytes);
+            }
+        }
+        catch (Exception)
+        {
+        }
+        return Encoding.Latin1.GetString(bytes);
     }
 
     /// <summary>An absolute URI with a real scheme (steam://, ms-settings:) rather than a drive-letter path. file: is excluded.</summary>

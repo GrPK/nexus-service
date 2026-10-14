@@ -43,6 +43,13 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
     private readonly Dictionary<string, string> _processNameCache = new();
     private readonly object _processNameLock = new();
 
+    // Unknown URI ids are caller-supplied and their misses are not icon-cached,
+    // so the URL -> .url file map is built once per TTL instead of per request.
+    private static readonly TimeSpan UrlIndexTtl = TimeSpan.FromMinutes(1);
+    private Dictionary<string, string>? _urlIndex;
+    private DateTime _urlIndexExpiry;
+    private readonly object _urlIndexLock = new();
+
     public WindowsShortcutsProvider() : this(new WindowsIconExtractor(), new IconDiskCache())
     {
     }
@@ -270,15 +277,7 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
     }
 
     /// <summary>A fully-qualified path on a local drive ("C:\..."), excluding UNC and device paths.</summary>
-    private static bool IsLocalRootedPath(string path)
-    {
-        if (!Path.IsPathFullyQualified(path))
-        {
-            return false;
-        }
-        var root = Path.GetPathRoot(path);
-        return root is not null && root.Length >= 2 && char.IsLetter(root[0]) && root[1] == ':';
-    }
+    private static bool IsLocalRootedPath(string path) => ShortcutTargets.IsLocalDrivePath(path);
 
     /// <summary>Icon for a targetId that is a file path or URI rather than a Start-Menu id, so a deck key bound to a game's exe, a .url or a steam:// link shows the right icon.</summary>
     private byte[] ExtractExecutablePathIcon(string targetId)
@@ -362,12 +361,12 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
     {
         try
         {
-            if (new FileInfo(urlPath).Length > 65536)
+            if (new FileInfo(urlPath).Length > ShortcutTargets.MaxInternetShortcutBytes)
             {
                 return Array.Empty<byte>();
             }
 
-            var (_, iconFile, iconIndex) = ShortcutTargets.ParseInternetShortcut(File.ReadAllText(urlPath));
+            var (_, iconFile, iconIndex) = ShortcutTargets.ParseInternetShortcut(ShortcutTargets.ReadInternetShortcutText(urlPath));
             if (iconFile is null)
             {
                 return Array.Empty<byte>();
@@ -414,8 +413,22 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
     }
 
     /// <summary>The Start-Menu .url whose URL equals the given URI, for ids like steam://rungameid/730 that name no file.</summary>
-    private static string? FindUrlShortcutByUri(string uri)
+    private string? FindUrlShortcutByUri(string uri)
     {
+        lock (_urlIndexLock)
+        {
+            if (_urlIndex is null || _urlIndexExpiry <= DateTime.UtcNow)
+            {
+                _urlIndex = BuildUrlIndex();
+                _urlIndexExpiry = DateTime.UtcNow + UrlIndexTtl;
+            }
+            return _urlIndex.TryGetValue(uri, out var file) ? file : null;
+        }
+    }
+
+    private static Dictionary<string, string> BuildUrlIndex()
+    {
+        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
         foreach (var dir in StartMenuProgramsDirs())
         {
@@ -428,17 +441,21 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
             {
                 try
                 {
-                    if (new FileInfo(file).Length <= 65536 &&
-                        string.Equals(ShortcutTargets.ParseInternetShortcut(File.ReadAllText(file)).Url, uri, StringComparison.OrdinalIgnoreCase))
+                    if (new FileInfo(file).Length > ShortcutTargets.MaxInternetShortcutBytes)
                     {
-                        return file;
+                        continue;
+                    }
+                    var url = ShortcutTargets.ParseInternetShortcut(ShortcutTargets.ReadInternetShortcutText(file)).Url;
+                    if (!string.IsNullOrEmpty(url))
+                    {
+                        index.TryAdd(url, file);
                     }
                 }
                 catch { }
             }
         }
 
-        return null;
+        return index;
     }
 
     private static IEnumerable<string> StartMenuProgramsDirs()

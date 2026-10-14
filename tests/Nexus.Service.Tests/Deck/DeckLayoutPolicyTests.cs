@@ -109,4 +109,17 @@ public sealed class DeckLayoutPolicyTests
         broken.Pages[0].Widgets[0].Config!["deck"] = doc.RootElement.Clone();
         Assert.False(DeckLayoutPolicy.IntroducesPrivilegedActions(broken, stored: null));
     }
+
+    [Theory]
+    [InlineData("C:\\\\x\\\\a.bat", true)]
+    [InlineData("ms-msdt:/id x", true)]
+    [InlineData("steam://rungameid/730", true)]
+    [InlineData("{6D809377-6AF0-444B-8957-A3773F02200E}\\\\Vendor\\\\app.exe", false)]
+    [InlineData("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", false)]
+    public void LaunchApp_IsPrivilegedOnlyForDirectPathOrUriTargets(string appId, bool privileged)
+    {
+        var action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"" + appId + "\"}}";
+
+        Assert.Equal(privileged, DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), null));
+    }
 }

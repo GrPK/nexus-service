@@ -238,10 +238,10 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
 
     /// <summary>
     /// A Start-Menu id launches through the shortcuts provider. Anything it does
-    /// not know (a typed file path, or a URI such as steam://rungameid/730) is
-    /// opened like an openFile / openUrl action, so a saved layout can point a
-    /// launchApp key at it. The path is the one saved in the layout, never one
-    /// supplied by a panel request: /shortcuts/launch still resolves list ids only.
+    /// not know is a direct target saved in the layout: a local-drive file path,
+    /// or an http, https or steam URI. launchApp keys carrying a direct target
+    /// are privileged (DeckLayoutPolicy), so they are desktop-authored; a panel
+    /// can only trigger them. /shortcuts/launch still resolves list ids only.
     /// </summary>
     private async Task LaunchAppAsync(string appId)
     {
@@ -249,15 +249,31 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
         {
             return;
         }
-        var target = Nexus.Service.Activity.ShortcutTargets.Normalize(appId);
-        var isUri = Nexus.Service.Activity.ShortcutTargets.IsLaunchUri(target);
-        if (!isUri && !Path.IsPathFullyQualified(target))
+        if (!Nexus.Service.Activity.ShortcutTargets.IsDirectTarget(appId))
         {
             return;
         }
-        var response = isUri
-            ? await _system.LaunchUrlAsync(target).ConfigureAwait(false)
-            : await _system.OpenPathAsync(target).ConfigureAwait(false);
+        var target = Nexus.Service.Activity.ShortcutTargets.Normalize(appId);
+        Nexus.Service.Models.ApiResponse response;
+        if (Nexus.Service.Activity.ShortcutTargets.IsLaunchUri(target))
+        {
+            if (!Nexus.Service.Activity.ShortcutTargets.IsAllowedLaunchScheme(target))
+            {
+                ServiceLog.Warn("[streamdeck] launchApp refused a URI scheme outside http, https, steam");
+                return;
+            }
+            response = await _system.LaunchUrlAsync(target).ConfigureAwait(false);
+        }
+        else
+        {
+            // Local drive only: File.Exists on a UNC path starts outbound SMB auth.
+            if (!Nexus.Service.Activity.ShortcutTargets.IsLocalDrivePath(target))
+            {
+                ServiceLog.Warn("[streamdeck] launchApp refused a non-local path");
+                return;
+            }
+            response = await _system.OpenPathAsync(target).ConfigureAwait(false);
+        }
         if (response.Error)
         {
             ServiceLog.Warn($"[streamdeck] launchApp could not open target: {response.Msg}");

@@ -96,4 +96,64 @@ public sealed class ShortcutTargetsTests
         const string id = "{00000000-0000-0000-0000-000000000000}\\a.exe";
         Assert.Equal(id, ShortcutTargets.Normalize(id));
     }
+
+    [Theory]
+    [InlineData("C:\\Games\\a.bat", true)]
+    [InlineData("\"C:\\Games\\a.exe\"", true)]
+    [InlineData("steam://rungameid/1", true)]
+    [InlineData("ms-msdt:/id x", true)]
+    [InlineData("search-ms:query=a&crumb=location:\\\\host\\share", true)]
+    [InlineData("\\\\host\\share\\a.exe", true)]
+    [InlineData("{6D809377-6AF0-444B-8957-A3773F02200E}\\Vendor\\app.exe", false)]
+    [InlineData("{6D809377-6AF0-444B-8957-A3773F02200E}\\..\\..\\Users\\x\\a.bat", true)]
+    [InlineData("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", false)]
+    [InlineData("Notepad", false)]
+    [InlineData("", false)]
+    public void IsDirectTarget_ClassifiesByShape(string id, bool expected)
+    {
+        Assert.Equal(expected, ShortcutTargets.IsDirectTarget(id));
+    }
+
+    [Theory]
+    [InlineData("steam://rungameid/1", true)]
+    [InlineData("HTTPS://example.com", true)]
+    [InlineData("http://example.com", true)]
+    [InlineData("ms-msdt:/id x", false)]
+    [InlineData("search-ms:query=a", false)]
+    [InlineData("javascript:alert(1)", false)]
+    public void IsAllowedLaunchScheme_AllowsOnlyHttpHttpsSteam(string uri, bool expected)
+    {
+        Assert.Equal(expected, ShortcutTargets.IsAllowedLaunchScheme(uri));
+    }
+
+    [Theory]
+    [InlineData("\\\\host\\share\\a.exe")]
+    [InlineData("\\\\?\\C:\\a.exe")]
+    [InlineData("relative\\a.exe")]
+    public void IsLocalDrivePath_RejectsUncDeviceAndRelative(string path)
+    {
+        Assert.False(ShortcutTargets.IsLocalDrivePath(path));
+    }
+
+    [Fact]
+    public void ReadInternetShortcutText_DecodesUtf8AndFallsBackForAnsiBytes()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "nexus-url-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var utf8 = Path.Combine(dir, "u.url");
+            File.WriteAllText(utf8, "IconFile=C:\\caf\u00e9.ico");
+            Assert.Equal("IconFile=C:\\caf\u00e9.ico", ShortcutTargets.ReadInternetShortcutText(utf8));
+
+            var ansi = Path.Combine(dir, "a.url");
+            File.WriteAllBytes(ansi, [0x61, 0xE9]);
+            Assert.Equal(2, ShortcutTargets.ReadInternetShortcutText(ansi).Length);
+            Assert.StartsWith("a", ShortcutTargets.ReadInternetShortcutText(ansi));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
