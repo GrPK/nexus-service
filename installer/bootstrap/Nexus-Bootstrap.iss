@@ -155,7 +155,9 @@ begin
             (Pos(MessageLead(msgErrorProgress), Msg) > 0) or
             (Pos(SetupMessage(msgVerificationFileHashIncorrect), Msg) > 0) or
             (Pos('Error sending data', Msg) > 0) or
-            (Pos('Error receiving data', Msg) > 0);
+            (Pos('Error receiving data', Msg) > 0) or
+            (Pos('Error reading data', Msg) > 0) or
+            (Pos('Error querying', Msg) > 0);
 end;
 
 procedure InitializeWizard();
