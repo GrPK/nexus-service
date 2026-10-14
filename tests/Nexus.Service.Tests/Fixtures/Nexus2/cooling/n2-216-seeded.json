@@ -1,0 +1,1654 @@
+{
+	"start-nexus-on-boot": "off",
+	"start-nexus-in-tray": "off",
+	"logLevel": "debug",
+	"autoUpdate": false,
+	"firstRun": true,
+	"fileDeleteQueue": [],
+	"windowMaximized": false,
+	"y70": {
+		"isFirstRun": false,
+		"alwaysOnTop": true,
+		"openOnStart": true
+	},
+	"y80": {
+		"isFirstRun": true
+	},
+	"q60-frontend-version": null,
+	"lighting": {
+		"sync": "none",
+		"streamingScale": {
+			"width": 1000,
+			"height": 520
+		}
+	},
+	"profiles": [
+		{
+			"name": "Profile 1",
+			"id": "d2b5dc7b-f82f-4ee9-99c3-e5c3d388ccc7",
+			"active": true,
+			"streamingMode": "universe",
+			"isLightingAtStartEnabled": false,
+			"devicesOrder": [],
+			"disabledDevices": [],
+			"lightingDeviceConfigs": {},
+			"background": {
+				"name": "particles",
+				"path": "nexus-app://nexus/assets/particles-GQp30iFP.mp4",
+				"mode": "manual",
+				"themeColor": "#172548",
+				"accentColor": "#1ba0ff",
+				"textColor": "#ffffff",
+				"animationColor": "#3d65d1",
+				"header": "#2c4d9f",
+				"playing": true,
+				"disabled": false
+			},
+			"cards": [
+				{
+					"name": "ySeries",
+					"id": "ySeries"
+				},
+				{
+					"name": "qSeries",
+					"id": "qSeries"
+				},
+				{
+					"name": "keeb",
+					"id": "keeb"
+				},
+				{
+					"name": "lighting",
+					"id": "lighting"
+				},
+				{
+					"name": "cooling",
+					"id": "cooling"
+				},
+				{
+					"name": "system",
+					"id": "system"
+				},
+				{
+					"name": "devices",
+					"id": "devices"
+				},
+				{
+					"name": "openRGB",
+					"id": "openRGB"
+				},
+				{
+					"name": "cpu",
+					"id": "cpu"
+				},
+				{
+					"name": "gpu",
+					"id": "gpu"
+				},
+				{
+					"name": "memory",
+					"id": "memory"
+				},
+				{
+					"name": "storage",
+					"id": "storage"
+				}
+			],
+			"widgets": {
+				"cooling": {
+					"globalSpeedModifier": 100,
+					"curves": [
+						{
+							"name": "Default",
+							"type": "graph",
+							"id": "f715871d-eae3-47f4-a50a-17b25aaaef7e",
+							"input": null,
+							"outputs": [],
+							"linear": {
+								"minTemp": 35,
+								"maxTemp": 70,
+								"minSpeed": 50,
+								"maxSpeed": 80,
+								"responseTime": 1
+							},
+							"flat": {
+								"speed": 50
+							},
+							"graph": {
+								"speedModifier": 100,
+								"points": [
+									{
+										"speed": 20,
+										"temp": 0,
+										"id": "969a8fd1-77f9-4b17-a07f-80a829690034"
+									},
+									{
+										"speed": 30,
+										"temp": 20,
+										"id": "27fb6091-a482-4ca0-9ca1-8dd99070896f"
+									},
+									{
+										"speed": 30,
+										"temp": 20,
+										"id": "03ac12a4-eb51-4d4b-8299-4b585202607b"
+									},
+									{
+										"speed": 40,
+										"temp": 40,
+										"id": "724a9163-052d-4eb0-94ea-0748e04eabf7"
+									},
+									{
+										"speed": 50,
+										"temp": 50,
+										"id": "3a02d4b2-9d82-4d24-baca-d76d459529fc"
+									},
+									{
+										"speed": 100,
+										"temp": 70,
+										"id": "d0a49485-9f6c-4e86-af2c-e53aa0a40224"
+									}
+								],
+								"responseTime": 1
+							},
+							"mixed": {
+								"curveIds": [],
+								"responseTime": 1,
+								"inputFunction": "max",
+								"outputFunction": "max"
+							}
+						},
+						{
+							"name": "Nexus Portal",
+							"type": "graph",
+							"id": "994191fe-82e9-4c0f-a5d7-9f551d3652af",
+							"input": {
+								"id": "/intelcpu/0/temperature/14",
+								"device": "12th Gen Intel Core i7-12700KF",
+								"type": "Temperature"
+							},
+							"outputs": [],
+							"linear": {
+								"minTemp": 35,
+								"maxTemp": 70,
+								"minSpeed": 50,
+								"maxSpeed": 80,
+								"responseTime": 1
+							},
+							"flat": {
+								"speed": 50
+							},
+							"graph": {
+								"speedModifier": 100,
+								"points": [
+									{
+										"speed": 0,
+										"temp": 0,
+										"id": "f86bdec9-60c5-4241-b920-96dac9d44506"
+									},
+									{
+										"speed": 0,
+										"temp": 25,
+										"id": "af2d9e4e-bd79-43aa-a50e-b35820d3399a"
+									},
+									{
+										"speed": 25,
+										"temp": 40,
+										"id": "1d166768-1c2c-49ea-b945-111dad360be3"
+									},
+									{
+										"speed": 50,
+										"temp": 60,
+										"id": "cba7d457-75a5-4808-9c47-5f32abe8f1f4"
+									}
+								],
+								"responseTime": 1
+							},
+							"mixed": {
+								"curveIds": [],
+								"responseTime": 1,
+								"inputFunction": "max",
+								"outputFunction": "max"
+							}
+						},
+						{
+							"name": "Silent",
+							"type": "graph",
+							"id": "b60699c9-0422-4dda-9767-1a34f6535cb3",
+							"input": {
+								"id": "pumpTempIn",
+								"device": "HYTE THICC Q60",
+								"type": "Temperature"
+							},
+							"outputs": [],
+							"linear": {
+								"minTemp": 35,
+								"maxTemp": 70,
+								"minSpeed": 50,
+								"maxSpeed": 80,
+								"responseTime": 1
+							},
+							"flat": {
+								"speed": 50
+							},
+							"graph": {
+								"speedModifier": 100,
+								"points": [
+									{
+										"speed": 0,
+										"temp": 0,
+										"id": "88521662-9683-4851-8b3b-fbbff824a66c"
+									},
+									{
+										"speed": 0,
+										"temp": 25,
+										"id": "af8be228-121f-4fcd-bb3b-b8886d3ef894"
+									},
+									{
+										"speed": 25,
+										"temp": 40,
+										"id": "4d3bcb59-62a8-4be1-8e0c-bf7a45f50d90"
+									},
+									{
+										"speed": 50,
+										"temp": 60,
+										"id": "128c63bc-8ec3-49d1-b411-1f08e43c8f12"
+									},
+									{
+										"speed": 60,
+										"temp": 65,
+										"id": "3fdc640a-57c3-4641-9236-5db266f87c4b"
+									},
+									{
+										"speed": 90,
+										"temp": 80,
+										"id": "b795b0ee-edfc-4cb4-9d26-4eebe20d44e7"
+									}
+								],
+								"responseTime": 1
+							},
+							"mixed": {
+								"curveIds": [],
+								"responseTime": 1,
+								"inputFunction": "max",
+								"outputFunction": "max"
+							}
+						},
+						{
+							"name": "Balanced",
+							"type": "graph",
+							"id": "986bf6e3-5d2d-40e3-8430-2c83be1dcb3b",
+							"input": {
+								"id": "pumpTempIn",
+								"device": "HYTE THICC Q60",
+								"type": "Temperature"
+							},
+							"outputs": [],
+							"linear": {
+								"minTemp": 35,
+								"maxTemp": 70,
+								"minSpeed": 50,
+								"maxSpeed": 80,
+								"responseTime": 1
+							},
+							"flat": {
+								"speed": 50
+							},
+							"graph": {
+								"speedModifier": 100,
+								"points": [
+									{
+										"speed": 20,
+										"temp": 0,
+										"id": "25ce8a36-1176-473e-b8d4-4f028f45e1e9"
+									},
+									{
+										"speed": 30,
+										"temp": 20,
+										"id": "0b989f75-385b-477a-aa71-da9345da8bc7"
+									},
+									{
+										"speed": 30,
+										"temp": 20,
+										"id": "16901e52-8e17-4294-85ac-e57cb2776e79"
+									},
+									{
+										"speed": 40,
+										"temp": 40,
+										"id": "956c8013-73be-4fde-bd50-37ff9ff486f3"
+									},
+									{
+										"speed": 50,
+										"temp": 50,
+										"id": "fe66fbb8-56da-4edd-bce9-819dbc598d52"
+									},
+									{
+										"speed": 100,
+										"temp": 70,
+										"id": "8776b451-e8ed-4fb7-8dcb-1e5a0e465752"
+									}
+								],
+								"responseTime": 1
+							},
+							"mixed": {
+								"curveIds": [],
+								"responseTime": 1,
+								"inputFunction": "max",
+								"outputFunction": "max"
+							}
+						},
+						{
+							"name": "Performance",
+							"type": "graph",
+							"id": "12d41d99-09c1-4227-b706-0ca81a2543d4",
+							"input": {
+								"id": "pumpTempIn",
+								"device": "HYTE THICC Q60",
+								"type": "Temperature"
+							},
+							"outputs": [
+								{
+									"id": "Q60 Pump",
+									"deviceType": "Pump",
+									"parentDeviceId": "2045CCCC0003"
+								}
+							],
+							"linear": {
+								"minTemp": 35,
+								"maxTemp": 70,
+								"minSpeed": 50,
+								"maxSpeed": 80,
+								"responseTime": 1
+							},
+							"flat": {
+								"speed": 50
+							},
+							"graph": {
+								"speedModifier": 100,
+								"points": [
+									{
+										"speed": 30,
+										"temp": 0,
+										"id": "b46eef4a-805d-4753-9b72-561086f23e0f"
+									},
+									{
+										"speed": 50,
+										"temp": 40,
+										"id": "adb39cb6-4cfb-4cdd-a332-c040429071b6"
+									},
+									{
+										"speed": 80,
+										"temp": 50,
+										"id": "5c31bad9-49c0-466c-a4ab-ff35194bdd26"
+									},
+									{
+										"speed": 100,
+										"temp": 65,
+										"id": "2ab382ea-5e6c-4341-8fd5-83e7dd64e1f4"
+									}
+								],
+								"responseTime": 1
+							},
+							"mixed": {
+								"curveIds": [],
+								"responseTime": 1,
+								"inputFunction": "max",
+								"outputFunction": "max"
+							}
+						}
+					],
+					"easyMode": {
+						"enabled": false,
+						"selected": "balanced"
+					}
+				},
+				"faces": {
+					"y70": {
+						"nexus": true,
+						"hideDock": false,
+						"theme": {
+							"opacity": 0.7,
+							"transparent": false,
+							"transparentDock": "opaque",
+							"text": "191, 221, 255",
+							"primary": {
+								"main": "36, 35, 36",
+								"light": "36, 35, 36",
+								"dark": "35, 34, 35"
+							},
+							"accent": {
+								"main": "97, 74, 223",
+								"light": "97, 74, 223",
+								"dark": "96, 73, 222"
+							}
+						},
+						"obsConfig": {
+							"address": "localhost",
+							"port": 4455,
+							"password": "abc123"
+						},
+						"steamConfig": {
+							"isKeySet": false
+						},
+						"discordConfig": {
+							"richPresenceEnabled": false,
+							"richPresencePreset": "HYTE Nexus"
+						},
+						"controlCenter": {
+							"timeFormat": "24"
+						},
+						"bgName": "particles",
+						"bg": "",
+						"bgDisabled": false,
+						"dock": [
+							{
+								"id": "5d2eac1f-2652-45a1-a43c-3641f2d1f968",
+								"isImmersive": false,
+								"position": 0,
+								"positionHorizontal": 0,
+								"size": "1x1",
+								"type": "macros",
+								"macro": {
+									"type": "shortcut",
+									"targetId": "C:\\WINDOWS\\explorer.exe"
+								},
+								"front": {
+									"type": "default"
+								},
+								"title": {
+									"value": "",
+									"position": "top",
+									"size": 12,
+									"bold": false,
+									"italic": false,
+									"underline": false,
+									"color": "#ffffff"
+								}
+							},
+							{
+								"id": "bd315431-214d-4c74-a7d9-02ca603b64e7",
+								"isImmersive": false,
+								"position": 1,
+								"positionHorizontal": 1,
+								"size": "1x1",
+								"type": "macros",
+								"macro": {
+									"type": "shortcut",
+									"targetId": "C:\\WINDOWS\\System32\\Taskmgr.exe"
+								},
+								"front": {
+									"type": "default"
+								},
+								"title": {
+									"value": "",
+									"position": "top",
+									"size": 12,
+									"bold": false,
+									"italic": false,
+									"underline": false,
+									"color": "#ffffff"
+								}
+							},
+							{
+								"id": "acedb688-3dfc-43d3-84fa-fb17f22eb914",
+								"isImmersive": false,
+								"position": 2,
+								"positionHorizontal": 2,
+								"size": "1x1",
+								"type": "macros",
+								"macro": {
+									"type": "shortcut",
+									"targetId": "Microsoft.Paint_8wekyb3d8bbwe!App"
+								},
+								"front": {
+									"type": "default"
+								},
+								"title": {
+									"value": "",
+									"position": "top",
+									"size": 12,
+									"bold": false,
+									"italic": false,
+									"underline": false,
+									"color": "#ffffff"
+								}
+							},
+							{
+								"id": "0eae2bc9-4942-4145-b9a9-280a42763b4c",
+								"isImmersive": false,
+								"position": 3,
+								"positionHorizontal": 3,
+								"size": "1x1",
+								"type": "blocks"
+							}
+						],
+						"page": "b3f59caa-8af0-48ce-86ab-d70cb259b739",
+						"pages": [
+							{
+								"id": "55447bb2-bfe8-4c66-82cb-5623f78f16f1",
+								"type": "page",
+								"widgets": [
+									{
+										"id": "ea2910dc-1616-44cb-a677-ace02cf7d628",
+										"type": "clock",
+										"size": "4x2",
+										"timeFormat": "24",
+										"seconds": false,
+										"timezone": "America/Los_Angeles",
+										"displayTimezone": false,
+										"design": "digital",
+										"position": 0,
+										"positionHorizontal": 4
+									},
+									{
+										"id": "69d7c7ce-724e-4e65-a1f7-99d996d74af6",
+										"isImmersive": false,
+										"position": 8,
+										"positionHorizontal": 0,
+										"size": "4x4",
+										"type": "media",
+										"reactive": true,
+										"theme": "lines",
+										"transparent": false,
+										"livingMedia": true,
+										"albumCoverMode": "static",
+										"controls": true,
+										"kale": {
+											"active": false,
+											"blur": true,
+											"speed": 0.00002
+										}
+									},
+									{
+										"id": "ce5cf5e1-5639-4043-b778-f2aa2ba884c7",
+										"isImmersive": false,
+										"position": 24,
+										"positionHorizontal": 8,
+										"size": "4x4",
+										"type": "cooling"
+									},
+									{
+										"id": "aa2ec71f-b7ec-42de-a351-f80a58891a05",
+										"isImmersive": false,
+										"position": 40,
+										"positionHorizontal": 30,
+										"size": "4x2",
+										"type": "stopwatch"
+									}
+								]
+							},
+							{
+								"id": "82719d92-7186-42dd-8744-be4d78c4f00f",
+								"type": "page",
+								"widgets": [
+									{
+										"id": "e092f823-3eac-46ee-bfa3-05fc1d26a6c8",
+										"type": "media",
+										"size": "4x2",
+										"reactive": false,
+										"theme": "lava",
+										"transparent": false,
+										"livingMedia": true,
+										"albumCoverMode": "static",
+										"controls": true,
+										"kale": {
+											"active": false,
+											"blur": true,
+											"speed": 0.00002
+										},
+										"position": 32,
+										"positionHorizontal": 8
+									},
+									{
+										"id": "58851c49-a2d6-4641-b140-5bc2ed9bc6c9",
+										"type": "emoji",
+										"size": "4x4",
+										"position": 16,
+										"positionHorizontal": 4
+									},
+									{
+										"id": "b73d131f-6fe5-423d-ae7d-720ecf97b022",
+										"type": "calculator",
+										"size": "4x4",
+										"position": 0,
+										"positionHorizontal": 0
+									},
+									{
+										"id": "f0695597-ca46-401d-bab4-e8c4dc5eda86",
+										"isImmersive": false,
+										"position": 40,
+										"positionHorizontal": 34,
+										"size": "4x2",
+										"type": "weather",
+										"units": "f",
+										"weatherLocation": {
+											"lat": 34.0536909,
+											"long": -118.242766,
+											"display_name": "Los Angeles, Los Angeles County, California, United States"
+										}
+									}
+								]
+							},
+							{
+								"id": "b3f59caa-8af0-48ce-86ab-d70cb259b739",
+								"type": "page",
+								"widgets": [
+									{
+										"id": "e08eeda0-309f-4306-a4e4-cfe06fd59ae4",
+										"isImmersive": false,
+										"position": 0,
+										"positionHorizontal": 0,
+										"size": "4x4",
+										"type": "performance",
+										"useName": false,
+										"showTextMetrics": true,
+										"2x2": {
+											"slot1": {
+												"id": "slot1",
+												"design": "CatDog",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "VCore",
+													"type": "Voltage"
+												},
+												"drive": "C:\\"
+											}
+										},
+										"4x2": {
+											"slot1": {
+												"id": "slot1",
+												"design": "CatDog",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "VCore",
+													"type": "Voltage"
+												},
+												"drive": "C:\\"
+											},
+											"slot2": {
+												"id": "slot2",
+												"design": "CatDog",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot3": {
+												"id": "slot3",
+												"design": "text",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "CPU Core #1",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot4": {
+												"id": "slot4",
+												"design": "text",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot5": {
+												"id": "slot5",
+												"design": "text",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Temperature"
+												},
+												"drive": "C:\\"
+											}
+										},
+										"4x4": {
+											"slot1": {
+												"id": "slot1",
+												"design": "CatDog",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "CPU Core #1",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot2": {
+												"id": "slot2",
+												"design": "Catapillar",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "CPU Core #1",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot3": {
+												"id": "slot3",
+												"design": "Catapillar",
+												"device": "storage",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "Used Space",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot4": {
+												"id": "slot4",
+												"design": "LittleGuy",
+												"device": "memory",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "Memory",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot5": {
+												"id": "slot5",
+												"design": "text",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot6": {
+												"id": "slot6",
+												"design": "text",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Temperature"
+												},
+												"drive": "C:\\"
+											},
+											"slot7": {
+												"id": "slot7",
+												"design": "text",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Clock"
+												},
+												"drive": "C:\\"
+											}
+										},
+										"immersive": {
+											"slot1": {
+												"id": "slot1",
+												"design": "CatDog",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "VCore",
+													"type": "Voltage"
+												},
+												"drive": "C:\\"
+											},
+											"slot2": {
+												"id": "slot2",
+												"design": "ToeNail",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "CPU Core",
+													"type": "Temperature"
+												},
+												"drive": "C:\\"
+											},
+											"slot3": {
+												"id": "slot3",
+												"design": "CatDog",
+												"device": "cpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "CPU Core",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot4": {
+												"id": "slot4",
+												"design": "Radiate",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot5": {
+												"id": "slot5",
+												"design": "Catapillar",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Core",
+													"type": "Temperature"
+												},
+												"drive": "C:\\"
+											},
+											"slot6": {
+												"id": "slot6",
+												"design": "WaterLevel",
+												"device": "memory",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "Memory",
+													"type": "Load"
+												},
+												"drive": "C:\\"
+											},
+											"slot7": {
+												"id": "slot7",
+												"design": "LittleGuy",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Memory Free",
+													"type": "SmallData"
+												},
+												"drive": "C:\\"
+											},
+											"slot8": {
+												"id": "slot8",
+												"design": "text",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Memory Used",
+													"type": "SmallData"
+												},
+												"drive": "C:\\"
+											},
+											"slot9": {
+												"id": "slot9",
+												"design": "text",
+												"device": "gpu",
+												"gpuIndex": 0,
+												"sensor": {
+													"name": "GPU Memory Total",
+													"type": "SmallData"
+												},
+												"drive": "C:\\"
+											}
+										}
+									}
+								]
+							}
+						],
+						"immersiveOnLoad": {
+							"enabled": false,
+							"widgetType": null
+						}
+					},
+					"y80": {
+						"nexus": true,
+						"hideDock": true,
+						"theme": {
+							"opacity": 0.7,
+							"transparent": false,
+							"transparentDock": "opaque",
+							"text": "191, 221, 255",
+							"primary": {
+								"main": "36, 35, 36",
+								"light": "36, 35, 36",
+								"dark": "35, 34, 35"
+							},
+							"accent": {
+								"main": "97, 74, 223",
+								"light": "97, 74, 223",
+								"dark": "96, 73, 222"
+							}
+						},
+						"obsConfig": {
+							"address": "localhost",
+							"port": 4455,
+							"password": "abc123"
+						},
+						"steamConfig": {
+							"isKeySet": false
+						},
+						"discordConfig": {
+							"richPresenceEnabled": false,
+							"richPresencePreset": "HYTE Nexus"
+						},
+						"controlCenter": {
+							"timeFormat": "24"
+						},
+						"bgName": "particles",
+						"bg": "",
+						"bgDisabled": false,
+						"dock": [],
+						"page": "6a916622-4d97-4f22-bc56-33a834e0b5c4",
+						"pages": [
+							{
+								"id": "6a916622-4d97-4f22-bc56-33a834e0b5c4",
+								"type": "page",
+								"widgets": [
+									{
+										"id": "139fa13d-b8a3-4e21-80f9-530e5f787cd3",
+										"type": "clock",
+										"size": "4x2",
+										"timeFormat": "24",
+										"seconds": false,
+										"timezone": "America/Los_Angeles",
+										"displayTimezone": false,
+										"design": "digital",
+										"position": 0,
+										"positionHorizontal": 4,
+										"isImmersive": false
+									}
+								]
+							}
+						],
+						"immersiveOnLoad": {
+							"enabled": false,
+							"widgetType": null
+						}
+					}
+				},
+				"lighting": [
+					{
+						"name": "Lighting 1",
+						"active": true,
+						"groups": [],
+						"streamingPositions": {
+							"universe": {
+								"name": "Universe",
+								"top": 10,
+								"left": 10,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"\\\\?\\hid#vid_0b05&pid_19af&mi_02#7&fa4e0000&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}Mainboard": {
+								"name": "Mainboard",
+								"top": 10,
+								"left": 10,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"\\\\?\\hid#vid_0b05&pid_19af&mi_02#7&fa4e0000&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}RGBHeader": {
+								"name": "RGBHeader",
+								"top": 40,
+								"left": 30,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"\\\\?\\hid#vid_0b05&pid_19af&mi_02#7&fa4e0000&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}ARGB_Channel0": {
+								"name": "ARGB_Channel0",
+								"top": 70,
+								"left": 50,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"\\\\?\\hid#vid_0b05&pid_19af&mi_02#7&fa4e0000&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}ARGB_Channel1": {
+								"name": "ARGB_Channel1",
+								"top": 100,
+								"left": 70,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"\\\\?\\hid#vid_0b05&pid_19af&mi_02#7&fa4e0000&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}ARGB_Channel2": {
+								"name": "ARGB_Channel2",
+								"top": 130,
+								"left": 90,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"205DBBBB00020": {
+								"name": "Mini Hub Port1 Fans",
+								"top": 160,
+								"left": 110,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"205DBBBB00021": {
+								"name": "Mini Hub Port2 Fans",
+								"top": 190,
+								"left": 130,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"205DBBBB00022": {
+								"name": "Led Strip",
+								"top": 220,
+								"left": 150,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"205B338B32321_1": {
+								"name": "NP50 Logo",
+								"top": 250,
+								"left": 170,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"205B338B32322_0_40": {
+								"name": "LS10/10",
+								"top": 280,
+								"left": 190,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"2045CCCC00031_0_20": {
+								"name": "LS10",
+								"top": 310,
+								"left": 210,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"2045CCCC00031_1_44": {
+								"name": "LN70",
+								"top": 340,
+								"left": 230,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"2045CCCC00033_1": {
+								"name": "THICC Q60 Backlight",
+								"top": 370,
+								"left": 249.99999999999997,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							},
+							"2045CCCC00034_1": {
+								"name": "THICC Q60 Logo",
+								"top": 400,
+								"left": 270,
+								"height": 100,
+								"width": 200,
+								"rotation": "Zero",
+								"mirroring": "Normal"
+							}
+						},
+						"brightness": {
+							"enabled": true,
+							"mode": "manual",
+							"manualBrightness": 100,
+							"dimmerAfter": "off",
+							"times": [
+								{
+									"time": 1,
+									"brightness": 50,
+									"disabled": false
+								},
+								{
+									"time": 2,
+									"brightness": 60,
+									"disabled": false
+								},
+								{
+									"time": 3,
+									"brightness": 70,
+									"disabled": false
+								},
+								{
+									"time": 4,
+									"brightness": 80,
+									"disabled": false
+								},
+								{
+									"time": 5,
+									"brightness": 90,
+									"disabled": false
+								},
+								{
+									"time": 6,
+									"brightness": 90,
+									"disabled": false
+								},
+								{
+									"time": 7,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 8,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 9,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 10,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 11,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 12,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 13,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 14,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 15,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 16,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 17,
+									"brightness": 100,
+									"disabled": false
+								},
+								{
+									"time": 18,
+									"brightness": 90,
+									"disabled": false
+								},
+								{
+									"time": 19,
+									"brightness": 80,
+									"disabled": false
+								},
+								{
+									"time": 20,
+									"brightness": 70,
+									"disabled": false
+								},
+								{
+									"time": 21,
+									"brightness": 60,
+									"disabled": false
+								},
+								{
+									"time": 22,
+									"brightness": 60,
+									"disabled": false
+								},
+								{
+									"time": 23,
+									"brightness": 50,
+									"disabled": false
+								},
+								{
+									"time": 24,
+									"brightness": 50,
+									"disabled": false
+								}
+							],
+							"nightShift": {
+								"enabled": false,
+								"start": {
+									"time": "9:00",
+									"period": "PM"
+								},
+								"end": {
+									"time": "6:00",
+									"period": "AM"
+								}
+							}
+						},
+						"screen": {
+							"monitor": "DISPLAY1",
+							"effect": "Standard",
+							"saturation": 0,
+							"contrast": 0,
+							"blur": 0
+						},
+						"gif": {
+							"mode": "looping",
+							"speed": 100,
+							"added": []
+						},
+						"music": {
+							"effect": "CircleRamp",
+							"colorSource": "default"
+						},
+						"static": {
+							"colour": "#ffb71b",
+							"history": []
+						},
+						"animate": {
+							"effect": "MixColor",
+							"hue": 0,
+							"saturation": 0,
+							"colorFilter": "Normal",
+							"intensity": 50,
+							"speed": 100,
+							"noise": 0,
+							"colorScheme": {
+								"1": "#fd0825",
+								"2": "#f85c02",
+								"3": "#fcf302",
+								"4": "#65ff01",
+								"5": "#03d0ff",
+								"6": "#0002ff",
+								"7": "#ef02ff",
+								"8": null
+							},
+							"savedColorSchemes": {
+								"1": {
+									"1": "#fd0825",
+									"2": "#f85c02",
+									"3": "#fcf302",
+									"4": "#65ff01",
+									"5": "#03d0ff",
+									"6": "#0002ff",
+									"7": "#ef02ff",
+									"8": null
+								},
+								"2": null,
+								"3": null,
+								"4": null
+							}
+						},
+						"scenario": {
+							"selected": "DriftIce"
+						}
+					}
+				],
+				"keeb": {
+					"settings": {
+						"keyReactive": false,
+						"keyReactiveMask": false,
+						"keyReactiveMode": "Ripple",
+						"keyReactiveColor": {
+							"r": 255,
+							"g": 0,
+							"b": 0
+						}
+					},
+					"macros": [
+						{
+							"name": "Macro 1",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 2",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 3",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 4",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 5",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 6",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 7",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 8",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 9",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 10",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 11",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 12",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 13",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 14",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 15",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						},
+						{
+							"name": "Macro 16",
+							"recordKeyboard": true,
+							"recordText": false,
+							"recordMouse": false,
+							"delay": "record",
+							"delayTime": 10
+						}
+					],
+					"rotary": {
+						"sensitivity": "Balanced",
+						"left": "VolumeAdjustment",
+						"right": "BrightnessAdjustment",
+						"apps": []
+					}
+				},
+				"photo": {},
+				"clock": {
+					"default": {
+						"timezone": "America/Los_Angeles",
+						"timeFormat": "24",
+						"showSeconds": false
+					}
+				},
+				"cpu": [
+					{
+						"name": "CPU 1",
+						"active": true,
+						"miniScreen": []
+					}
+				],
+				"gpu": [
+					{
+						"name": "GPU 1",
+						"active": true,
+						"gpuIndex": 0,
+						"miniScreen": []
+					}
+				],
+				"motherboard": [
+					{
+						"name": "Default",
+						"active": true,
+						"miniScreen": []
+					}
+				],
+				"system": {
+					"case": "None",
+					"caseColor": "white-black",
+					"hue": 180,
+					"name": "",
+					"customColor": "#ffffff"
+				}
+			},
+			"q60": {
+				"software": {
+					"background": {
+						"id": "66955a38-5a85-4894-954e-96fbd8e015d5",
+						"type": "media-background",
+						"gallerySource": "particles",
+						"playlistMode": false,
+						"playlistInterval": 5000,
+						"alphaOverlay": "none",
+						"speed": 0
+					},
+					"activePageId": "0d6c8573-240e-4359-92aa-cb302da6f7b9",
+					"carousel": {
+						"enabled": false,
+						"interval": 15000
+					},
+					"autoFocus": {
+						"enabled": false,
+						"defaultPageId": "81606ae3-e4aa-460e-ba53-e0d66b078993",
+						"pages": {}
+					},
+					"pages": [
+						{
+							"id": "81606ae3-e4aa-460e-ba53-e0d66b078993",
+							"front": {
+								"id": "81606ae3-e4aa-460e-ba53-e0d66b078993",
+								"type": "clock",
+								"timeFormat": "12",
+								"design": "default",
+								"bounce": true,
+								"theme": {
+									"textColor": "255, 255, 255",
+									"accentColor": "18, 54, 255",
+									"opacity": 1,
+									"overlayOpacity": 0,
+									"overlayColor": "0, 0, 0"
+								}
+							}
+						},
+						{
+							"front": {
+								"id": "15d11931-aff1-4dcd-9c7a-d5d7beb4e8a9",
+								"theme": {
+									"textColor": "255, 255, 255",
+									"accentColor": "18, 54, 255",
+									"opacity": 1,
+									"overlayOpacity": 0,
+									"overlayColor": "0, 0, 0"
+								},
+								"sensorRecordTime": 2,
+								"showMulti": true,
+								"design": "None",
+								"type": "performance",
+								"slot1": {
+									"sensorId": "/intelcpu/0/temperature/14",
+									"device": "cpu",
+									"gpuIndex": 0,
+									"design": "None",
+									"drive": "C:\\",
+									"showHardwareName": false,
+									"showSensorName": true
+								},
+								"slot2": {
+									"sensorId": "pump-out",
+									"device": "q60",
+									"gpuIndex": 0,
+									"design": "None",
+									"drive": "C:\\",
+									"showHardwareName": false,
+									"showSensorName": true
+								},
+								"slot3": {
+									"sensorId": "pump-in",
+									"device": "q60",
+									"gpuIndex": 0,
+									"design": "None",
+									"drive": "C:\\",
+									"showHardwareName": false,
+									"showSensorName": true
+								}
+							},
+							"id": "0d6c8573-240e-4359-92aa-cb302da6f7b9"
+						}
+					]
+				},
+				"hardware": {
+					"offlineView": "default",
+					"mediaFiles": [],
+					"intervalDuration": 5000,
+					"text": "",
+					"preview": false,
+					"disableDisplayWithoutSata": false,
+					"controlMode": "None"
+				}
+			},
+			"controlBox": {
+				"LEDLayout": [
+					[
+						{
+							"deviceType": "General",
+							"ledCount": 200
+						}
+					],
+					[
+						{
+							"deviceType": "General",
+							"ledCount": 200
+						}
+					],
+					[
+						{
+							"deviceType": "General",
+							"ledCount": 200
+						}
+					],
+					[
+						{
+							"deviceType": "General",
+							"ledCount": 200
+						}
+					]
+				]
+			},
+			"settings": {
+				"performance": {
+					"mediaBlur": true,
+					"pauseVideo": true,
+					"pauseVideoOnFocusLoss": true,
+					"widgetPollingRate": 1000,
+					"qRGBOutputResolution": "1/30",
+					"qRGBFpsCap": "30",
+					"rainbowAnim": true
+				},
+				"disabledUSBDevices": []
+			}
+		}
+	],
+	"settings": {
+		"general": {
+			"language": "en",
+			"startOnLogin": false,
+			"disableConflictAlerts": false
+		},
+		"minihub": {
+			"layout": {
+				"fanPort1": 1,
+				"fanPort2": 3,
+				"rgbPort1": 16,
+				"rgbPort2": 0
+			}
+		}
+	},
+	"localStorage": {
+		"migrated": true,
+		"migratedFromFile": true
+	},
+	"hasRunCoolingSetup-NP50": true,
+	"hasRunCoolingSetup-Q60": true,
+	"q60-assets-modified": "2026-01-01T00:00:00.000Z"
+}
