@@ -28,6 +28,7 @@ internal static class Nexus2FanCurveReasons
     public const string TargetNotFound = "targetNotFound";
     public const string TargetAmbiguous = "targetAmbiguous";
     public const string UncontrolledChannel = "uncontrolledChannel";
+    public const string PinnedChannel = "pinnedChannel";
     public const string UnsupportedTarget = "unsupportedTarget";
     public const string GpuFlat = "gpuFlat";
     public const string FollowedChannel = "followedChannel";
@@ -778,7 +779,7 @@ internal static class Nexus2FanCurvePlanner
         else if (env.PinOverrides.TryGetValue(channel.Id, out var pinned) && pinned)
         {
             // Only the user's own pin counts: GPU fans are pinned by default yet are valid targets here.
-            target.Reason = Nexus2FanCurveReasons.UncontrolledChannel;
+            target.Reason = Nexus2FanCurveReasons.PinnedChannel;
         }
         else if (channel.ReadOnly)
         {

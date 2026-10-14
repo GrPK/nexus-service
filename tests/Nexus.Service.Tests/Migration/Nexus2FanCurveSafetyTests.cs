@@ -96,6 +96,19 @@ public class Nexus2FanCurveSafetyTests
     }
 
     [Fact]
+    public void The_service_reads_the_stores_pin_overrides_when_it_plans()
+    {
+        var (service, store, _) = FanCurveServices.Service("n2-217-final.json");
+        store.Update(s => s.Cooling.FanPinOverrides[Fan0] = true);
+        var root = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Nexus2", "cooling", "n2-217-final.json"))).RootElement;
+
+        service.ApplyFanCurves(root);
+
+        var outputs = store.Load().Cooling.Curves.SelectMany(c => c.Outputs.Select(o => o.Id)).ToList();
+        Assert.DoesNotContain(Fan0, outputs);
+    }
+
+    [Fact]
     public void A_plan_made_before_a_sibling_became_uncontrolled_is_replanned_not_patched()
     {
         var (staleService, staleStore, _) = Stale();

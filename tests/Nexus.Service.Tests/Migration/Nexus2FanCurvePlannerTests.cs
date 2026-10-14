@@ -602,9 +602,13 @@ public class Nexus2FanCurvePlannerTests
         var hw = Hw.Y70();
         hw.PinOverrides[$"smarthub:{Hw.SmartHub}:fan0"] = true;
         var curve = Only(Plan(hw, N2.Graph("G", SafePoints, new[] { N2.Pwm(1) })));
-        Assert.Equal("uncontrolledChannel", Assert.Single(curve.Targets).Reason);
+        Assert.Equal("pinnedChannel", Assert.Single(curve.Targets).Reason);
         Assert.Equal("noTargets", curve.Reason);
     }
+
+    [Fact]
+    public void A_gpu_fan_pinned_only_by_default_stays_a_valid_target() =>
+        Assert.Equal("/gpu-nvidia/0/control/0", ChannelOf(Hw.Y70(), N2.Gpu(1)));
 
     [Fact]
     public void A_flat_curve_skips_a_gpu_fan_but_keeps_its_other_targets()

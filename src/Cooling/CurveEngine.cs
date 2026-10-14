@@ -59,6 +59,12 @@ public sealed class CurveEngine : BackgroundService
     // (which resets the hub's duty state) replays the saved value when the
     // channel returns.
     private readonly HashSet<string> _manualReplayed = new();
+    // Bumped under _manualReplayed by InvalidateManual so a replay pass that
+    // snapshotted the old duty cannot mark the channel replayed afterwards.
+    private int _manualGeneration;
+
+    /// <summary>Test seam: runs after a replay pass snapshots the saved duties, before it commits them.</summary>
+    internal Action? ReplaySnapshotTaken { get; set; }
 
     // Ids released since they were marked not controlled. Dropped while a
     // channel is absent, so a device that reconnects gets its release
@@ -129,6 +135,25 @@ public sealed class CurveEngine : BackgroundService
 
     public int GetInterval() => _intervalMs;
     public void SetInterval(int ms) => _intervalMs = Math.Max(500, ms);
+
+    /// <summary>Makes the next tick replay the stored manual duty of each id
+    /// through the normal path (feature gate, thermal guard, clamps), for a
+    /// caller that just rewrote those duties.</summary>
+    public void InvalidateManual(IEnumerable<string> ids)
+    {
+        lock (_manualReplayed)
+        {
+            _manualGeneration++;
+            foreach (var id in ids)
+            {
+                _manualReplayed.Remove(id);
+            }
+        }
+        foreach (var id in ids)
+        {
+            ForgetWrite(id);
+        }
+    }
 
     public void ResetSmoothing()
     {
@@ -974,6 +999,8 @@ public sealed class CurveEngine : BackgroundService
         // ICollection fast path instead, whose race failures are an
         // ArgumentException or torn null-key entries). Abort only the
         // replay, not the tick's curve work; the next tick retries.
+        int generation;
+        lock (_manualReplayed) { generation = _manualGeneration; }
         var snapshot = new List<KeyValuePair<string, int>>(manual.Count);
         try
         {
@@ -983,6 +1010,7 @@ public sealed class CurveEngine : BackgroundService
             }
         }
         catch (InvalidOperationException) { return; }
+        ReplaySnapshotTaken?.Invoke();
 
         // Collect under the lock, write hardware outside it: SetFanSpeed
         // re-records the entry via IConfigStore.Update, whose OnChanged
@@ -990,6 +1018,11 @@ public sealed class CurveEngine : BackgroundService
         List<(string Id, int Duty)>? toApply = null;
         lock (_manualReplayed)
         {
+            if (generation != _manualGeneration)
+            {
+                // An import rewrote duties after this snapshot; the next tick re-reads.
+                return;
+            }
             foreach (var kv in snapshot)
             {
                 if (!present.Contains(kv.Key))

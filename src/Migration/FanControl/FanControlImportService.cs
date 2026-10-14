@@ -32,9 +32,11 @@ public sealed class FanControlImportService
     private readonly IFanControlDetector _detector;
     private readonly IFanControlProvider _fans;
     private readonly IConfigStore _store;
+    private readonly CurveEngine _engine;
 
-    public FanControlImportService(IFanControlDetector detector, IFanControlProvider fans, IConfigStore store)
+    public FanControlImportService(IFanControlDetector detector, IFanControlProvider fans, IConfigStore store, CurveEngine engine)
     {
+        _engine = engine;
         _detector = detector;
         _fans = fans;
         _store = store;
@@ -207,11 +209,11 @@ public sealed class FanControlImportService
         });
 
         // CurveEngine replays a manual duty once per run, so a fan it already
-        // replayed would keep its old duty until restart. Drive the new one the
-        // way the manual-speed route does.
-        foreach (var (channel, duty) in driveNow)
+        // replayed would keep its old duty until restart. Re-arm the replay and
+        // let the next tick drive it through the guard and feature gate.
+        if (driveNow.Count > 0)
         {
-            _fans.SetFanSpeed(channel, duty);
+            _engine.InvalidateManual(driveNow.Keys);
         }
 
         var appliedAny = response.CurvesImported > 0
