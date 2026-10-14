@@ -55,8 +55,15 @@ public sealed class WindowsRadioProvider : IRadioProvider
 
         foreach (var radio in matches)
         {
-            // A refusal by one adapter is not a failure: the caller reads the real state back.
-            await radio.SetStateAsync(on ? RadioState.On : RadioState.Off).AsTask(ct).ConfigureAwait(false);
+            // A refusal or fault on one adapter is not a failure: the caller reads the real state back.
+            try
+            {
+                await radio.SetStateAsync(on ? RadioState.On : RadioState.Off).AsTask(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                ServiceLog.Warn($"[radios] set {kind} failed: {ex.Message}");
+            }
         }
         return true;
     }
@@ -73,13 +80,24 @@ public sealed class WindowsRadioProvider : IRadioProvider
             : new List<Radio>();
         var changed = new SemaphoreSlim(0);
         void OnChanged(Radio sender, object args) => changed.Release();
-        foreach (var radio in radios)
-        {
-            radio.StateChanged += OnChanged;
-        }
+        var subscribed = new List<Radio>();
 
         try
         {
+            foreach (var radio in radios)
+            {
+                try
+                {
+                    radio.StateChanged += OnChanged;
+                    subscribed.Add(radio);
+                }
+                catch (Exception ex)
+                {
+                    // Without the event the wait falls back to polling radio state until the cap.
+                    ServiceLog.Warn($"[radios] StateChanged subscribe failed: {ex.Message}");
+                }
+            }
+
             // The manager's flag means "radios enabled", so airplane on is 0.
             if (!await Task.Run(() => RadioManagerCom.SetRadiosEnabled(!on)).ConfigureAwait(false))
             {
@@ -92,7 +110,7 @@ public sealed class WindowsRadioProvider : IRadioProvider
             while (DateTime.UtcNow < deadline)
             {
                 ct.ThrowIfCancellationRequested();
-                if (ReadAirplane()?.On == on && (!on || radios.All(r => r.State == RadioState.Off)))
+                if (ReadAirplane()?.On == on && (!on || radios.All(r => r.State != RadioState.On)))
                 {
                     break;
                 }
@@ -102,11 +120,17 @@ public sealed class WindowsRadioProvider : IRadioProvider
         }
         finally
         {
-            foreach (var radio in radios)
+            foreach (var radio in subscribed)
             {
-                radio.StateChanged -= OnChanged;
+                try
+                {
+                    radio.StateChanged -= OnChanged;
+                }
+                catch (Exception ex)
+                {
+                    ServiceLog.Warn($"[radios] StateChanged unsubscribe failed: {ex.Message}");
+                }
             }
-            changed.Dispose();
         }
     }
 

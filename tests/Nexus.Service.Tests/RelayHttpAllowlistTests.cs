@@ -29,6 +29,8 @@ public class RelayHttpAllowlistTests
     [InlineData("POST", "/system/power/restart")]
     [InlineData("POST", "/system/power/logout")]
     [InlineData("GET", "/system/audio/devices")]
+    [InlineData("GET", "/system/microphone")]    // not a /system/mic segment boundary, so the prefix deny does not match
+    [InlineData("GET", "/system/mic-x")]
     [InlineData("GET", "/system/volume/target")]
     [InlineData("POST", "/system/volume/target")]
     [InlineData("POST", "/system/volume/target/mute")]

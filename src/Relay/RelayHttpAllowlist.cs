@@ -85,16 +85,16 @@ public static class RelayHttpAllowlist
     };
 
     /// <summary>
-    /// Denied prefixes - every screen-mirror / capture sub-path is blocked even
-    /// though it lives under the allowed <c>/lighting/</c> prefix. The mirror
-    /// pulls a continuous high-bandwidth capture the relay must never carry.
+    /// Denied prefixes, blocked even though they sit under an allowed prefix:
+    /// every screen-mirror / capture sub-path of <c>/lighting/</c> (a continuous
+    /// high-bandwidth capture the relay must never carry), plus the panel control
+    /// center's radio and microphone routes under <c>/system/</c>.
     /// </summary>
     private static readonly string[] DeniedPrefixes =
     {
         "/lighting/screen",
-        // Panel control center. An off-LAN Airplane toggle would cut the PC's own connection.
-        "/system/radios",
-        "/system/mic",
+        "/system/radios", // an off-LAN Airplane toggle would cut the PC's own connection
+        "/system/mic", // remote mic control is not needed over the relay
     };
 
     /// <summary>
