@@ -46,13 +46,6 @@ public sealed class SleepBlackoutCoordinator
     internal static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(1500);
 
     /// <summary>
-    /// Budget for the OS-shutdown path. Under the 1500ms cap on the fast
-    /// teardown that calls it (Program.cs FastServiceShutdown), so the terminal
-    /// black frame lands inside the cap instead of being cut off by it.
-    /// </summary>
-    internal static readonly TimeSpan ShutdownBudget = TimeSpan.FromMilliseconds(1200);
-
-    /// <summary>
     /// Wall clock the ramp runs over. Short because it races the host tearing
     /// down USB: devices behind it stop receiving frames partway with no error,
     /// since the writes report success into a handle that is going away. Longer
@@ -163,10 +156,11 @@ public sealed class SleepBlackoutCoordinator
 
     /// <summary>
     /// Call inline from the service's fast teardown, on a real OS shutdown only.
-    /// Any other stop (tray quit, /service/stop, an OTA install, a GPU-change
-    /// restart) leaves lighting alone - the service comes back and repaints.
+    /// The sleep path verbatim, within the OS-shutdown teardown cap. Any other
+    /// stop (tray quit, /service/stop, an OTA install, a GPU-change restart)
+    /// leaves lighting alone - the service comes back and repaints.
     /// </summary>
-    public void OnHostShutdown() => BlankOut(ShutdownBudget, "shutdown");
+    public void OnHostShutdown() => BlankOut(Budget, "shutdown");
 
     /// <summary>
     /// Call when the session locks. Unlike every other path here nothing is

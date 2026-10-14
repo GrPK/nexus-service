@@ -305,11 +305,9 @@ public class LightingSleepBlackoutTests : IDisposable
     }
 
     [Fact]
-    public void Coordinator_ShutdownBudget_LeavesTheTerminalBlackFrameRoom()
+    public void Coordinator_Budget_FitsTheOsShutdownTeardownCap()
     {
-        // The fast teardown that calls OnHostShutdown caps every task at 1500ms;
-        // a budget at or above that would see the terminal black push cut off.
-        Assert.True(SleepBlackoutCoordinator.ShutdownBudget < TimeSpan.FromMilliseconds(1500));
+        Assert.True(SleepBlackoutCoordinator.Budget < Nexus.Service.Lifecycle.HostShutdown.OsShutdownTeardownBudget);
         Assert.True(SleepBlackoutCoordinator.FadeDuration < SleepBlackoutCoordinator.Budget);
     }
 
@@ -359,8 +357,7 @@ public class LightingSleepBlackoutTests : IDisposable
     [Fact]
     public void Coordinator_OnHostShutdown_StaysInsideItsBudget()
     {
-        // The shutdown budget is tighter than the suspend one; the black frame
-        // has to land inside it either way.
+        // Shutdown runs the sleep budget; the black frame has to land inside it.
         using var engine = new LightingEngine();
         var devices = MakeLitDevices();
         engine.UpdateDevices(devices);
@@ -370,7 +367,7 @@ public class LightingSleepBlackoutTests : IDisposable
         coordinator.OnHostShutdown();
         sw.Stop();
 
-        Assert.True(sw.Elapsed < SleepBlackoutCoordinator.ShutdownBudget,
+        Assert.True(sw.Elapsed < SleepBlackoutCoordinator.Budget,
             $"shutdown blank overran its budget at {sw.ElapsedMilliseconds}ms");
         Assert.True(engine.Blackout);
         Assert.True(engine.Blackout);
