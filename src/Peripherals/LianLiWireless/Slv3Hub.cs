@@ -1007,6 +1007,11 @@ public sealed class Slv3Hub : IDisposable
             {
                 NotePullBackLocked(key, record);
             }
+            if (!zeroMaster && !ours && _retaken.TryGetValue(key, out var live)
+                && Slv3Protocol.MacEquals(live.Master, record.MasterMac))
+            {
+                continue;
+            }
             var settled = ours && IsBoundToUsLocked(record) && record.Channel == _channel;
             var corrupted = !zeroMaster && !ours && CorruptedMasterLocked(record);
             if (!(zeroMaster || ours || corrupted) || settled)

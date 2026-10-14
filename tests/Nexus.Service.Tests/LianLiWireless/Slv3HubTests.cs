@@ -1188,6 +1188,22 @@ public class Slv3HubTests
     }
 
     [Fact]
+    public void An_unbound_sighting_between_retake_and_pull_back_does_not_start_a_second_tug()
+    {
+        var (hub, _, tx, fan, _, near, _) = RetakenChain();
+        tx.SentFrames.Clear();
+
+        for (var round = 0; round < 3; round++)
+        {
+            fan.MasterMac = new byte[6];
+            Ticks(hub, 1);
+            PullBack(hub, fan, near, Slv3Hub.RebindConfirmPolls + 2);
+        }
+
+        Assert.Equal(0, CountBindFrames(tx));
+    }
+
+    [Fact]
     public void A_neighbor_mark_lapses_and_then_allows_one_retake_per_pull_back()
     {
         var (hub, _, tx, fan, clock, near, _) = RetakenChain();
