@@ -39,6 +39,8 @@ public sealed class BulkPanelHub : IDisposable
 
     public string? Serial { get { lock (_lock) { return _hid?.Serial; } } }
 
+    public bool PipeGone { get { lock (_lock) { return _pipe?.IsGone ?? false; } } }
+
     /// <summary>
     /// Takes ownership of the pipes and runs the driver's handshake. Returns false when the
     /// panel is not usable, and disposes whatever it was handed so the caller never has to.

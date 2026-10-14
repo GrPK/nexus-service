@@ -14,7 +14,7 @@ fi
 
 OUT="${1:-.}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC="$SCRIPT_DIR/main.swift"
+SRC=("$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/streamhost.swift")
 
 if ! command -v swiftc >/dev/null 2>&1; then
     echo "[overlay-helper] swiftc not found - install Xcode Command Line Tools" >&2
@@ -31,11 +31,15 @@ swiftc -O -target arm64-apple-macos13.0 \
     -framework WebKit \
     -framework Foundation \
     -framework IOKit \
+    -framework ScreenCaptureKit \
+    -framework CoreMedia \
+    -framework CoreVideo \
+    -framework Network \
     -Xlinker -sectcreate \
     -Xlinker __TEXT \
     -Xlinker __info_plist \
     -Xlinker "$SCRIPT_DIR/Info.plist" \
-    "$SRC" -o "$OUT/nexus-overlay-helper"
+    "${SRC[@]}" -o "$OUT/nexus-overlay-helper"
 
 # Re-sign ad-hoc so the embedded Info.plist is hashed into the code-signing
 # directory.

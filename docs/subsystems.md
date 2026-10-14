@@ -169,10 +169,15 @@ support-bundle ZIP export.
 - Pairs and serves the React panel UIs for the HYTE Y70 secondary touch panel,
   the mobile companion (`/panel/phone`), and Q-series on-device screens
   (`Panel/`).
-- Streamed panels: panels rendered off-screen by the overlay's stream engine
-  and piped as H.264 to USB display devices through swappable transports
-  (`Panel/Streams/`, `/panel/streams/*`). The ArtInChip D213 reference
-  transport is dev-tools only.
+- Streamed panels: panels rendered off-screen and piped as H.264 or raw BGRA
+  frames to USB display devices through swappable transports
+  (`Panel/Streams/`, `/panel/streams/*`). The renderer is the overlay's stream
+  engine on Windows and the overlay helper on macOS
+  (`Bundled/macos/overlay-helper/streamhost.swift`: an off-screen WKWebView
+  captured by ScreenCaptureKit, raw frames only, needs the Screen Recording
+  grant). Bulk-pipe screens open over WinUSB on Windows and IOUSBHost on macOS
+  (`Peripherals/BulkPanels/`). The ArtInChip D213 reference transport is
+  dev-tools only.
 
 ## Apps and the store
 

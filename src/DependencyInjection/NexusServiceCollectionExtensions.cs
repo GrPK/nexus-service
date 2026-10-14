@@ -1240,9 +1240,9 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>()));
 
         // Bulk-pipe cooler LCDs (ASUS Ryujin, Thermalright, Lian Li Universal Screen 8.8, ZMatrices,
-        // Lian Li HydroShift II). Their pixels ride a USB bulk endpoint rather than HID, so they
-        // are reachable only where Windows has bound WinUSB; off Windows the factory is a null
-        // object and the workers simply never find a panel. Ryujin, Thermalright and the Screen
+        // Lian Li HydroShift II). Their pixels ride a USB bulk endpoint rather than HID: Windows
+        // reaches them where WinUSB is bound, macOS through IOUSBHost, and on Linux the factory
+        // is a null object so the workers never find a panel. Ryujin, Thermalright and the Screen
         // 8.8 are transcribed and untested and the Lian Li units contend with L-Connect, so
         // those default OFF.
         // Only the Windows host can create a monitor; elsewhere the setting is not offered.
@@ -1254,6 +1254,8 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.IBulkUsbPipeFactory>(_ =>
 #if WINDOWS
             new Nexus.Service.Peripherals.BulkPanels.WindowsBulkUsbPipeFactory()
+#elif MACOS
+            new Nexus.Service.Peripherals.BulkPanels.MacBulkUsbPipeFactory()
 #else
             new Nexus.Service.Peripherals.BulkPanels.NullBulkUsbPipeFactory()
 #endif
