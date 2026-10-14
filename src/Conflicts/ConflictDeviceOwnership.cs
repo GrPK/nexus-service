@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Nexus.Service.Conflicts;
 
@@ -13,6 +14,12 @@ namespace Nexus.Service.Conflicts;
 /// </summary>
 public static class ConflictDeviceOwnership
 {
+    /// <summary>Whether the app maps to any device: it claims all RGB, names a vendor, or has a curated handler in <see cref="Devices.DeviceControlPolicy"/>.</summary>
+    public static bool DeviceOverlapKnown(ConflictAppDefinition def) =>
+        def.ClaimsAllRgb
+        || def.Vendors.Length > 0
+        || Devices.DeviceControlPolicy.AllHandlersByApp().Any(g => string.Equals(g.Key, def.Id, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Catalog ids competing for an OpenRGB device with this vendor string. Empty for an empty vendor.</summary>
     public static List<string> AppIdsForVendor(string? vendor)
     {

@@ -57,4 +57,26 @@ public class ConflictDeviceOwnershipTests
             Assert.All(def.Vendors, v => Assert.False(string.IsNullOrWhiteSpace(v)));
         }
     }
+
+    [Theory]
+    [InlineData("openrgb")]
+    [InlineData("hyte-nexus-2")]
+    [InlineData("armoury-crate")]
+    [InlineData("icue")]
+    [InlineData("nzxt-cam")]
+    [InlineData("tryx-kanali")]
+    [InlineData("zmatrices")]
+    public void Overlap_is_known_for_apps_with_a_claim_vendor_or_handler(string id)
+    {
+        Assert.True(ConflictDeviceOwnership.DeviceOverlapKnown(ConflictWatcher.FindById(id)!));
+    }
+
+    [Theory]
+    [InlineData("msi-afterburner")]
+    [InlineData("asus-fan-xpert")]
+    [InlineData("corsair-link4")]
+    public void Overlap_is_unknown_for_monitoring_and_fan_apps_without_a_mapping(string id)
+    {
+        Assert.False(ConflictDeviceOwnership.DeviceOverlapKnown(ConflictWatcher.FindById(id)!));
+    }
 }

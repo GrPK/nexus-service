@@ -81,7 +81,7 @@ public sealed class Nexus2MigrationServiceTests : IDisposable
         _client.PostAsJsonAsync("/migration/nexus2/apply", new { categories, replaceCustomizedLayout });
 
     [Fact]
-    public async Task Preview_ComposesAllSevenCategoriesFromTheFixture()
+    public async Task Preview_ComposesAllEightCategoriesFromTheFixture()
     {
         var res = await _client.PostAsync("/migration/nexus2/preview", null);
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
@@ -94,7 +94,7 @@ public sealed class Nexus2MigrationServiceTests : IDisposable
         {
             byId[cat.GetProperty("id").GetString()!] = cat;
         }
-        Assert.Equal(7, byId.Count);
+        Assert.Equal(8, byId.Count);
 
         Assert.True(byId["appearance"].GetProperty("available").GetBoolean());
         Assert.Equal("#242324", byId["appearance"].GetProperty("accentColor").GetString());
@@ -119,6 +119,11 @@ public sealed class Nexus2MigrationServiceTests : IDisposable
 
         Assert.Equal(DisplayOrientations.PortraitFlipped, byId["rotation"].GetProperty("value").GetString());
         Assert.Equal("de", byId["language"].GetProperty("value").GetString());
+
+        // The fixture carries no cooling block, so there is nothing to import and the web is told why.
+        Assert.False(byId["fanCurves"].GetProperty("available").GetBoolean());
+        Assert.Equal(0, byId["fanCurves"].GetProperty("count").GetInt32());
+        Assert.Equal("noUserCurves", byId["fanCurves"].GetProperty("fanCurvesNote").GetString());
     }
 
     [Fact]

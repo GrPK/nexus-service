@@ -497,6 +497,8 @@ public sealed class DevSimEvents
                 Category = app.Category,
                 ProcessName = app.ProcessNames.FirstOrDefault() ?? app.DisplayName,
                 Pid = 0,
+                DeviceOverlapKnown = ConflictDeviceOwnership.DeviceOverlapKnown(app),
+                ClaimsAllRgb = app.ClaimsAllRgb,
             });
         }
         return list;

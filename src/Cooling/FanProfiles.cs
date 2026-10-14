@@ -334,9 +334,10 @@ public static class FanProfiles
     /// every preset check to fail on `fanIds.All(...)`.
     /// </summary>
     public static string DerivePresetFromCurves(IConfigStore store, IFanControlProvider fans)
+        => DerivePresetFromCurves(store.Load().Cooling, fans.GetFanChannels());
+
+    public static string DerivePresetFromCurves(CoolingSettings cooling, IReadOnlyList<FanChannel> channels)
     {
-        var channels = fans.GetFanChannels();
-        var settings = store.Load();
         // Pinned channels never join a preset curve (Apply excludes them), so
         // they must be excluded here too - otherwise their absence from the
         // preset curve would fail the "all fans on the preset" check and force
@@ -344,8 +345,8 @@ public static class FanProfiles
         // Uncontrolled channels are excluded for the same reason as pinned
         // ones: Apply never attaches them, so counting them would fail the
         // "all fans on the preset" check and pin the bar to "custom" forever.
-        var uncontrolled = settings.Cooling.UncontrolledFanChannels;
-        var pinOverrides = settings.Cooling.FanPinOverrides;
+        var uncontrolled = cooling.UncontrolledFanChannels;
+        var pinOverrides = cooling.FanPinOverrides;
         var fanIds = channels
             .Where(c => c.Classification != "Unresponsive"
                 && !IsPinned(c, pinOverrides)
@@ -354,7 +355,7 @@ public static class FanProfiles
             .ToHashSet();
         if (fanIds.Count == 0) return "custom";
 
-        var curves = settings.Cooling.Curves;
+        var curves = cooling.Curves;
         var attachment = new Dictionary<string, string>(); // fanId -> curveId
         foreach (var curve in curves)
         {
@@ -372,7 +373,7 @@ public static class FanProfiles
         // and then attach it to a curve via the wire-DnD, leaving a stale
         // entry that's no longer in effect. Counting those would flip a
         // perfectly-driven preset to "custom" the next time curves are saved.
-        var manualUnattached = settings.Cooling.ManualSpeeds.Keys
+        var manualUnattached = cooling.ManualSpeeds.Keys
             .Where(id => fanIds.Contains(id) && !attachment.ContainsKey(id))
             .ToHashSet();
 
@@ -385,7 +386,7 @@ public static class FanProfiles
         var pinnedDriven = channels.Any(c => c.Classification != "Unresponsive"
             && IsPinned(c, pinOverrides)
             && !uncontrolled.Contains(c.Id)
-            && (settings.Cooling.ManualSpeeds.ContainsKey(c.Id)
+            && (cooling.ManualSpeeds.ContainsKey(c.Id)
                 || curves.Any(cv => cv.Outputs.Any(o => o.Id == c.Id))));
 
         // All fans BIOS = no attachment AND no manual override.
