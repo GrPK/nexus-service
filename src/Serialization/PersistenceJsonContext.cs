@@ -8,6 +8,7 @@ using Nexus.Service.QSeries;
 namespace Nexus.Service.Serialization;
 
 [JsonSerializable(typeof(NexusSettings))]
+[JsonSerializable(typeof(CoolingSettings))]
 [JsonSerializable(typeof(TryxSettings))]
 [JsonSerializable(typeof(TryxOverlaySensorItemSettings))]
 [JsonSerializable(typeof(List<TryxOverlaySensorItemSettings>))]

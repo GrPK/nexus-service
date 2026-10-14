@@ -29,12 +29,13 @@ internal static class Nexus2MigrationRoutes
 {
     public static void MapNexus2MigrationEndpoints(this WebApplication app)
     {
-        app.MapGet("/migration/nexus2", (IConfigStore store, INexus2Detector detector) =>
+        app.MapGet("/migration/nexus2", (IConfigStore store, INexus2Detector detector, Nexus2MigrationService migration) =>
         {
             var settings = store.Load();
             var result = detector.Detect();
             var deviceEligible = IsDeviceEligible(settings);
-            var pending = result.Detected && deviceEligible && !settings.Nexus2MigrationOffered;
+            // Fan curves alone make the offer worth showing; the check reads hardware, so it runs only when nothing else already qualifies.
+            var pending = result.Detected && !settings.Nexus2MigrationOffered && (deviceEligible || migration.HasImportableFanCurves());
 
             return Results.Json(new Nexus2MigrationStatusDto
             {
@@ -145,6 +146,33 @@ public sealed class Nexus2PreviewCategoryDto
     public int? SlideshowIntervalSec { get; set; }
     // rotation / language
     public string? Value { get; set; }
+    // fanCurves (Count: importable curves)
+    public List<Nexus2FanCurvePreviewDto>? FanCurves { get; set; }
+    /// <summary>"recommendedMode" | "noUserCurves" | "coolingDisabled"; set when the category is unavailable for a reason the web explains.</summary>
+    public string? FanCurvesNote { get; set; }
+    /// <summary>Inactive Nexus 2 profiles with curves; only the active profile imports.</summary>
+    public int? OtherProfiles { get; set; }
+}
+
+public sealed class Nexus2FanCurvePreviewDto
+{
+    public string Name { get; set; } = "";
+    /// <summary>"graph" | "linear" | "flat" | "mixed".</summary>
+    public string Kind { get; set; } = "";
+    /// <summary>"import" | "skip".</summary>
+    public string Status { get; set; } = "";
+    public string? Reason { get; set; }
+    /// <summary>Points under the stop threshold were raised to it.</summary>
+    public bool MinimumRaised { get; set; }
+    public List<Nexus2FanCurveTargetPreviewDto> Targets { get; set; } = new();
+}
+
+public sealed class Nexus2FanCurveTargetPreviewDto
+{
+    /// <summary>The Nexus 3 channel's display name when resolved, else the Nexus 2 output id.</summary>
+    public string Label { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string? Reason { get; set; }
 }
 
 public sealed class Nexus2PreviewResponse
@@ -167,6 +195,8 @@ public sealed class Nexus2ApplyResultDto
     public string Status { get; set; } = "";
     /// <summary>Machine hint (e.g. "no-q60-record", "layout-customized"), not prose - the web localizes it.</summary>
     public string? Detail { get; set; }
+    /// <summary>fanCurves: curves applied.</summary>
+    public int? Count { get; set; }
 }
 
 public sealed class Nexus2ApplyResponse

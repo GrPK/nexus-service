@@ -70,7 +70,203 @@ public sealed class Nexus2MigrationService
         response.Categories.Add(BuildGallerySourcesCategory(y70));
         response.Categories.Add(BuildRotationCategory(root));
         response.Categories.Add(BuildLanguageCategory(root));
+        response.Categories.Add(BuildFanCurvesCategory(root));
         return response;
+    }
+
+    /// <summary>True when the active Nexus 2 profile holds at least one curve that would import; never throws.</summary>
+    public bool HasImportableFanCurves()
+    {
+        // The gate can flip while a cached answer is still fresh.
+        if (!_store.Load().Features.Cooling || _services.GetService<Cooling.IFanControlProvider>() is null)
+        {
+            return false;
+        }
+        lock (_fanCurveCheckLock)
+        {
+            if (_fanCurveCheck is { } cached && Environment.TickCount64 - cached.At < FanCurveCheckTtlMs)
+            {
+                return cached.Result;
+            }
+        }
+        var result = false;
+        try
+        {
+            using var read = _reader.Read();
+            result = read is not null && PlanFanCurves(read.Document.RootElement, out _, out _) is { ImportableCount: > 0 };
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[nexus2] fan curve check failed: {ex.Message}");
+        }
+        lock (_fanCurveCheckLock)
+        {
+            _fanCurveCheck = (Environment.TickCount64, result);
+        }
+        return result;
+    }
+
+    private const long FanCurveCheckTtlMs = 30_000;
+    private readonly object _fanCurveCheckLock = new();
+    private (long At, bool Result)? _fanCurveCheck;
+
+    private Nexus2FanCurvePlan? PlanFanCurves(JsonElement root, out Cooling.IFanControlProvider? fans, out IReadOnlyList<Models.Cooling.FanChannel> channels)
+    {
+        fans = _services.GetService<Cooling.IFanControlProvider>();
+        channels = Array.Empty<Models.Cooling.FanChannel>();
+        if (fans is null)
+        {
+            return null;
+        }
+        // Hardware reads must stay outside any store update.
+        var settings = _store.Load();
+        var readChannels = fans.GetFanChannels();
+        channels = readChannels;
+        var sources = fans.GetTemperatureSources();
+        var sensors = _services.GetService<Sensors.ISensorProvider>();
+        var guard = _services.GetService<Cooling.ThermalGuardController>();
+        var curves = Cooling.CoolingSnapshots.Curves(settings.Cooling);
+        var env = new Nexus2FanCurveEnvironment
+        {
+            Channels = readChannels,
+            Sources = sources,
+            CoolingEnabled = settings.Features.Cooling,
+            ThermalGuardEnabled = settings.Cooling.ThermalGuardEnabled,
+            FanRoles = Cooling.CoolingSnapshots.FanRoles(settings.Cooling),
+            ManualDriven = Cooling.CoolingSnapshots.ManualSpeeds(settings.Cooling).Keys.ToHashSet(StringComparer.Ordinal),
+            HealedChannelIds = settings.Cooling.HealedChannels.Select(h => h.Id).ToHashSet(StringComparer.Ordinal),
+            Uncontrolled = Cooling.CoolingSnapshots.Uncontrolled(settings.Cooling),
+            FanNames = Cooling.CoolingSnapshots.FanNames(settings.Cooling),
+            CpuModel = sensors?.GetCpuModelCached() ?? "",
+            BoardModel = sensors?.GetMotherboardModel() ?? "",
+            GpuModels = sensors?.GetGpuModels() ?? Array.Empty<string>(),
+            CurrentCurves = curves,
+            NexusGlobalModifier = settings.Cooling.GlobalSpeedModifier,
+            BuildLint = (candidate, scope) => guard is not null
+                ? guard.BuildLintInput(settings.Cooling, readChannels, sources, candidate, scope)
+                : new Cooling.LintInput
+                {
+                    Scope = scope,
+                    Curves = candidate,
+                    Channels = readChannels,
+                    Sources = sources,
+                    FanRoles = Cooling.CoolingSnapshots.FanRoles(settings.Cooling),
+                    ManualSpeeds = Cooling.CoolingSnapshots.ManualSpeeds(settings.Cooling),
+                    Uncontrolled = Cooling.CoolingSnapshots.Uncontrolled(settings.Cooling),
+                },
+        };
+        return Nexus2FanCurvePlanner.Build(root, env);
+    }
+
+    internal Nexus2PreviewCategoryDto BuildFanCurvesCategory(JsonElement root)
+    {
+        var cat = new Nexus2PreviewCategoryDto { Id = "fanCurves", Count = 0 };
+        try
+        {
+            if (PlanFanCurves(root, out _, out _) is not { } plan)
+            {
+                return cat;
+            }
+            cat.Count = plan.ImportableCount;
+            cat.Available = plan.ImportableCount > 0;
+            cat.FanCurvesNote = plan.Note;
+            cat.OtherProfiles = plan.OtherProfiles > 0 ? plan.OtherProfiles : null;
+            if (plan.Note is not (Nexus2FanCurveReasons.NoteRecommendedMode or Nexus2FanCurveReasons.NoteCoolingDisabled))
+            {
+                cat.FanCurves = plan.Curves.ConvertAll(c => new Nexus2FanCurvePreviewDto
+                {
+                    Name = c.Name,
+                    Kind = c.Kind,
+                    Status = c.Import ? "import" : "skip",
+                    Reason = c.Reason,
+                    MinimumRaised = c.MinimumRaised,
+                    Targets = c.Targets.ConvertAll(t => new Nexus2FanCurveTargetPreviewDto
+                    {
+                        Label = t.Label,
+                        Status = t.Import ? "import" : "skip",
+                        Reason = t.Reason,
+                    }),
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[nexus2] fan curve preview failed: {ex.Message}");
+            cat.Available = false;
+            cat.Count = 0;
+            cat.FanCurves = null;
+        }
+        return cat;
+    }
+
+    /// <summary>What the plan depends on in settings; a change between planning and writing means the plan is stale.</summary>
+    private static string CoolingFingerprint(Persistence.NexusSettings settings) =>
+        settings.Features.Cooling + "|" + Cooling.CoolingSnapshots.Retry(() => System.Text.Json.JsonSerializer.Serialize(settings.Cooling, Serialization.PersistenceJsonContext.Default.CoolingSettings));
+
+    internal Nexus2ApplyResultDto ApplyFanCurves(JsonElement root)
+    {
+        const string id = "fanCurves";
+        try
+        {
+            // A plan is only ever written whole: if settings moved while it was made, it is dropped and planned again from the current state.
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var fingerprint = CoolingFingerprint(_store.Load());
+                if (PlanFanCurves(root, out var fans, out var channels) is not { } plan || fans is null)
+                {
+                    return Fail(id, "no-cooling-provider");
+                }
+                if (plan.Note is not null)
+                {
+                    return Skip(id, plan.Note);
+                }
+                var imported = plan.Curves.Where(c => c.Import).Select(c => c.Document!).ToList();
+                if (imported.Count == 0)
+                {
+                    return Skip(id, "no-importable-curves");
+                }
+
+                var written = 0;
+                var stale = false;
+                // Curves, claimed-channel state and the preset label land in one update, so a boot-time re-apply never sees the new bindings under the old label.
+                _store.Update(s =>
+                {
+                    if (CoolingFingerprint(s) != fingerprint)
+                    {
+                        stale = true;
+                        return;
+                    }
+                    written = Nexus2FanCurveApplier.Apply(s.Cooling, imported);
+                    try
+                    {
+                        s.Cooling.ActivePreset = Cooling.FanProfiles.DerivePresetFromCurves(s.Cooling, channels);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Custom is never re-applied at boot, so it is the safe label when the derivation fails.
+                        Console.Error.WriteLine($"[nexus2] preset derivation failed: {ex.Message}");
+                        s.Cooling.ActivePreset = "custom";
+                    }
+                });
+                if (stale)
+                {
+                    continue;
+                }
+                lock (_fanCurveCheckLock)
+                {
+                    _fanCurveCheck = null;
+                }
+                return written > 0
+                    ? new Nexus2ApplyResultDto { Id = id, Status = "applied", Count = written }
+                    : Skip(id, "no-importable-curves");
+            }
+            return Skip(id, "settings-changed");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[nexus2] fan curve import failed: {ex.Message}");
+            return Fail(id, "import-failed");
+        }
     }
 
     private Nexus2PreviewCategoryDto BuildAppearanceCategory(JsonElement? y70, string configDir)
@@ -206,6 +402,7 @@ public sealed class Nexus2MigrationService
                 "gallerySources" => ApplyGallerySources(y70),
                 "rotation" => ApplyRotation(root),
                 "language" => ApplyLanguage(root),
+                "fanCurves" => ApplyFanCurves(root),
                 _ => Skip(id, "unknown-category"),
             };
             if (result.Status == "applied")
