@@ -80,11 +80,20 @@ public readonly partial record struct ShaderParamSpec(string Name, float Min, fl
     /// </summary>
     public static void Sanitize(string effect, AnimateEffectState state)
     {
-        if (!ShaderLibrary.AllEffectKeys.Contains(effect))
+        if (!ShaderLibrary.IsKnownKey(effect))
         {
             return;
         }
-        var specs = ShaderLibrary.Params(effect);
+        IReadOnlyDictionary<string, ShaderParamSpec> specs;
+        try
+        {
+            specs = ShaderLibrary.Params(effect);
+        }
+        catch (System.IO.FileNotFoundException)
+        {
+            // A custom effect deleted between the check and here is unknown.
+            return;
+        }
         if (specs.TryGetValue("u_speed", out var speedSpec))
         {
             var shaderSpeed = Clamp(speedSpec, state.Speed / 50f);
