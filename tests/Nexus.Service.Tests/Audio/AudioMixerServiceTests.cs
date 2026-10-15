@@ -462,6 +462,21 @@ public sealed class AudioMixerServiceTests
     }
 
     [Fact]
+    public void TheCapKeepsDetectedIdsAndCutsStaleOnesFromTheTail()
+    {
+        var (mixer, _, _) = Build();
+        var ids = new List<string> { "out-b", "out-a" };
+        for (var i = 0; i < 100; i++) ids.Add("stale-" + i);
+
+        mixer.SetOrder("output", ids);
+
+        var saved = mixer.ListDevices().OutputOrder;
+        Assert.Equal(AudioMixerService.MaxOrdered, saved.Count);
+        Assert.Equal(new[] { "out-b", "out-a", "stale-0" }, saved.GetRange(0, 3));
+        Assert.Equal("out-b", mixer.ListDevices().Outputs[0].Id);
+    }
+
+    [Fact]
     public void AnUnknownOrderDirectionIsRefusedAndChangesNothing()
     {
         var (mixer, _, _) = Build();

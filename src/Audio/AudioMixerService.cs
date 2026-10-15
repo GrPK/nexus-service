@@ -258,13 +258,22 @@ public sealed class AudioMixerService : IDisposable
         var isOutput = string.Equals(direction, "output", StringComparison.OrdinalIgnoreCase);
         if (!isOutput && !string.Equals(direction, "input", StringComparison.OrdinalIgnoreCase)) return false;
 
-        var clean = new List<string>();
+        var unique = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var id in ids ?? Array.Empty<string>())
         {
-            if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
-            clean.Add(id);
-            if (clean.Count >= MaxOrdered) break;
+            if (!string.IsNullOrWhiteSpace(id) && seen.Add(id)) unique.Add(id);
+        }
+        var clean = unique;
+        if (unique.Count > MaxOrdered)
+        {
+            // Detected ids always survive the cap, so a drag is never lost to a
+            // pile of stale ids; the stale ones are cut from the tail.
+            var list = _devices.ListDevices();
+            var detected = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in isOutput ? list.Outputs : list.Inputs) detected.Add(d.Id);
+            var budget = Math.Max(0, MaxOrdered - unique.FindAll(detected.Contains).Count);
+            clean = unique.FindAll(id => detected.Contains(id) || budget-- > 0);
         }
         _store.Update(s =>
         {
@@ -282,10 +291,12 @@ public sealed class AudioMixerService : IDisposable
     {
         var list = _devices.ListDevices();
         var settings = _store.Load().AudioMixer;
-        list.Outputs = SavedOrderFirst(list.Outputs, settings.OutputOrder);
-        list.Inputs = SavedOrderFirst(list.Inputs, settings.InputOrder);
-        list.OutputOrder = new List<string>(settings.OutputOrder);
-        list.InputOrder = new List<string>(settings.InputOrder);
+        var outputOrder = settings.OutputOrder;
+        var inputOrder = settings.InputOrder;
+        list.Outputs = SavedOrderFirst(list.Outputs, outputOrder);
+        list.Inputs = SavedOrderFirst(list.Inputs, inputOrder);
+        list.OutputOrder = new List<string>(outputOrder);
+        list.InputOrder = new List<string>(inputOrder);
         return list;
     }
 
