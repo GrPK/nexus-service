@@ -417,6 +417,108 @@ public sealed class AudioMixerServiceTests
         Active = true,
     };
 
+    [Fact]
+    public void SavedOrderRoundTripsThroughTheDeviceList()
+    {
+        var (mixer, _, store) = Build();
+
+        Assert.Equal("", mixer.SetOrder("output", new[] { "out-b", "out-a" }));
+        Assert.Equal("", mixer.SetOrder("input", new[] { "in-a" }));
+
+        var list = mixer.ListDevices();
+        Assert.Equal(new[] { "out-b", "out-a" }, list.OutputOrder);
+        Assert.Equal(new[] { "in-a" }, list.InputOrder);
+        Assert.Equal(new[] { "out-b", "out-a" }, store.Load().AudioMixer.OutputOrder);
+    }
+
+    [Fact]
+    public void OrderKeepsUndetectedIdsAndDropsBlanksAndRepeats()
+    {
+        var (mixer, _, _) = Build();
+
+        mixer.SetOrder("output", new[] { "gone-1", "", "out-a", "gone-1", "  " });
+
+        Assert.Equal(new[] { "gone-1", "out-a" }, mixer.ListDevices().OutputOrder);
+    }
+
+    [Fact]
+    public void SavedDevicesComeFirstInSavedOrderAndUndetectedOnesAreHidden()
+    {
+        var (mixer, _, _) = Build();
+
+        mixer.SetOrder("output", new[] { "gone", "out-b" });
+
+        var ids = mixer.ListDevices().Outputs.ConvertAll(d => d.Id);
+        Assert.Equal(new[] { "out-b", "out-a" }, ids);
+        Assert.Equal(new[] { "gone", "out-b" }, mixer.ListDevices().OutputOrder);
+    }
+
+    [Fact]
+    public void WithNoSavedOrderTheProviderOrderIsUntouched()
+    {
+        var (mixer, _, _) = Build();
+
+        Assert.Equal(new[] { "out-a", "out-b" }, mixer.ListDevices().Outputs.ConvertAll(d => d.Id));
+    }
+
+    [Fact]
+    public void TheCapKeepsDetectedIdsAndCutsStaleOnesFromTheTail()
+    {
+        var (mixer, _, _) = Build();
+        var ids = new List<string>();
+        for (var i = 0; i < 100; i++) ids.Add("stale-" + i);
+        ids.Add("out-b");
+        ids.Add("out-a");
+
+        mixer.SetOrder("output", ids);
+
+        var saved = mixer.ListDevices().OutputOrder;
+        Assert.Equal(AudioMixerService.MaxOrdered, saved.Count);
+        Assert.Equal(new[] { "stale-61", "out-b", "out-a" }, saved.GetRange(61, 3));
+        Assert.Equal("out-b", mixer.ListDevices().Outputs[0].Id);
+    }
+
+    [Fact]
+    public void OverTheCapStillTrimsWhenOnlyOneDirectionHasNoDevices()
+    {
+        var devices = new FakeDevices { NoInputs = true };
+        var mixer = new AudioMixerService(new FakeSessions(), new FakeVolume(), devices, new InMemoryConfigStore(), new MultiplexHub());
+        var ids = new List<string>();
+        for (var i = 0; i < 100; i++) ids.Add("mic-" + i);
+
+        Assert.Equal("", mixer.SetOrder("input", ids));
+
+        Assert.Equal(AudioMixerService.MaxOrdered, mixer.ListDevices().InputOrder.Count);
+    }
+
+    [Fact]
+    public void OverTheCapWithNothingDetectedRefusesAndKeepsTheSavedOrder()
+    {
+        var devices = new FakeDevices();
+        var store = new InMemoryConfigStore();
+        var mixer = new AudioMixerService(new FakeSessions(), new FakeVolume(), devices, store, new MultiplexHub());
+        mixer.SetOrder("output", new[] { "out-a" });
+        devices.Empty = true;
+        var ids = new List<string>();
+        for (var i = 0; i < 100; i++) ids.Add("id-" + i);
+
+        var error = mixer.SetOrder("output", ids);
+
+        Assert.Equal(AudioMixerService.ErrorDevicesUnavailable, error);
+        Assert.Equal(new[] { "out-a" }, store.Load().AudioMixer.OutputOrder);
+    }
+
+    [Fact]
+    public void AnUnknownOrderDirectionIsRefusedAndChangesNothing()
+    {
+        var (mixer, _, _) = Build();
+        mixer.SetOrder("output", new[] { "out-a" });
+
+        Assert.Equal(AudioMixerService.ErrorUnknownDirection, mixer.SetOrder("sideways", new[] { "x" }));
+
+        Assert.Equal(new[] { "out-a" }, mixer.ListDevices().OutputOrder);
+    }
+
     private static (AudioMixerService Mixer, FakeSessions Sessions, InMemoryConfigStore Store) Build(
         params AudioSessionDto[] sessions)
     {
@@ -461,18 +563,18 @@ public sealed class AudioMixerServiceTests
         public string DefaultOutput { get; private set; } = "out-a";
         public string DefaultInput { get; private set; } = "in-a";
 
-        public AudioDeviceList ListDevices() => new()
+        public bool Empty { get; set; }
+        public bool NoInputs { get; set; }
+
+        public AudioDeviceList ListDevices()
         {
-            Outputs =
-            {
-                new AudioDevice { Id = "out-a", Name = "Headset", IsDefault = DefaultOutput == "out-a", Direction = "output" },
-                new AudioDevice { Id = "out-b", Name = "Speakers", IsDefault = DefaultOutput == "out-b", Direction = "output" },
-            },
-            Inputs =
-            {
-                new AudioDevice { Id = "in-a", Name = "Mic", IsDefault = DefaultInput == "in-a", Direction = "input" },
-            },
-        };
+            var list = new AudioDeviceList();
+            if (Empty) return list;
+            list.Outputs.Add(new AudioDevice { Id = "out-a", Name = "Headset", IsDefault = DefaultOutput == "out-a", Direction = "output" });
+            list.Outputs.Add(new AudioDevice { Id = "out-b", Name = "Speakers", IsDefault = DefaultOutput == "out-b", Direction = "output" });
+            if (!NoInputs) list.Inputs.Add(new AudioDevice { Id = "in-a", Name = "Mic", IsDefault = DefaultInput == "in-a", Direction = "input" });
+            return list;
+        }
 
         public bool SetDefaultOutput(string deviceId) { DefaultOutput = deviceId; return true; }
         public bool SetDefaultInput(string deviceId) { DefaultInput = deviceId; return true; }

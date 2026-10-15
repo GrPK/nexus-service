@@ -80,6 +80,8 @@ public sealed class ShaderEffect : IEffect
     public float Colorize { get; set; } = 0f;
     public float Saturation { get; set; } = 1f;
     public float Contrast { get; set; } = 1f;
+    /// <summary>True once compiling or rendering failed; the canvas then keeps whatever the caller left.</summary>
+    public bool HasFailed => _failed;
     /// <summary>True once the compiled program reads a live audio uniform, so a frame depends on more than time.</summary>
     public bool ReadsAudio =>
         _uAudioLevel >= 0 || _uAudioBass >= 0 || _uAudioMid >= 0 || _uAudioHigh >= 0 || _uAudioBeat >= 0
