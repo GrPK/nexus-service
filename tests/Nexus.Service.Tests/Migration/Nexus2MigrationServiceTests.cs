@@ -157,12 +157,32 @@ public sealed class Nexus2MigrationServiceTests : IDisposable
     [Fact]
     public async Task Apply_WithoutAY70_LeavesThePanelFlagsAlone()
     {
-        var q60 = Panels.Allocate(null, new PanelDeviceCapabilities { Surface = PanelSurfaces.Q60 });
+        Panels.Allocate(null, new PanelDeviceCapabilities { Surface = PanelSurfaces.Q60 });
 
         var res = await PostApply(new[] { "q60Face" }, replaceCustomizedLayout: false);
-        Assert.True(res.IsSuccessStatusCode);
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.Equal("applied", doc.RootElement.GetProperty("results")[0].GetProperty("status").GetString());
 
-        Assert.NotNull(Panels.Get(q60.Id));
+        Assert.True(Store.Load().Panel.AlwaysOnTop);
+        Assert.True(Store.Load().Panel.ReserveMonitor);
+    }
+
+    [Fact]
+    public async Task Apply_SecondImport_LeavesTheUsersPanelFlagsAlone()
+    {
+        Panels.Allocate(null, new PanelDeviceCapabilities { Surface = PanelSurfaces.Y70 });
+        await PostApply(new[] { "y70Layout" }, replaceCustomizedLayout: false);
+        Assert.True(Store.Load().Nexus2MigrationCompleted);
+        Store.Update(s =>
+        {
+            s.Panel.AlwaysOnTop = true;
+            s.Panel.ReserveMonitor = true;
+        });
+
+        var res = await PostApply(new[] { "y70Layout" }, replaceCustomizedLayout: true);
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.Equal("applied", doc.RootElement.GetProperty("results")[0].GetProperty("status").GetString());
+
         Assert.True(Store.Load().Panel.AlwaysOnTop);
         Assert.True(Store.Load().Panel.ReserveMonitor);
     }

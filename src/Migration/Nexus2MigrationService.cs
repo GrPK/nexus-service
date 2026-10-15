@@ -437,6 +437,7 @@ public sealed class Nexus2MigrationService
 
         if (appliedAny)
         {
+            var firstImport = !_store.Load().Nexus2MigrationCompleted;
             // Double-check-under-lock, same shape as FanProfiles.SeedDefaultPresetCurves:
             // avoids a redundant write when two apply calls race.
             if (!_store.Load().Nexus2MigrationCompleted)
@@ -449,9 +450,9 @@ public sealed class Nexus2MigrationService
                     }
                 });
             }
-            if (y70Record is not null)
+            if (firstImport && y70Record is not null)
             {
-                // An upgraded Y70 starts without topmost and without evicting other windows from its monitor.
+                // Only the first Nexus 2 import with a Y70 registered; re-imports keep the user's choices.
                 _store.Update(s =>
                 {
                     s.Panel.AlwaysOnTop = false;
