@@ -342,7 +342,11 @@ public sealed class PanelDeckPolicyRouteTests : IDisposable
         var desktop = DesktopClient();
         var privileged = await desktop.PostAsJsonAsync("/deck/presets", new { templateId = "photoshop" });
         Assert.True(privileged.IsSuccessStatusCode, await privileged.Content.ReadAsStringAsync());
-        var plain = await desktop.PostAsJsonAsync("/deck/presets", new { name = "Plain" });
+        var plain = await desktop.PostAsJsonAsync("/deck/presets", new
+        {
+            name = "Plain",
+            deck = new { pages = new[] { new { slots = new object[] { new { action = new { type = "system", action = new { op = "volumeUp" } } } } } } },
+        });
         Assert.True(plain.IsSuccessStatusCode, await plain.Content.ReadAsStringAsync());
         var plainId = (await plain.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("preset").GetProperty("id").GetString();
 

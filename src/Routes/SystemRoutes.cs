@@ -214,6 +214,11 @@ public static class SystemRoutes
         app.MapPost("/system/open-task-manager", (Nexus.Service.Actions.SystemActions actions) =>
             actions.OpenTaskManager() ? ApiResponse.Ok() : ApiResponse.Fail("failed to open task manager")).AllowPanel();
 
+        // Host-side OS capture UI for the deck Screenshot / Screen Record keys
+        // on a widget; a physical deck runs the same call from its own handler.
+        app.MapPost("/system/screen-capture", async (bool? record, Nexus.Service.Actions.SystemActions actions) =>
+            await actions.OpenScreenCaptureAsync(record == true)).AllowPanel();
+
         // ── Power / session. All five are panel-reachable: the deck widget's
         // power keys run on a paired panel session. ──
         app.MapPost("/system/power/lock", (Nexus.Service.Actions.SystemActions actions) => actions.Lock() ? ApiResponse.Ok() : ApiResponse.Fail("lock failed")).AllowPanel();
