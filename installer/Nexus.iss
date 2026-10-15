@@ -105,11 +105,12 @@ UninstalledMost=%1 uninstall complete.%n%nA few files were still in use and will
 ; and UnlockTarget have cleared every lock of ours, so what remains is almost
 ; always antivirus quarantining a payload file or blocking it from running.
 #define AntivirusCause "Antivirus software blocking Nexus by mistake (a false positive) is the usual cause."
+#define AntivirusDocsUrl "https://hellonexus.com/docs/troubleshooting/antivirus"
 #define AntivirusFix "Open your antivirus, restore the file above from its quarantine, add an exception for the Nexus folder"
-ErrorCreatingTemp=Setup could not save this file. {#AntivirusCause}%n%n{#AntivirusFix}, then click Try again.%n%nDetails:
-ErrorRenamingTemp=Setup could not save this file. {#AntivirusCause}%n%n{#AntivirusFix}, then click Try again.%n%nDetails:
-ErrorReplacingExistingFile=Setup could not replace this file. {#AntivirusCause}%n%n{#AntivirusFix}, then click Try again.%n%nDetails:
-ErrorExecutingProgram=Setup could not run this file:%n%1%n%n{#AntivirusCause}%n%n{#AntivirusFix}, then run Setup again.
+ErrorCreatingTemp=Setup could not save this file. {#AntivirusCause}%n%n{#AntivirusFix}, then click Try again.%n%nMore information: {#AntivirusDocsUrl}%n%nDetails:
+ErrorRenamingTemp=Setup could not save this file. {#AntivirusCause}%n%n{#AntivirusFix}, then click Try again.%n%nMore information: {#AntivirusDocsUrl}%n%nDetails:
+ErrorReplacingExistingFile=Setup could not replace this file. {#AntivirusCause}%n%n{#AntivirusFix}, then click Try again.%n%nMore information: {#AntivirusDocsUrl}%n%nDetails:
+ErrorExecutingProgram=Setup could not run this file:%n%1%n%n{#AntivirusCause}%n%n{#AntivirusFix}, then run Setup again.%n%nMore information: {#AntivirusDocsUrl}
 
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; BeforeInstall: UnlockTarget
@@ -548,18 +549,26 @@ end;
 function AntivirusBlockedPrompt(): Integer;
 var
   Btns: TArrayOfString;
+  ErrCode: Integer;
 begin
-  SetArrayLength(Btns, 2);
+  SetArrayLength(Btns, 3);
   Btns[0] := 'Try again';
-  Btns[1] := 'Close';
-  Result := SuppressibleTaskDialogMsgBox('Your antivirus blocked Nexus',
-    'Nexus.exe was blocked while Setup was installing it. This is almost always '
-    + 'antivirus software quarantining it by mistake (a false positive). Nexus is digitally signed and safe.'#13#10#13#10
-    + 'To finish installing:'#13#10
-    + '  1. Open your antivirus and find Nexus.exe in its quarantine or protection history.'#13#10
-    + '  2. Restore it, and add an exception for ' + ExpandConstant('{app}') + '.'#13#10
-    + '  3. Click Try again.',
-    mbError, MB_RETRYCANCEL, Btns, 0, IDCANCEL);
+  Btns[1] := 'Learn more';
+  Btns[2] := 'Close';
+  repeat
+    Result := SuppressibleTaskDialogMsgBox('Your antivirus blocked Nexus',
+      'Nexus.exe was blocked while Setup was installing it. This is almost always '
+      + 'antivirus software quarantining it by mistake (a false positive). Nexus is digitally signed and safe.'#13#10#13#10
+      + 'To finish installing:'#13#10
+      + '  1. Open your antivirus and find Nexus.exe in its quarantine or protection history.'#13#10
+      + '  2. Restore it, and add an exception for ' + ExpandConstant('{app}') + '.'#13#10
+      + '  3. Click Try again.',
+      mbError, MB_YESNOCANCEL, Btns, 0, IDCANCEL);
+    if Result = IDNO then
+      ShellExecAsOriginalUser('open', '{#AntivirusDocsUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
+  until Result <> IDNO;
+  if Result = IDYES then
+    Result := IDRETRY;
 end;
 
 function PayloadInstalled(): Boolean;
