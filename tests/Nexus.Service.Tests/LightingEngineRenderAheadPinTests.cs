@@ -103,11 +103,19 @@ public class LightingEngineRenderAheadPinTests
         public async Task WaitFrames(int frames)
         {
             var seen = 0;
-            Engine.OnFrame += _ => Interlocked.Increment(ref seen);
-            var end = Environment.TickCount64 + 5000;
-            while (Volatile.Read(ref seen) < frames && Environment.TickCount64 < end)
+            Action<ReadOnlyMemory<byte>> handler = _ => Interlocked.Increment(ref seen);
+            Engine.OnFrame += handler;
+            try
             {
-                await Task.Delay(5);
+                var end = Environment.TickCount64 + 5000;
+                while (Volatile.Read(ref seen) < frames && Environment.TickCount64 < end)
+                {
+                    await Task.Delay(5);
+                }
+            }
+            finally
+            {
+                Engine.OnFrame -= handler;
             }
         }
 
@@ -160,7 +168,7 @@ public class LightingEngineRenderAheadPinTests
     }
 
     [Fact]
-    public async Task A_source_that_reads_live_input_forces_live_and_never_drops_a_window()
+    public async Task A_source_that_reads_live_input_forces_live()
     {
         using var rig = new Rig(new RampEffect());
         rig.Build = _ => new LiveInputEffect();
@@ -292,17 +300,89 @@ public class LightingEngineRenderAheadPinTests
     }
 
     [Fact]
-    public async Task Swapping_the_flat_global_restarts_the_settle_window_and_shader_to_flat_never_rolls_alone()
+    public async Task Swapping_the_global_restarts_the_settle_window_of_a_chain_that_follows_it()
     {
         using var rig = new Rig();
         rig.Build = _ => new TickRedEffect();
         rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
-        Assert.True(await rig.RollsEventually("d-0"));
+        Assert.True(await rig.RollsEventually("d-0", "d-1"));
         rig.Engine.SetEffect(new FlatColorEffect(1, 2, 3));
-        Assert.True(await rig.BecomesFalse("d-0"));
-        Assert.True(await rig.RollsEventually("d-0"));
+        Assert.True(await rig.BecomesFalse("d-0", "d-1"));
+        Assert.True(await rig.RollsEventually("d-0", "d-1"));
         rig.Engine.SetEffect(new RampEffect());
+        Assert.True(await rig.BecomesFalse("d-0", "d-1"));
+        Assert.True(await rig.RollsEventually("d-0", "d-1"));
+    }
+
+    // Stands for a global that reads live input (screen, media, audio). Counts renders at far-future ticks.
+    private sealed class SpyGlobal : IEffect
+    {
+        public int AheadRenders;
+        public string Name => "spyglobal";
+        public void RenderFrame(CanvasBuffer canvas, double tickMs)
+        {
+            if (tickMs < 100_000) Interlocked.Increment(ref AheadRenders);
+            canvas.Fill(9, 9, 9);
+        }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task A_chain_pinned_entirely_to_clock_only_sources_rolls_under_a_live_global_without_rendering_it()
+    {
+        var spy = new SpyGlobal();
+        using var rig = new Rig(spy);
+        rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
+        rig.Pins.Set("d-1", new DevicePin { Kind = DevicePinKinds.Static, Color = "#010203" });
+        var frames = await rig.Window(new long[] { 10, 20 }, "d-0", "d-1");
+        Assert.Equal(new byte[] { 10, 0, 0 }, Led(frames[0][0], 0));
+        Assert.Equal(new byte[] { 20, 0, 0 }, Led(frames[1][0], 0));
+        Assert.Equal(new byte[] { 1, 2, 3 }, Led(frames[0][1], 0));
+        Assert.Equal(0, Volatile.Read(ref spy.AheadRenders));
+    }
+
+    [Fact]
+    public async Task A_zone_that_follows_a_live_global_forces_the_chain_live()
+    {
+        using var rig = new Rig(new SpyGlobal());
+        rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
+        Assert.True(await rig.RollsEventually("d-0"));
+        await rig.WaitFrames(40);
+        // d-1 has no pin and follows the global.
+        Assert.False(rig.Can("d-0", "d-1"));
+        Assert.False(rig.Can("d-1"));
+        // A pin to the running global effect shows the global too.
+        rig.Pins.Set("d-1", Pin(DevicePinKinds.Animate, "spyglobal"));
+        await rig.WaitFrames(40);
+        Assert.False(rig.Can("d-1"));
+        Assert.True(rig.Can("d-0"));
+    }
+
+    [Fact]
+    public async Task Swapping_the_global_leaves_a_fully_pinned_chain_rolling()
+    {
+        using var rig = new Rig(new RampEffect());
+        rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
+        Assert.True(await rig.RollsEventually("d-0"));
+        rig.Engine.SetEffect(new SpyGlobal());
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.True(rig.Can("d-0"));
+            await rig.WaitFrames(2);
+        }
+    }
+
+    [Fact]
+    public async Task Removing_a_pin_settles_the_zone_and_the_tombstone_expiring_keeps_its_window_signature()
+    {
+        using var rig = new Rig(new RampEffect());
+        rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
+        Assert.True(await rig.RollsEventually("d-0", "d-1"));
+        rig.Pins.Clear("d-0");
         Assert.True(await rig.BecomesFalse("d-0"));
         Assert.True(await rig.RollsEventually("d-0"));
+        var req = rig.Engine.RequestAhead(new[] { "d-0", "d-2" }, new long[] { 1, 2, 3 });
+        Assert.True(req.Done.Wait(TimeSpan.FromSeconds(5)));
+        Assert.NotNull(req.Frames);
     }
 }
