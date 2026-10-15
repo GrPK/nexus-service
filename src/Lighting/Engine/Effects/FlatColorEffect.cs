@@ -1,7 +1,7 @@
 namespace Nexus.Service.Lighting.Engine.Effects;
 
 /// <summary>One flat color over the whole canvas: the global Static look when the user picks an exact color. Needs no GPU.</summary>
-public sealed class FlatColorEffect : IEffect
+public sealed class FlatColorEffect : IClockOnlyEffect
 {
     private readonly byte _r, _g, _b;
 
