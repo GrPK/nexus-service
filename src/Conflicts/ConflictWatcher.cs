@@ -82,7 +82,6 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     /// <summary>Every catalog app running at the last scan, before the pillar filter.</summary>
     private volatile IReadOnlyList<DetectedConflict> _all = Array.Empty<DetectedConflict>();
 
-
     /// <summary>Set of conflict ids currently detected. Used to detect changes.</summary>
     private string[] _lastDetectedIds = Array.Empty<string>();
 
