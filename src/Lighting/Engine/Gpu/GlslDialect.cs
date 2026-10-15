@@ -37,4 +37,71 @@ internal static class GlslDialect
 
     /// <summary>The source for the given context: ES gets the rewrite, desktop GL is untouched.</summary>
     public static string For(bool es, string source) => es ? ToEs300(source) : source;
+
+    // ES 3.00 keeps no implicit int to float conversion, which 3.30 allows.
+    // Lines that declare or compute with integers are left alone.
+    private static readonly Regex IntegerTypedLine = new(
+        @"\b(?:int|uint|ivec[234]|uvec[234]|for|while|switch|case|layout|const\s+int)\b|%|<<|>>",
+        RegexOptions.CultureInvariant);
+
+    private static readonly Regex IntLiteral = new(@"(?<![\w.])\d+(?![\w.])", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A conservative rewrite of integer literals to floats (<c>pow(x, 2)</c>,
+    /// <c>max(v, 0)</c>, <c>float k = 1;</c>, <c>x * 2</c>) for the ES retry. It skips
+    /// preprocessor lines, any line that mentions an integer type, loop or
+    /// integer operator, and anything inside brackets, so index and loop-bound
+    /// code is untouched. The caller keeps the result only if it compiles.
+    /// </summary>
+    public static string FixIntLiteralsForEs(string source)
+    {
+        var lines = source.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var comment = line.IndexOf("//", StringComparison.Ordinal);
+            var code = comment >= 0 ? line[..comment] : line;
+            if (code.TrimStart().StartsWith('#') || IntegerTypedLine.IsMatch(code))
+            {
+                continue;
+            }
+            var fixedCode = IntLiteral.Replace(code, m =>
+            {
+                var depth = 0;
+                for (var k = 0; k < m.Index; k++)
+                {
+                    if (code[k] == '[')
+                    {
+                        depth++;
+                    }
+                    else if (code[k] == ']')
+                    {
+                        depth--;
+                    }
+                }
+                return depth > 0 ? m.Value : m.Value + ".0";
+            });
+            lines[i] = comment >= 0 ? fixedCode + line[comment..] : fixedCode;
+        }
+        return string.Join('\n', lines);
+    }
+
+    private static readonly Regex EsUnsupported = new(
+        @"\b(?:sampler1D\w*|sampler2DRect\w*|sampler2DMS\w*|texture1D\w*|texture2D|gl_FragColor|gl_FragData|double|dvec[234]|dmat\w+|fma|bitCount|bitfieldExtract|bitfieldInsert|bitfieldReverse|findLSB|findMSB|noise[1-4]|gl_ClipDistance|imageLoad|imageStore|subroutine)\b|#\s*extension\b",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>The first desktop-only construct in a user-authored source that an ES 3.00 context cannot compile, or null. Checked wherever user effects are validated so every platform refuses what Windows cannot run.</summary>
+    public static string? EsIncompatibility(string source)
+    {
+        var sb = new System.Text.StringBuilder(source.Length);
+        foreach (var line in source.Split('\n'))
+        {
+            var c = line.IndexOf("//", StringComparison.Ordinal);
+            sb.Append(c >= 0 ? line[..c] : line).Append('\n');
+        }
+        var m = EsUnsupported.Match(sb.ToString());
+        return m.Success
+            ? $"'{m.Value}' is not available in OpenGL ES 3.00, which the lighting renderer uses on Windows"
+            : null;
+    }
 }

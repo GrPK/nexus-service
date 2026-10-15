@@ -63,11 +63,11 @@ internal static class AppBootstrap
                     var losses = 0;
                     gpu.ContextLost += g =>
                     {
-                        if (Interlocked.Increment(ref losses) > 5)
+                        if (Interlocked.Increment(ref losses) > Nexus.Service.Lighting.Engine.Gpu.GpuInitRetry.MaxContextLossRecreates)
                         {
+                            GpuContext.Log("[gpu] context lost again; the re-create budget for this session is spent");
                             return;
                         }
-                        Thread.Sleep(2000);
                         if (!g.RearmAfterLatch())
                         {
                             return;

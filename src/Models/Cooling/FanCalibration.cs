@@ -71,6 +71,10 @@ public sealed class LightingStatusResponse
     /// so a client can offer the render-GPU picker as a fix rather than a dead
     /// end. Windows-only: the DXGI enumeration behind it is empty elsewhere.</summary>
     public bool GpuCanSwitch { get; set; }
+    /// <summary>GL_RENDERER of the shader context, empty until one is up. Lets support see which backend and card (or WARP) is rendering.</summary>
+    public string GpuRenderer { get; set; } = "";
+    /// <summary>True when shader lighting runs on the CPU (ANGLE WARP) because no GPU produced a context.</summary>
+    public bool GpuSoftware { get; set; }
 }
 
 public sealed class GetCalibrationsResponse

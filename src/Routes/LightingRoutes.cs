@@ -208,6 +208,8 @@ public static class LightingRoutes
                 // offers a shortcut to a control that will not be there. Cached:
                 // GetGpus() runs a full LHM refresh and this is polled.
                 GpuCanSwitch = MultiGpuCache.Value(sp),
+                GpuRenderer = gpu is { Available: true } ? gpu.Renderer ?? "" : "",
+                GpuSoftware = gpu is { Available: true, IsWarp: true },
             };
         }).AllowPanel();
         // Master brightness slider: caps every LED channel before it leaves the

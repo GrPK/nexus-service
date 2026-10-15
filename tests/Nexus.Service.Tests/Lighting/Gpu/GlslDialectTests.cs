@@ -64,4 +64,50 @@ public class GlslDialectTests
 
         Assert.EndsWith(body, GlslDialect.ToEs300("#version 330 core\n" + body));
     }
+
+    [Theory]
+    [InlineData("float k = 1;", "float k = 1.0;")]
+    [InlineData("float a = pow(x, 2);", "float a = pow(x, 2.0);")]
+    [InlineData("float a = max(v, 0);", "float a = max(v, 0.0);")]
+    [InlineData("vec3 c = vec3(1, 0, 0);", "vec3 c = vec3(1.0, 0.0, 0.0);")]
+    [InlineData("float h = x * 2 + 3.5e2;", "float h = x * 2.0 + 3.5e2;")]
+    public void Integer_literals_in_float_contexts_become_floats(string line, string expected)
+    {
+        Assert.Equal(expected, GlslDialect.FixIntLiteralsForEs(line));
+    }
+
+    [Theory]
+    [InlineData("for (int i = 0; i < 4; i++) {")]
+    [InlineData("int n = 3;")]
+    [InlineData("float a = u_arr[2];")]
+    [InlineData("int m = k % 2;")]
+    [InlineData("#define COUNT 4")]
+    [InlineData("uint h = 3u;")]
+    [InlineData("float a = 0x10 + 1e3 + 2.0;")]
+    [InlineData("float a = x; // pow(x, 2)")]
+    public void Integer_contexts_and_non_decimal_numbers_are_left_alone(string line)
+    {
+        Assert.Equal(line, GlslDialect.FixIntLiteralsForEs(line));
+    }
+
+    [Theory]
+    [InlineData("float d = texture2D(t, uv).r;")]
+    [InlineData("uniform sampler1D t;")]
+    [InlineData("gl_FragColor = vec4(1.0);")]
+    [InlineData("double x = 1.0;")]
+    [InlineData("float v = fma(a, b, c);")]
+    [InlineData("#extension GL_ARB_foo : enable")]
+    public void Desktop_only_constructs_are_refused(string line)
+    {
+        Assert.NotNull(GlslDialect.EsIncompatibility("#version 330 core\n" + line + "\n"));
+    }
+
+    [Theory]
+    [InlineData("float v = fract(sin(x) * 43758.5);")]
+    [InlineData("// texture2D was removed\nfloat v = 1.0;")]
+    [InlineData("float doubled = 2.0; float fmax_ = 1.0;")]
+    public void Portable_sources_are_accepted(string body)
+    {
+        Assert.Null(GlslDialect.EsIncompatibility("#version 330 core\n" + body + "\n"));
+    }
 }

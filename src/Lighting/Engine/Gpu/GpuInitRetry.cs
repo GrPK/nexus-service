@@ -17,6 +17,9 @@ internal static class GpuInitRetry
     /// creation leaks.</summary>
     public const int MaxLatchRearms = 8;
 
+    /// <summary>How many times a lost GL context is re-created within one process before it stays down until restart, so a flapping device cannot loop.</summary>
+    public const int MaxContextLossRecreates = 5;
+
     public static TimeSpan DelayFor(int attempt) => attempt switch
     {
         <= 1 => TimeSpan.FromSeconds(30),

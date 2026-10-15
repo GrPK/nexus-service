@@ -408,10 +408,17 @@ public sealed class ShaderEffect : IEffect
     /// <summary>
     /// Compile and link a fragment source on the GL thread without keeping the
     /// program. Returns the driver's info log on failure, null when it links or
-    /// when no GPU context is available to check with.
+    /// when no GPU context is available to check with. Sources the ES rules
+    /// cannot run are refused on every platform, so Studio and the custom
+    /// editor reject on a Mac what a Windows ANGLE context would not compile.
     /// </summary>
     public static string? ValidateFragment(GpuContext ctx, string fragSource)
     {
+        var incompatible = GlslDialect.EsIncompatibility(fragSource);
+        if (incompatible is not null)
+        {
+            return incompatible;
+        }
         if (!ctx.Available)
         {
             return null;
@@ -420,50 +427,13 @@ public sealed class ShaderEffect : IEffect
         ctx.Invoke(() =>
         {
             var gl = ctx.Gl;
-            uint vs = 0, fs = 0, prog = 0;
-            try
+            error = BuildOnce(gl, ctx.IsEs, fragSource);
+            if (error is not null && ctx.IsEs)
             {
-                vs = gl.CreateShader(ShaderType.VertexShader);
-                gl.ShaderSource(vs, GlslDialect.For(ctx.IsEs, VertexShaderSrc));
-                gl.CompileShader(vs);
-                gl.GetShader(vs, ShaderParameterName.CompileStatus, out int vsOk);
-                if (vsOk == 0)
+                var fixedSrc = GlslDialect.FixIntLiteralsForEs(fragSource);
+                if (fixedSrc != fragSource && BuildOnce(gl, true, fixedSrc) is null)
                 {
-                    error = gl.GetShaderInfoLog(vs);
-                    return;
-                }
-                fs = gl.CreateShader(ShaderType.FragmentShader);
-                gl.ShaderSource(fs, GlslDialect.For(ctx.IsEs, fragSource));
-                gl.CompileShader(fs);
-                gl.GetShader(fs, ShaderParameterName.CompileStatus, out int fsOk);
-                if (fsOk == 0)
-                {
-                    error = gl.GetShaderInfoLog(fs);
-                    return;
-                }
-                prog = gl.CreateProgram();
-                gl.AttachShader(prog, vs);
-                gl.AttachShader(prog, fs);
-                gl.LinkProgram(prog);
-                gl.GetProgram(prog, GLEnum.LinkStatus, out int linkOk);
-                if (linkOk == 0)
-                {
-                    error = gl.GetProgramInfoLog(prog);
-                }
-            }
-            finally
-            {
-                if (prog != 0)
-                {
-                    gl.DeleteProgram(prog);
-                }
-                if (vs != 0)
-                {
-                    gl.DeleteShader(vs);
-                }
-                if (fs != 0)
-                {
-                    gl.DeleteShader(fs);
+                    error = null;
                 }
             }
         });
@@ -474,10 +444,94 @@ public sealed class ShaderEffect : IEffect
         return error;
     }
 
+    private static string? BuildOnce(GL gl, bool es, string fragSource)
+    {
+        string? error = null;
+        uint vs = 0, fs = 0, prog = 0;
+        try
+        {
+            vs = gl.CreateShader(ShaderType.VertexShader);
+            gl.ShaderSource(vs, GlslDialect.For(es, VertexShaderSrc));
+            gl.CompileShader(vs);
+            gl.GetShader(vs, ShaderParameterName.CompileStatus, out int vsOk);
+            if (vsOk == 0)
+            {
+                return gl.GetShaderInfoLog(vs);
+            }
+            fs = gl.CreateShader(ShaderType.FragmentShader);
+            gl.ShaderSource(fs, GlslDialect.For(es, fragSource));
+            gl.CompileShader(fs);
+            gl.GetShader(fs, ShaderParameterName.CompileStatus, out int fsOk);
+            if (fsOk == 0)
+            {
+                return gl.GetShaderInfoLog(fs);
+            }
+            prog = gl.CreateProgram();
+            gl.AttachShader(prog, vs);
+            gl.AttachShader(prog, fs);
+            gl.LinkProgram(prog);
+            gl.GetProgram(prog, GLEnum.LinkStatus, out int linkOk);
+            if (linkOk == 0)
+            {
+                error = gl.GetProgramInfoLog(prog);
+            }
+        }
+        finally
+        {
+            if (prog != 0)
+            {
+                gl.DeleteProgram(prog);
+            }
+            if (vs != 0)
+            {
+                gl.DeleteShader(vs);
+            }
+            if (fs != 0)
+            {
+                gl.DeleteShader(fs);
+            }
+        }
+        return error;
+    }
+
+    /// <summary>
+    /// Fragment compile for the render path. A source authored against desktop
+    /// GLSL that ES rejects (an integer literal where a float is expected) gets
+    /// one retry with those literals made floats, so effects saved before the
+    /// ANGLE switch keep running; when the retry fails too the original error stands.
+    /// </summary>
+    private static uint CompileFragment(GL gl, bool es, string src)
+    {
+        InvalidOperationException first;
+        try
+        {
+            return CompileShader(gl, ShaderType.FragmentShader, GlslDialect.For(es, src));
+        }
+        catch (InvalidOperationException ex) when (es)
+        {
+            first = ex;
+        }
+        var fixedSrc = GlslDialect.FixIntLiteralsForEs(src);
+        if (fixedSrc == src)
+        {
+            throw first;
+        }
+        try
+        {
+            var fs = CompileShader(gl, ShaderType.FragmentShader, GlslDialect.For(true, fixedSrc));
+            GpuContext.Log("[gpu] shader compiled for ES only after widening integer literals to floats");
+            return fs;
+        }
+        catch (InvalidOperationException)
+        {
+            throw first;
+        }
+    }
+
     private void CompileProgram(GL gl)
     {
         uint vs = CompileShader(gl, ShaderType.VertexShader, GlslDialect.For(_ctx.IsEs, VertexShaderSrc));
-        uint fs = CompileShader(gl, ShaderType.FragmentShader, GlslDialect.For(_ctx.IsEs, _fragSource));
+        uint fs = CompileFragment(gl, _ctx.IsEs, _fragSource);
         uint prog = gl.CreateProgram();
         gl.AttachShader(prog, vs);
         gl.AttachShader(prog, fs);

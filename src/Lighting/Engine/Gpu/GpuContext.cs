@@ -64,7 +64,9 @@ public sealed class GpuContext : IDisposable
     // thread that created them, so every GL call must marshal to this one
     // thread via Invoke().
     private Thread? _glThread;
-    private readonly BlockingCollection<Action> _workQueue = new(new ConcurrentQueue<Action>());
+    // One queue per GL thread: a lost context completes its queue so a late Invoke
+    // fails fast instead of parking on an item nobody will take.
+    private BlockingCollection<Action> _workQueue = new(new ConcurrentQueue<Action>());
     private readonly ManualResetEventSlim _initDone = new(false);
     // Set only when an attempt actually produced a context. _initDone is also
     // set by a failure or an abandon, so a late-landing watcher needs its own
@@ -79,7 +81,7 @@ public sealed class GpuContext : IDisposable
 
     /// <summary>Backend to use in place of the stored one. Set by the probe
     /// child, which runs with no config store.</summary>
-    public string? BackendOverride { get; init; }
+    public string? BackendOverride { get; set; }
 
     /// <summary>ANGLE only: render on this DXGI adapter ("high:low" LUID as GpuAdapterLuids formats it), in place of the render-GPU setting.</summary>
     public string? AdapterLuid { get; init; }
@@ -262,7 +264,9 @@ public sealed class GpuContext : IDisposable
         }
 
         _initStarted = true;
-        _glThread = new Thread(GlThreadMain) { IsBackground = true, Name = "nexus-gl" };
+        var queue = new BlockingCollection<Action>(new ConcurrentQueue<Action>());
+        _workQueue = queue;
+        _glThread = new Thread(() => GlThreadMain(queue)) { IsBackground = true, Name = "nexus-gl" };
         _glThread.Start();
     }
 
@@ -357,11 +361,11 @@ public sealed class GpuContext : IDisposable
         }
     }
 
-    private void GlThreadMain()
+    private void GlThreadMain(BlockingCollection<Action> queue)
     {
         try
         {
-            RunGlThread();
+            RunGlThread(queue);
         }
         finally
         {
@@ -372,7 +376,7 @@ public sealed class GpuContext : IDisposable
         }
     }
 
-    private void RunGlThread()
+    private void RunGlThread(BlockingCollection<Action> queue)
     {
         try
         { _initAction(); }
@@ -406,16 +410,21 @@ public sealed class GpuContext : IDisposable
         {
             Action work;
             try
-            { work = _workQueue.Take(); }
+            { work = queue.Take(); }
             catch (InvalidOperationException) { return; }
             try
             { work(); }
             catch (Exception ex) { Log($"[gpu] work item threw: {ex}"); }
         }
 
-        // A lost context leaves callers parked in Invoke; their items run against
-        // the dead context (each throws or no-ops) so every waiter is released.
-        while (_workQueue.TryTake(out var pending))
+        // A lost context leaves callers parked in Invoke. Completing the queue first
+        // means nothing can be added past the drain below (a late Add throws and
+        // Invoke returns), so every item that did get in runs against the dead
+        // context (each throws or no-ops) and its waiter is released.
+        try
+        { queue.CompleteAdding(); }
+        catch (ObjectDisposedException) { }
+        while (queue.TryTake(out var pending))
         {
             try
             { pending(); }
@@ -443,8 +452,14 @@ public sealed class GpuContext : IDisposable
             _initError = new InvalidOperationException($"GL context lost: {reason}");
         }
         Log($"[gpu] context lost ({reason}); re-creating");
+        // Wakes a GL thread blocked waiting for work and refuses any later Invoke.
+        try
+        { _workQueue.CompleteAdding(); }
+        catch (ObjectDisposedException) { }
         var thread = _glThread;
         var handler = ContextLost;
+        // A driver reset can renumber adapters; the cached enumeration would hand back stale LUIDs.
+        Nexus.Service.Sensors.GpuAdapterLuids.Invalidate();
         new Thread(() =>
         {
             if (thread is not null && !thread.Join(TimeSpan.FromSeconds(10)))
@@ -460,6 +475,41 @@ public sealed class GpuContext : IDisposable
             handler?.Invoke(this);
         })
         { IsBackground = true, Name = "nexus-gpu-lost" }.Start();
+    }
+
+    /// <summary>
+    /// Stop a running WARP context so hardware can be tried again: the same exit
+    /// a lost context takes, minus the <see cref="ContextLost"/> event. False when
+    /// the context is not on WARP or its thread would not exit.
+    /// </summary>
+    public bool RetireWarp()
+    {
+        Thread? thread;
+        lock (_lock)
+        {
+            if (_disposed || !_ready || !IsWarp || _lostExit)
+            {
+                return false;
+            }
+            _lostExit = true;
+            _ready = false;
+            _failed = true;
+            _initError = new InvalidOperationException("retired WARP context");
+            thread = _glThread;
+        }
+        // Wake the thread out of its blocking Take.
+        try
+        { _workQueue.CompleteAdding(); }
+        catch (ObjectDisposedException) { }
+        if (thread is not null && !thread.Join(TimeSpan.FromSeconds(10)))
+        {
+            lock (_lock)
+            {
+                _abandoned = true;
+            }
+            return false;
+        }
+        return true;
     }
 
     /// <summary>ES only, on the GL thread after a frame: true (and the loss is reported) when ANGLE signals the device is gone, via GL_CONTEXT_LOST or EGL_CONTEXT_LOST.</summary>
@@ -550,13 +600,21 @@ public sealed class GpuContext : IDisposable
         Exception? caught = null;
         var done = _invokeDone.Value!;
         done.Reset();
-        _workQueue.Add(() =>
+        try
         {
-            try
-            { work(); }
-            catch (Exception ex) { caught = ex; }
-            finally { done.Set(); }
-        });
+            _workQueue.Add(() =>
+            {
+                try
+                { work(); }
+                catch (Exception ex) { caught = ex; }
+                finally { done.Set(); }
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            // The queue was completed: the context is lost or disposed, so the work is dropped.
+            return;
+        }
         done.Wait();
         if (caught is not null)
         {
@@ -682,8 +740,6 @@ public sealed class GpuContext : IDisposable
         Log($"[gpu] OpenGL context ready ({_width}x{_height})");
     }
 
-    // Compiled out entirely unless this is a DEV_TOOLS build, so a release binary
-    // carries neither the behaviour nor the variable names.
 #if !MACOS && !LINUX
     /// <summary>Create the ES context through ANGLE on the adapter the render-GPU choice maps to, or WARP.</summary>
     [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_gl))]
@@ -725,8 +781,18 @@ public sealed class GpuContext : IDisposable
         var pickMs = sw.ElapsedMilliseconds;
         _isEs = true;
         _isWarp = target.Warp;
-        _angle = AngleContext.CreateAndMakeCurrent(target, _width, _height);
-        _gl = GL.GetApi(new AngleNativeContext());
+        try
+        {
+            _angle = AngleContext.CreateAndMakeCurrent(target, _width, _height);
+            _gl = GL.GetApi(new AngleNativeContext());
+        }
+        catch (Exception)
+        {
+            // A failed attempt must not leave the next one (possibly WGL) reading ES state.
+            _isEs = false;
+            _isWarp = false;
+            throw;
+        }
         Log($"[gpu] context init: ANGLE D3D11 ES 3.0 on '{target.Description}'"
             + (target.Warp ? " (WARP software rasterizer, CPU rendering)" : "")
             + $", adapter pick {pickMs}ms, context {sw.ElapsedMilliseconds - pickMs}ms");
