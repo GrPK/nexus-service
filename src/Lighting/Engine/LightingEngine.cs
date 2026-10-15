@@ -1182,15 +1182,16 @@ public sealed class LightingEngine : IDisposable
     }
 
     // Shaders that read no audio and the clock-only effects depend on the clock and their settings alone.
+    // A shader that failed leaves its canvas as it was, so it is not a source to pre-render.
     private static bool IsTimePure(IEffect? effect) =>
-        effect is Effects.IClockOnlyEffect or Gpu.ShaderEffect { ReadsAudio: false };
+        effect is Effects.IClockOnlyEffect or Gpu.ShaderEffect { ReadsAudio: false, HasFailed: false };
 
-    // A pinned source that failed to build or render shows the base canvas, as it does live.
+    // A pinned source that failed to build or render shows the base canvas, as it does live. A shader that failed
+    // without throwing keeps its stale canvas live, so IsTimePure rejects it and the chain stays live.
     private static bool PinSourceRendering(PinRender render, out IEffect fx)
     {
         fx = render.Effect!;
-        return !render.Failed && render.Rendered && render.Effect is not null
-            && render.Effect is not Gpu.ShaderEffect { HasFailed: true };
+        return !render.Failed && render.Rendered && render.Effect is not null;
     }
 
     // What a render-ahead window needs to know about one pinned device. Sig changes with the pin or its resolved
@@ -1248,7 +1249,9 @@ public sealed class LightingEngine : IDisposable
     {
         var previous = _pinAhead;
         var tracker = Pins;
-        _pinAheadSeenVersion = tracker?.Version ?? -1;
+        // Read before Snapshot(): SetMany swaps the pins first and bumps the version after.
+        var version = tracker?.Version ?? -1;
+        _pinAheadSeenVersion = version;
         var hasPins = tracker is not null && tracker.Any;
         if (!hasPins && previous.Count == 0)
         {
@@ -1259,9 +1262,9 @@ public sealed class LightingEngine : IDisposable
         var changed = false;
         if (hasPins)
         {
-            if (tracker!.Version != _pinAheadVersion)
+            if (version != _pinAheadVersion)
             {
-                _pinAheadVersion = tracker.Version;
+                _pinAheadVersion = version;
                 _pinHashes.Clear();
                 foreach (var (id, pin) in pins!)
                 {
@@ -1460,7 +1463,15 @@ public sealed class LightingEngine : IDisposable
                 {
                     _aheadCanvas.Clear();
                 }
-                RenderAheadPins(effect, shadow, req.TickMs[req.NextFrame]);
+                var failed = RenderAheadPins(effect, shadow, req.TickMs[req.NextFrame])
+                    || (req.NeedsGlobal && effect is Gpu.ShaderEffect { HasFailed: true });
+                if (failed)
+                {
+                    // A shader that failed mid-window left a stale canvas; ship nothing rather than those frames.
+                    _aheadActive = null;
+                    req.Done.Set();
+                    continue;
+                }
                 _sampleCanvas = _aheadCanvas;
                 SampleDevicesFromCanvas(shadow, pinned: _aheadPinned, pinFullFrame: _aheadPinFullFrame);
                 ApplyLedColorLocks(shadow);
@@ -1498,18 +1509,20 @@ public sealed class LightingEngine : IDisposable
     /// <summary>
     /// Renders each animate-pinned source the chain uses at <paramref name="tickMs"/> onto its own scratch
     /// canvas and records which canvas each shadow device samples, as <see cref="RenderPins"/> does live.
-    /// A device whose pinned source is not rendering follows the base canvas. Engine thread.
+    /// A device whose pinned source is not rendering follows the base canvas. True when a pinned shader failed
+    /// while rendering this frame. Engine thread.
     /// </summary>
-    private void RenderAheadPins(IEffect active, DeviceFrame[] shadow, long tickMs)
+    private bool RenderAheadPins(IEffect active, DeviceFrame[] shadow, long tickMs)
     {
         _aheadPinned.Clear();
         _aheadPinFullFrame.Clear();
         _aheadPinRendered.Clear();
+        var failed = false;
         var tracker = Pins;
         if (tracker is null || !tracker.Any)
         {
             _aheadPinCanvases.Clear();
-            return;
+            return false;
         }
         var pins = tracker.Snapshot();
         foreach (var dev in shadow)
@@ -1541,10 +1554,12 @@ public sealed class LightingEngine : IDisposable
             if (_aheadPinRendered.Add(key))
             {
                 fx.RenderFrame(canvas, tickMs);
+                failed |= fx is Gpu.ShaderEffect { HasFailed: true };
             }
             _aheadPinned[dev.Id] = canvas;
             if (sweep) _aheadPinFullFrame.Add(dev.Id);
         }
+        return failed;
     }
 
     private void SampleDevicesFromCanvas(

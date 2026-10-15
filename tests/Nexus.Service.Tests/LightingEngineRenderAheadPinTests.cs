@@ -1,5 +1,6 @@
 using Nexus.Service.Lighting;
 using Nexus.Service.Lighting.Engine;
+using Nexus.Service.Lighting.Engine.Gpu;
 using Nexus.Service.Lighting.Engine.Effects;
 using Nexus.Service.Persistence;
 
@@ -373,16 +374,44 @@ public class LightingEngineRenderAheadPinTests
     }
 
     [Fact]
-    public async Task Removing_a_pin_settles_the_zone_and_the_tombstone_expiring_keeps_its_window_signature()
+    public async Task A_tombstone_expiring_mid_request_does_not_abandon_the_window()
     {
         using var rig = new Rig(new RampEffect());
         rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
         Assert.True(await rig.RollsEventually("d-0", "d-1"));
         rig.Pins.Clear("d-0");
-        Assert.True(await rig.BecomesFalse("d-0"));
-        Assert.True(await rig.RollsEventually("d-0"));
-        var req = rig.Engine.RequestAhead(new[] { "d-0", "d-2" }, new long[] { 1, 2, 3 });
-        Assert.True(req.Done.Wait(TimeSpan.FromSeconds(5)));
+        // Queued while the removal's tombstone exists; long enough to outlive its expiry.
+        var ticks = Enumerable.Range(1, 40000).Select(i => (long)i).ToArray();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var req = rig.Engine.RequestAhead(new[] { "d-0", "d-2" }, ticks);
+        Assert.True(req.Done.Wait(TimeSpan.FromSeconds(30)));
+        Assert.True(watch.ElapsedMilliseconds > 700, $"request finished in {watch.ElapsedMilliseconds} ms, before the tombstone could expire");
         Assert.NotNull(req.Frames);
+    }
+
+    private static ShaderEffect FailingShader(GpuContext gpu) => new("broken", gpu, "this is not glsl");
+
+    [Fact]
+    public async Task A_pinned_shader_that_failed_without_throwing_keeps_its_chain_live()
+    {
+        using var gpu = new GpuContext(160, 90);
+        using var rig = new Rig(new RampEffect());
+        rig.Build = _ => FailingShader(gpu);
+        rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
+        Assert.True(await rig.RollsEventually("d-1"));
+        await rig.WaitFrames(60);
+        Assert.False(rig.Can("d-0"));
+        Assert.True(rig.Can("d-1"));
+    }
+
+    [Fact]
+    public async Task A_global_shader_that_failed_is_not_time_pure()
+    {
+        using var gpu = new GpuContext(160, 90);
+        using var rig = new Rig(new RampEffect());
+        Assert.True(await rig.RollsEventually("d-1"));
+        rig.Engine.SetEffect(FailingShader(gpu));
+        await rig.WaitFrames(60);
+        Assert.False(rig.Can("d-1"));
     }
 }
