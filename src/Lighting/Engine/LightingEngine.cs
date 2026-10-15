@@ -1114,7 +1114,7 @@ public sealed class LightingEngine : IDisposable
     /// </summary>
     public bool CanRenderAhead(IReadOnlyList<string> deviceIds)
     {
-        if (_currentEffect is not Gpu.ShaderEffect shader || shader.ReadsAudio || _studioOverlay is not null)
+        if (!IsTimePure(_currentEffect) || _studioOverlay is not null)
         {
             return false;
         }
@@ -1145,6 +1145,10 @@ public sealed class LightingEngine : IDisposable
         return true;
     }
 
+    // Shaders that read no audio and the fixed fills depend on the clock and their settings alone.
+    private static bool IsTimePure(IEffect? effect) =>
+        effect is Gpu.ShaderEffect { ReadsAudio: false } or Effects.FlatColorEffect or Effects.BlackEffect;
+
     private bool PinRendersAhead(string id)
     {
         if (Pins is null || !Pins.TryGet(id, out var pin))
@@ -1170,10 +1174,19 @@ public sealed class LightingEngine : IDisposable
 
     private void TrackAheadParams(IEffect effect)
     {
-        if (effect is not Gpu.ShaderEffect shader) return;
+        if (effect is not Gpu.ShaderEffect shader)
+        {
+            SetAheadSig(HashCode.Combine(effect, PinAheadSig()));
+            return;
+        }
         var sig = HashCode.Combine(
             HashCode.Combine(shader.Speed, shader.Intensity, shader.Hue, shader.Colorize, shader.Saturation, shader.Contrast, shader.AudioBoost),
             shader.ExtraParams, FullFrameSampling, shader, PinAheadSig());
+        SetAheadSig(sig);
+    }
+
+    private void SetAheadSig(int sig)
+    {
         if (sig == _aheadParamsSig) return;
         _aheadParamsSig = sig;
         Volatile.Write(ref _aheadParamsChangedMs, Environment.TickCount64);
@@ -1210,7 +1223,7 @@ public sealed class LightingEngine : IDisposable
                 _aheadActive = req;
             }
             if (req.Abandoned || !ReferenceEquals(req.Effect, effect) || req.ParamsSig != _aheadParamsSig
-                || effect is not Gpu.ShaderEffect { ReadsAudio: false } || _studioOverlay is not null)
+                || !IsTimePure(effect) || _studioOverlay is not null)
             {
                 _aheadActive = null;
                 req.Done.Set();
@@ -1293,7 +1306,7 @@ public sealed class LightingEngine : IDisposable
                 continue;
             }
             if (!_pinRenders.TryGetValue(key, out var render) || render.Failed || !render.Rendered
-                || render.Effect is not Gpu.ShaderEffect { ReadsAudio: false } fx)
+                || render.Effect is not { } fx || !IsTimePure(fx))
             {
                 return false;
             }
