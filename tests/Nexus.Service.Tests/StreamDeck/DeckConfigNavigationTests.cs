@@ -164,6 +164,7 @@ public class DeckConfigNavigationTests
     [InlineData("4x4", 4, 4)]
     [InlineData("4x2", 4, 2)]
     [InlineData("2x4", 2, 4)]
+    [InlineData("4x1", 4, 1)]
     [InlineData("2x2", 2, 2)]
     [InlineData("unknown", 2, 2)]
     public void InnerGridForSize_MatchesNexusWebsDeckLayoutTs(string size, int expectedCols, int expectedRows)

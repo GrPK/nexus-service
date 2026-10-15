@@ -20,6 +20,7 @@ internal static class Y70LayoutPlacement
     {
         "1x1" => (1, 1),
         "2x2" => (2, 2),
+        "4x1" => (4, 1),
         "4x2" => (4, 2),
         "4x4" => (4, 4),
         _ => (2, 2),
