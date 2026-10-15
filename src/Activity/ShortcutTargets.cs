@@ -61,6 +61,10 @@ internal static partial class ShortcutTargets
         return root is not null && root.Length >= 2 && char.IsLetter(root[0]) && root[1] == ':';
     }
 
+    /// <summary>A path the launch-app fallback may open: a local-drive path on Windows, any fully-qualified path elsewhere (UNC shares are a Windows concern).</summary>
+    internal static bool IsLocalPath(string path) =>
+        OperatingSystem.IsWindows() ? IsLocalDrivePath(path) : Path.IsPathFullyQualified(path);
+
     /// <summary>
     /// True when a launchApp id names a file or URI directly instead of a
     /// Get-StartApps entry. Listed Win32 ids carry a known-folder GUID prefix

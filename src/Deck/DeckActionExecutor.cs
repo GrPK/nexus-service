@@ -238,7 +238,7 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
 
     /// <summary>
     /// A Start-Menu id launches through the shortcuts provider. Anything it does
-    /// not know is a direct target saved in the layout: a local-drive file path,
+    /// not know is a direct target saved in the layout: a local file path,
     /// or an http, https or steam URI. launchApp keys carrying a direct target
     /// are privileged when unlisted (DeckLayoutPolicy; listed direct ids are not), so they are desktop-authored; a panel
     /// can only trigger them. /shortcuts/launch still resolves list ids only.
@@ -266,8 +266,8 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
         }
         else
         {
-            // Local drive only: File.Exists on a UNC path starts outbound SMB auth.
-            if (!Nexus.Service.Activity.ShortcutTargets.IsLocalDrivePath(target))
+            // Local drive only on Windows: File.Exists on a UNC path starts outbound SMB auth.
+            if (!Nexus.Service.Activity.ShortcutTargets.IsLocalPath(target))
             {
                 ServiceLog.Warn("[streamdeck] launchApp refused a non-local path");
                 return;

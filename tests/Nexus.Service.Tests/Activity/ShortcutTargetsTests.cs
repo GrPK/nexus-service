@@ -136,6 +136,20 @@ public sealed class ShortcutTargetsTests
     }
 
     [Fact]
+    public void IsLocalPath_AcceptsAbsolutePosixPathOffWindowsAndRejectsRelative()
+    {
+        Assert.False(ShortcutTargets.IsLocalPath("relative/app"));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.True(ShortcutTargets.IsLocalPath("/Applications/Foo.app"));
+        }
+        else
+        {
+            Assert.False(ShortcutTargets.IsLocalPath("\\\\host\\share\\a.exe"));
+        }
+    }
+
+    [Fact]
     public void ReadInternetShortcutText_DecodesUtf8AndFallsBackForAnsiBytes()
     {
         var dir = Path.Combine(Path.GetTempPath(), "nexus-url-" + Guid.NewGuid().ToString("N"));
