@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -19,7 +20,8 @@ public sealed class ConflictLaunchNotifier : BackgroundService
     private readonly IConfigStore _store;
     private readonly ConflictStartupShutdown? _startupShutdown;
     private readonly ConflictLaunchTracker _tracker = new();
-    private int _filterEpoch;
+    // Unfiltered running ids at the previous tick: an app in this set was running all along, so the filter revealing it is not a launch.
+    private HashSet<string> _previousRunning = new(StringComparer.OrdinalIgnoreCase);
 
     public ConflictLaunchNotifier(IConflictDetector detector, IConfigStore store, ConflictStartupShutdown? startupShutdown = null)
     {
@@ -56,14 +58,11 @@ public sealed class ConflictLaunchNotifier : BackgroundService
             return;
         }
 
-        // A filter change reveals apps that were running all along: seed those into the baseline rather than announce them,
-        // and leave every other app's launch to be announced as usual.
-        var running = _detector.GetConflicts(out var epoch, out var revealed);
-        if (epoch != _filterEpoch)
-        {
-            _filterEpoch = epoch;
-            _tracker.Seed(revealed);
-        }
+        // The unfiltered ids are read first: an app that starts between the two reads then shows up in the list as new, not as running all along.
+        var runningIds = new HashSet<string>(_detector.RunningIds, StringComparer.OrdinalIgnoreCase);
+        var running = _detector.GetConflicts();
+        _tracker.Seed(running.Where(a => _previousRunning.Contains(a.Id)).Select(a => a.Id));
+        _previousRunning = runningIds;
 
         // Inside the kill window the startup shutdown ends the app and says so in its own notice.
         var killWindow = _startupShutdown?.InLaunchKillWindow == true;

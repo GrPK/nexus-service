@@ -95,15 +95,9 @@ public class ConflictLaunchNotifierTickTests
         public bool IsAppRunning(string appId) => Conflicts.Any(c => c.Id == appId);
         public IReadOnlyList<DetectedConflict> GetConflicts() { Scans++; return Conflicts; }
         public bool DetectionReady => true;
-        public int Epoch;
-        public int FilterEpoch => Epoch;
-        public string[] Revealed = Array.Empty<string>();
-        public IReadOnlyList<DetectedConflict> GetConflicts(out int epoch, out IReadOnlyCollection<string> revealed)
-        {
-            epoch = Epoch;
-            revealed = Revealed;
-            return GetConflicts();
-        }
+        // Unfiltered running ids; defaults to the filtered list.
+        public string[]? Running;
+        public IReadOnlyCollection<string> RunningIds => Running ?? Conflicts.Select(c => c.Id).ToArray();
     }
 
     private sealed class MemoryConfigStore : IConfigStore
@@ -134,39 +128,85 @@ public class ConflictLaunchNotifierTickTests
         Assert.Equal(new[] { "gcc" }, launched);
     }
 
-    [Fact]
-    public void AppsRevealedByAPillarChangeAreNotAnnouncedAsLaunches()
+    private static (FakeDetector Detector, ConflictLaunchNotifier Notifier, List<string> Launched) Rig()
     {
         var detector = new FakeDetector();
-        var notifier = new ConflictLaunchNotifier(detector, new MemoryConfigStore());
+        var store = new MemoryConfigStore();
+        store.Settings.Ui.ConflictAutoKillExclusions = new List<string>();
+        var notifier = new ConflictLaunchNotifier(detector, store);
         var launched = new List<string>();
         notifier.AppLaunched += a => launched.Add(a.Id);
+        return (detector, notifier, launched);
+    }
 
+    [Fact]
+    public void AnAppRevealedByAFilterChangeIsNotAnnounced()
+    {
+        var (detector, notifier, launched) = Rig();
+        detector.Running = new[] { "gcc" };
         notifier.Tick(0);
-        detector.Epoch = 1;
-        detector.Revealed = new[] { "gcc" };
+
         detector.Conflicts = new[] { App("gcc") };
         notifier.Tick(6_000);
-        Assert.Empty(launched);
 
-        detector.Conflicts = new[] { App("gcc"), App("signalrgb") };
-        notifier.Tick(12_000);
-        Assert.Equal(new[] { "signalrgb" }, launched);
+        Assert.Empty(launched);
     }
 
     [Fact]
     public void ARealLaunchOnTheTickOfAFilterChangeIsStillAnnounced()
     {
-        var detector = new FakeDetector();
-        var notifier = new ConflictLaunchNotifier(detector, new MemoryConfigStore());
-        var launched = new List<string>();
-        notifier.AppLaunched += a => launched.Add(a.Id);
-
+        var (detector, notifier, launched) = Rig();
+        detector.Running = new[] { "gcc" };
         notifier.Tick(0);
-        detector.Epoch = 1;
-        detector.Revealed = new[] { "gcc" };
+
+        detector.Conflicts = new[] { App("gcc"), App("signalrgb") };
+        detector.Running = new[] { "gcc", "signalrgb" };
+        notifier.Tick(6_000);
+
+        Assert.Equal(new[] { "signalrgb" }, launched);
+    }
+
+    [Fact]
+    public void TwoRevealsBetweenTicksAnnounceNeitherApp()
+    {
+        var (detector, notifier, launched) = Rig();
+        detector.Running = new[] { "gcc", "signalrgb" };
+        notifier.Tick(0);
+
         detector.Conflicts = new[] { App("gcc"), App("signalrgb") };
         notifier.Tick(6_000);
+
+        Assert.Empty(launched);
+    }
+
+    [Fact]
+    public void ARevealFollowedByAHideThenAnotherRevealAnnouncesNothing()
+    {
+        var (detector, notifier, launched) = Rig();
+        detector.Running = new[] { "gcc", "signalrgb" };
+        notifier.Tick(0);
+        detector.Conflicts = new[] { App("gcc") };
+        notifier.Tick(6_000);
+
+        detector.Conflicts = new[] { App("gcc"), App("signalrgb") };
+        notifier.Tick(12_000);
+
+        Assert.Empty(launched);
+    }
+
+    [Fact]
+    public void AnAppThatWasVisibleBeforeAChangeIsStillAnnouncedWhenItLaunchesAgain()
+    {
+        var (detector, notifier, launched) = Rig();
+        detector.Conflicts = new[] { App("signalrgb") };
+        notifier.Tick(0);
+        detector.Conflicts = Array.Empty<DetectedConflict>();
+        detector.Running = Array.Empty<string>();
+        notifier.Tick(6_000);
+
+        detector.Conflicts = new[] { App("signalrgb") };
+        detector.Running = null;
+        notifier.Tick(12_000);
 
         Assert.Equal(new[] { "signalrgb" }, launched);
     }

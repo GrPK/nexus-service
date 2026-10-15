@@ -28,22 +28,8 @@ public interface IConflictDetector
     /// <summary>Every competing app currently running that matters under the current pillars, for callers that report the set rather than test one id.</summary>
     IReadOnlyList<DetectedConflict> GetConflicts();
 
-    /// <summary>Changes whenever the filter changes which running apps <see cref="GetConflicts"/> returns; a detector with no filter stays 0.</summary>
-    int FilterEpoch => 0;
-
-    /// <summary><see cref="GetConflicts"/> and <see cref="FilterEpoch"/> read as one, so a filter change between two separate reads cannot pair a stale list with a new epoch.</summary>
-    IReadOnlyList<DetectedConflict> GetConflicts(out int epoch)
-    {
-        epoch = FilterEpoch;
-        return GetConflicts();
-    }
-
-    /// <summary>As the one-argument overload, plus the ids the last filter change revealed among apps that were already running; empty for a detector with no filter.</summary>
-    IReadOnlyList<DetectedConflict> GetConflicts(out int epoch, out IReadOnlyCollection<string> revealed)
-    {
-        revealed = Array.Empty<string>();
-        return GetConflicts(out epoch);
-    }
+    /// <summary>Ids of every catalog app running at the last scan, before the pillar filter; a consumer tracking launches uses it to tell an app that was running all along from one that just started.</summary>
+    IReadOnlyCollection<string> RunningIds => GetConflicts().Select(c => c.Id).ToArray();
 
     /// <summary>False until the first process scan completes, so callers do not treat "not yet scanned" as "no apps running".</summary>
     bool DetectionReady { get; }
@@ -96,7 +82,6 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     /// <summary>Every catalog app running at the last scan, before the pillar filter.</summary>
     private volatile IReadOnlyList<DetectedConflict> _all = Array.Empty<DetectedConflict>();
 
-    private int _filterEpoch;
 
     /// <summary>Set of conflict ids currently detected. Used to detect changes.</summary>
     private string[] _lastDetectedIds = Array.Empty<string>();
@@ -148,32 +133,13 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         return Filtered();
     }
 
-    /// <summary>Changes whenever the filter would show or hide a different set of already-running apps: a pillar flip, or a display starting or stopping to be driven.</summary>
-    public int FilterEpoch
+    /// <summary>Unfiltered, like <see cref="IsAppRunning"/>.</summary>
+    public IReadOnlyCollection<string> RunningIds
     {
         get
         {
-            Filtered(out var epoch);
-            return epoch;
-        }
-    }
-
-    /// <summary>The filtered list and the epoch it was computed under, read together.</summary>
-    public IReadOnlyList<DetectedConflict> GetConflicts(out int epoch)
-    {
-        EnsureFresh();
-        return Filtered(out epoch);
-    }
-
-    /// <summary>The filtered list, its epoch, and the already-running apps that the last filter change revealed, read together.</summary>
-    public IReadOnlyList<DetectedConflict> GetConflicts(out int epoch, out IReadOnlyCollection<string> revealed)
-    {
-        EnsureFresh();
-        lock (_filterLock)
-        {
-            var list = Filtered(out epoch);
-            revealed = _revealed;
-            return list;
+            EnsureFresh();
+            return _all.Select(c => c.Id).ToArray();
         }
     }
 
@@ -185,11 +151,7 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
 
     private static readonly string[] DisplayHandlerIds = ConflictAppCatalog.All.SelectMany(a => a.DisplayHandlers).Distinct().ToArray();
     private static readonly string[] AlsoHandlerIds = ConflictAppCatalog.All.SelectMany(a => a.AlsoHandlers).Distinct().ToArray();
-    private HashSet<string> _previousKept = new(StringComparer.OrdinalIgnoreCase);
-    private HashSet<string> _seenIds = new(StringComparer.OrdinalIgnoreCase);
-    private IReadOnlyCollection<string> _revealed = Array.Empty<string>();
     private readonly object _filterLock = new();
-    private string _filterKey = "";
     private Dictionary<string, bool> _handlerCache = new();
     private long _handlerCacheAt = long.MinValue / 2;
 
@@ -211,21 +173,14 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         return snapshot;
     }
 
-    private IReadOnlyList<DetectedConflict> Filtered() => Filtered(out _);
-
-    private IReadOnlyList<DetectedConflict> Filtered(out int epoch)
+    private IReadOnlyList<DetectedConflict> Filtered()
     {
         lock (_filterLock)
         {
             var lighting = _gates.Lighting;
             var cooling = _gates.Cooling;
-            // Display state only matters while a pillar is off; with both on nothing is filtered.
-            var display = lighting && cooling ? null : HandlerSnapshot();
-            var key = display is null
-                ? "on"
-                : $"{(lighting ? 1 : 0)}{(cooling ? 1 : 0)}:" + string.Join(',', display.Where(kv => kv.Value).Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal));
-            var keyChanged = key != _filterKey;
-            _filterKey = key;
+            // Handler state only matters while a pillar is off; with both on nothing is filtered.
+            var handlers = lighting && cooling ? null : HandlerSnapshot();
             var all = _all;
             var kept = new List<DetectedConflict>(all.Count);
             foreach (var d in all)
@@ -233,22 +188,12 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
                 if (FindById(d.Id) is { } def
                     && ConflictAppCatalog.Competes(
                         def, lighting, cooling,
-                        h => display is not null && display.TryGetValue("d:" + h, out var inUse) && inUse,
-                        h => display is not null && display.TryGetValue("h:" + h, out var inUse) && inUse))
+                        h => handlers is not null && handlers.TryGetValue("d:" + h, out var inUse) && inUse,
+                        h => handlers is not null && handlers.TryGetValue("h:" + h, out var inUse) && inUse))
                 {
                     kept.Add(d);
                 }
             }
-            var keptIds = new HashSet<string>(kept.Select(k => k.Id), StringComparer.OrdinalIgnoreCase);
-            if (keyChanged && !keptIds.SetEquals(_previousKept))
-            {
-                _filterEpoch++;
-                // Newly kept apps that were already seen running at the previous read; a consumer must not take them for launches.
-                _revealed = keptIds.Where(id => _seenIds.Contains(id) && !_previousKept.Contains(id)).ToArray();
-            }
-            epoch = _filterEpoch;
-            _previousKept = keptIds;
-            _seenIds = new HashSet<string>(all.Select(a => a.Id), StringComparer.OrdinalIgnoreCase);
             return kept;
         }
     }
