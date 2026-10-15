@@ -556,13 +556,14 @@ public static class PanelRoutes
             if (string.Equals(surface, PanelSurfaces.Y70, StringComparison.Ordinal))
             {
                 var defaults = new Y70Settings();
-                // AutoLaunch is workstation-level and gates every panel
-                // kiosk, but its toggle lives on the Y70 Settings tab and
-                // the Y70 is single-instance per host, so its device reset
-                // owns it. Broadcast so open dashboards see the flip.
+                // AutoLaunch (which gates every panel kiosk) and AlwaysOnTop
+                // are workstation-level, but their toggles live on the Y70
+                // Settings tab and the Y70 is single-instance per host, so its
+                // device reset owns them. Broadcast so open dashboards see the flip.
                 store.Update(s =>
                 {
                     s.Panel.AutoLaunch = new PanelSettings().AutoLaunch;
+                    s.Panel.AlwaysOnTop = new PanelSettings().AlwaysOnTop;
                     s.Y70.CompatibilityRendering = defaults.CompatibilityRendering;
                     s.Y70.KeepCursorOff = defaults.KeepCursorOff;
                 });
