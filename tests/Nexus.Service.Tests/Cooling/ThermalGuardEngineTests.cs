@@ -29,13 +29,30 @@ public class ThermalGuardEngineTests
         public int ReleaseAllCalls;
 
         public IReadOnlyList<FanChannel> GetFanChannels() => Channels;
+        public Action? OnSources;
         public IReadOnlyList<TemperatureSource> GetTemperatureSources() =>
-            new[] { new TemperatureSource { Id = "cpu", Name = "Core (Tctl/Tdie)", Category = "CPU", Value = CpuTemp } }
+            Hook().Concat(new[] { new TemperatureSource { Id = "cpu", Name = "Core (Tctl/Tdie)", Category = "CPU", Value = CpuTemp } })
                 .Concat(ExtraSources).ToList();
+        private IEnumerable<TemperatureSource> Hook()
+        {
+            var h = OnSources;
+            OnSources = null;
+            h?.Invoke();
+            return Array.Empty<TemperatureSource>();
+        }
         public float? ReadTemperature(string sensorId) =>
             sensorId == "boom" ? throw new InvalidOperationException("sensor failure") : CpuTemp;
-        public int SetFanSpeed(string channelId, int dutyPercent) => dutyPercent;
-        public void DriveFanSpeed(string channelId, int dutyPercent) => Driven.Add((channelId, dutyPercent));
+        public readonly List<(string Id, int Duty)> Order = new();
+        public int SetFanSpeed(string channelId, int dutyPercent)
+        {
+            Order.Add((channelId, dutyPercent));
+            return dutyPercent;
+        }
+        public void DriveFanSpeed(string channelId, int dutyPercent)
+        {
+            Driven.Add((channelId, dutyPercent));
+            Order.Add((channelId, dutyPercent));
+        }
         public void ReleaseFan(string channelId) => Released.Add(channelId);
         public void ReleaseAll() => ReleaseAllCalls++;
         public Task<IReadOnlyList<FanCalibration>> CalibrateAsync(
@@ -957,6 +974,106 @@ public class ThermalGuardEngineTests
 
         Assert.Equal(1, fans.ReleaseAllCalls);
         Assert.Equal(writes, fans.Driven.Count);
+    }
+
+    private static void Import(CurveEngine engine, InMemoryConfigStore store, int duty)
+    {
+        store.Update(s => s.Cooling.ManualSpeeds["f2"] = duty);
+        engine.InvalidateManual(new[] { "f2" });
+    }
+
+    [Fact]
+    public void ImportDuringEscalation_WritesNothingAndLeavesTheFanReleased()
+    {
+        var (engine, fans, store, clock) = Build();
+        LearnRpm(engine, fans, clock, 1000);
+        Trip(engine, fans, clock);
+        fans.Channels[0].Rpm = 100;
+        fans.Channels[1].Rpm = 100;
+        clock[0] += 21_000;
+        engine.Tick();
+        Assert.Equal(1, fans.ReleaseAllCalls);
+        var writes = fans.Order.Count;
+
+        Import(engine, store, 65);
+        clock[0] += 1000;
+        engine.Tick();
+
+        Assert.Equal(writes, fans.Order.Count);
+    }
+
+    [Fact]
+    public void ManualReplay_NeverWritesAChannelTheGuardHasHandedBack()
+    {
+        var (engine, fans, store, _) = Build();
+        var settings = store.Load();
+        var present = new HashSet<string> { "f2" };
+        var blocked = new GuardPlan { Output = GuardPlan.None.Output, GpuBlocked = { "f2" } };
+
+        engine.ReplayManualDuties(settings, present, new HashSet<string>(), blocked);
+        Assert.Empty(fans.Order);
+
+        engine.ReplayManualDuties(settings, present, new HashSet<string>(), GuardPlan.None);
+        Assert.Equal(new[] { ("f2", 30) }, fans.Order);
+    }
+
+    [Fact]
+    public void ImportDuringATrip_HoldsTheFloor_ThenAppliesTheNewDutyOnceItEnds()
+    {
+        var (engine, fans, store, clock) = Build();
+        Trip(engine, fans, clock);
+        var before = fans.Order.Count;
+
+        Import(engine, store, 65);
+        clock[0] += 1000;
+        engine.Tick();
+        Assert.DoesNotContain(fans.Order.Skip(before), w => w.Id == "f2" && w.Duty < 100);
+
+        fans.CpuTemp = 40f;
+        CoolDown(engine, clock);
+        Assert.Equal(("f2", 65), fans.Order.Last(w => w.Id == "f2"));
+    }
+
+    [Fact]
+    public void ImportOnAnyTickOfTheCoolDown_NeverLeavesTheFanOnTheOldDuty()
+    {
+        for (var k = 0; k < 70; k++)
+        {
+            var (engine, fans, store, clock) = Build();
+            Trip(engine, fans, clock);
+            fans.CpuTemp = 40f;
+            for (var i = 0; i < 70; i++)
+            {
+                if (i == k)
+                {
+                    Import(engine, store, 65);
+                }
+                clock[0] += 1000;
+                engine.Tick();
+            }
+            Assert.True(("f2", 65) == fans.Order.Last(w => w.Id == "f2"), $"import at tick {k}");
+        }
+    }
+
+    [Fact]
+    public void AnImportMidTick_IsNotUndoneByTheGuardRestoreOnTheTripEndTick()
+    {
+        for (var k = 0; k < 70; k++)
+        {
+            var (engine, fans, store, clock) = Build();
+            Trip(engine, fans, clock);
+            fans.CpuTemp = 40f;
+            for (var i = 0; i < 70; i++)
+            {
+                if (i == k)
+                {
+                    fans.OnSources = () => Import(engine, store, 65);
+                }
+                clock[0] += 1000;
+                engine.Tick();
+            }
+            Assert.True(("f2", 65) == fans.Order.Last(w => w.Id == "f2"), $"import mid-tick {k}");
+        }
     }
 
     [Fact]

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Nexus.Service.Cooling;
+using Nexus.Service.Lifecycle;
 using Nexus.Service.Migration.FanControl;
 using Nexus.Service.Models.Cooling;
 using Nexus.Service.Persistence;
@@ -73,7 +74,7 @@ public class FanControlImportEndToEndTests
 
         public IReadOnlyList<TemperatureSource> GetTemperatureSources() => new List<TemperatureSource>
         {
-            new() { Id = "/amdcpu/0/temperature/2", Name = "Core (Tctl/Tdie)", Category = "CPU", Value = 50 },
+            new() { Id = "/amdcpu/0/temperature/2", Name = "Core (Tctl/Tdie)", Category = "CPU", Value = Temperature },
             new() { Id = "/gpu-nvidia/0/temperature/0", Name = "GPU Core", Category = "GPU", Value = 50 },
             new() { Id = "/lpc/nct6797d/0/temperature/1", Name = "Temperature #2", Category = "Motherboard", Value = 50 },
         };
@@ -82,6 +83,7 @@ public class FanControlImportEndToEndTests
 
         public int SetFanSpeed(string channelId, int dutyPercent)
         {
+            Driven.Add((channelId, dutyPercent));
             Duty[channelId] = dutyPercent;
             return dutyPercent;
         }
@@ -105,7 +107,8 @@ public class FanControlImportEndToEndTests
         var path = Path.Combine("Fixtures", "FanControl", "all-curve-kinds.json");
         var fans = new FakeFanProvider();
         var store = new InMemoryConfigStore();
-        return (new FanControlImportService(new FakeDetector(path), fans, store), fans, store);
+        var engine = new CurveEngine(fans, store, new MultiplexHub());
+        return (new FanControlImportService(new FakeDetector(path), fans, store, engine), fans, store);
     }
 
     private static readonly string[] AllCategories =
@@ -164,6 +167,94 @@ public class FanControlImportEndToEndTests
         var lead = fans.Driven.First(d => d.Id == "/lpc/nct6797d/0/control/0").Duty;
         var follower = fans.Driven.First(d => d.Id == "/lpc/nct6797d/0/control/3").Duty;
         Assert.Equal((int)Math.Round(lead * 0.9), follower);
+    }
+
+    private static (FanControlImportService Import, FakeFanProvider Fans, InMemoryConfigStore Store, CurveEngine Engine, long[] Clock) BuildWithEngine()
+    {
+        var path = Path.Combine("Fixtures", "FanControl", "all-curve-kinds.json");
+        var fans = new FakeFanProvider();
+        var store = new InMemoryConfigStore();
+        var hub = new MultiplexHub();
+        var clock = new long[] { 1_000_000 };
+        var engine = new CurveEngine(fans, store, hub, new FeatureGates(store), new ThermalGuardController(fans, store, hub))
+        {
+            Clock = () => clock[0],
+        };
+        store.Update(s =>
+        {
+            s.Cooling.ManualSpeeds[Fan2] = 40;
+            s.Cooling.CustomManualSpeeds[Fan2] = 40;
+        });
+        return (new FanControlImportService(new FakeDetector(path), fans, store, engine), fans, store, engine, clock);
+    }
+
+    [Fact]
+    public void Apply_ReArmsAnAlreadyReplayedManualFanSoTheNextTickDrivesTheImportedDuty()
+    {
+        var (import, fans, _, engine, _) = BuildWithEngine();
+        engine.Tick();
+        Assert.Equal(40, fans.Duty[Fan2]);
+
+        import.Apply(null, AllCategories);
+        Assert.Equal(40, fans.Duty[Fan2]);
+
+        engine.Tick();
+        Assert.Equal(65, fans.Duty[Fan2]);
+    }
+
+    [Fact]
+    public void Apply_WithCoolingOff_WritesNothingToTheFan()
+    {
+        var (import, fans, store, engine, _) = BuildWithEngine();
+        engine.Tick();
+        store.Update(s => s.Features.Cooling = false);
+
+        import.Apply(null, AllCategories);
+        engine.Tick();
+
+        Assert.Equal(40, fans.Duty[Fan2]);
+    }
+
+    [Fact]
+    public void Apply_DuringAGuardTrip_LeavesTheFanAtTheGuardFloor()
+    {
+        var (import, fans, _, engine, clock) = BuildWithEngine();
+        engine.Tick();
+        fans.Temperature = 99f;
+        engine.Tick();
+        clock[0] += 5000;
+        engine.Tick();
+        Assert.Equal(100, fans.Duty[Fan2]);
+        var tripWrites = fans.Driven.Count;
+
+        import.Apply(null, AllCategories);
+        engine.Tick();
+        clock[0] += 1000;
+        engine.Tick();
+
+        Assert.Equal(100, fans.Duty[Fan2]);
+        Assert.DoesNotContain(fans.Driven.Skip(tripWrites), w => w.Id == Fan2 && w.Duty < 100);
+    }
+
+    [Fact]
+    public void Apply_BetweenAReplaySnapshotAndItsCommit_DoesNotLeaveTheOldDutyMarkedReplayed()
+    {
+        var (import, fans, _, engine, _) = BuildWithEngine();
+        var fired = false;
+        engine.ReplaySnapshotTaken = () =>
+        {
+            if (fired)
+            {
+                return;
+            }
+            fired = true;
+            import.Apply(null, AllCategories);
+        };
+
+        engine.Tick();
+        engine.Tick();
+
+        Assert.Equal(65, fans.Duty[Fan2]);
     }
 
     [Fact]

@@ -32,9 +32,11 @@ public sealed class FanControlImportService
     private readonly IFanControlDetector _detector;
     private readonly IFanControlProvider _fans;
     private readonly IConfigStore _store;
+    private readonly CurveEngine _engine;
 
-    public FanControlImportService(IFanControlDetector detector, IFanControlProvider fans, IConfigStore store)
+    public FanControlImportService(IFanControlDetector detector, IFanControlProvider fans, IConfigStore store, CurveEngine engine)
     {
+        _engine = engine;
         _detector = detector;
         _fans = fans;
         _store = store;
@@ -72,6 +74,7 @@ public sealed class FanControlImportService
         // would hand the fans this import does not bring back to BIOS control.
         var channels = _fans.GetFanChannels();
         var changedAny = false;
+        var driveNow = new Dictionary<string, int>(StringComparer.Ordinal);
         _store.Update(s =>
         {
             var cooling = s.Cooling;
@@ -157,6 +160,10 @@ public sealed class FanControlImportService
                 cooling.CustomManualSpeeds[channel] = duty;
             }
             response.ManualImported = manual.Count;
+            foreach (var (channel, duty) in manual)
+            {
+                driveNow[channel] = duty;
+            }
             changedAny |= manual.Count > 0;
 
             // An offset on a claimed channel skews its new curve unless the
@@ -200,6 +207,14 @@ public sealed class FanControlImportService
                 cooling.ActivePreset = "custom";
             }
         });
+
+        // CurveEngine replays a manual duty once per run, so a fan it already
+        // replayed would keep its old duty until restart. Re-arm the replay and
+        // let the next tick drive it through the guard and feature gate.
+        if (driveNow.Count > 0)
+        {
+            _engine.InvalidateManual(driveNow.Keys);
+        }
 
         var appliedAny = response.CurvesImported > 0
             || response.CalibrationsImported > 0

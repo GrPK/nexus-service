@@ -26,6 +26,17 @@ internal static class CoolingSnapshots
     public static HashSet<string> Uncontrolled(CoolingSettings cooling) =>
         Retry(() => new HashSet<string>(cooling.UncontrolledFanChannels, StringComparer.Ordinal));
 
+    public static Dictionary<string, bool> PinOverrides(CoolingSettings cooling) =>
+        Retry(() =>
+        {
+            var copy = new Dictionary<string, bool>(StringComparer.Ordinal);
+            foreach (var kv in cooling.FanPinOverrides)
+            {
+                copy[kv.Key] = kv.Value;
+            }
+            return copy;
+        });
+
     public static Dictionary<string, int> GpuManualBackup(CoolingSettings cooling) => Retry(() => Copy(cooling.GpuManualBackup));
 
     private static Dictionary<string, string> Copy(Dictionary<string, string> source)
