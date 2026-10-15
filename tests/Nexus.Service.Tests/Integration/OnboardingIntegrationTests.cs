@@ -7,6 +7,12 @@ using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Tests.Integration;
 
+/// <summary>Host that starts with the features onboarding step undecided, as a fresh install does.</summary>
+public sealed class UndecidedAppFactory : NexusAppFactory
+{
+    protected override bool FeaturesDecided => false;
+}
+
 /// <summary>
 /// Drives the real /onboarding routes through Program.cs. LocalhostOnly +
 /// token-gated, so requests set a loopback RemoteIpAddress (as the
@@ -15,11 +21,11 @@ namespace Nexus.Service.Tests.Integration;
 /// one mutating test) because IClassFixture shares a single NexusAppFactory
 /// across every test method in a class, and xUnit does not order them.
 /// </summary>
-public sealed class OnboardingIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     private string Token => _factory.Services.GetRequiredService<TokenService>().Token;
 
@@ -120,11 +126,11 @@ public sealed class OnboardingIntegrationTests : IClassFixture<NexusAppFactory>
         => Assert.Equal(StatusCodes.Status401Unauthorized, await Send("POST", "/onboarding/conflicts-step", withToken: false));
 }
 
-public sealed class OnboardingPanelSwipeCompleteIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingPanelSwipeCompleteIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingPanelSwipeCompleteIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingPanelSwipeCompleteIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     [Fact]
     public async Task PanelSwipeComplete_sets_only_the_panel_swipe_flag()
@@ -149,11 +155,11 @@ public sealed class OnboardingPanelSwipeCompleteIntegrationTests : IClassFixture
     }
 }
 
-public sealed class OnboardingImmersiveSwipeCompleteIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingImmersiveSwipeCompleteIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingImmersiveSwipeCompleteIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingImmersiveSwipeCompleteIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     [Fact]
     public async Task ImmersiveSwipeComplete_sets_only_the_immersive_flag_and_reports_it()
@@ -178,11 +184,11 @@ public sealed class OnboardingImmersiveSwipeCompleteIntegrationTests : IClassFix
     }
 }
 
-public sealed class OnboardingCompleteIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingCompleteIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingCompleteIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingCompleteIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     [Fact]
     public async Task Complete_sets_the_flag()
@@ -203,11 +209,11 @@ public sealed class OnboardingCompleteIntegrationTests : IClassFixture<NexusAppF
     }
 }
 
-public sealed class OnboardingLightingCompleteIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingLightingCompleteIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingLightingCompleteIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingLightingCompleteIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     [Fact]
     public async Task LightingComplete_sets_only_the_lighting_flag()
@@ -230,11 +236,11 @@ public sealed class OnboardingLightingCompleteIntegrationTests : IClassFixture<N
     }
 }
 
-public sealed class OnboardingFeaturesCompleteIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingFeaturesCompleteIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingFeaturesCompleteIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingFeaturesCompleteIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     [Fact]
     public async Task FeaturesComplete_sets_only_the_features_flag()
@@ -257,11 +263,11 @@ public sealed class OnboardingFeaturesCompleteIntegrationTests : IClassFixture<N
     }
 }
 
-public sealed class OnboardingResetIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingResetIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingResetIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingResetIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     [Fact]
     public async Task Reset_clears_completed_features_and_lighting_flags()
@@ -294,11 +300,11 @@ public sealed class OnboardingResetIntegrationTests : IClassFixture<NexusAppFact
     }
 }
 
-public sealed class OnboardingBannerIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingBannerIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingBannerIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingBannerIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     private async Task<HttpContext> Send(string method, string path, string? jsonBody = null, bool withToken = true)
     {
@@ -350,11 +356,11 @@ public sealed class OnboardingBannerIntegrationTests : IClassFixture<NexusAppFac
     }
 }
 
-public sealed class OnboardingHintsIntegrationTests : IClassFixture<NexusAppFactory>
+public sealed class OnboardingHintsIntegrationTests : IClassFixture<UndecidedAppFactory>
 {
-    private readonly NexusAppFactory _factory;
+    private readonly UndecidedAppFactory _factory;
 
-    public OnboardingHintsIntegrationTests(NexusAppFactory factory) => _factory = factory;
+    public OnboardingHintsIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     private async Task<(int Status, string Body)> Send(string method, string path, string? jsonBody = null, bool withToken = true)
     {

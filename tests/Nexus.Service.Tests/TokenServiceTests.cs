@@ -91,7 +91,8 @@ public class TokenServiceTests
 /// </summary>
 internal sealed class InMemoryConfigStore : IConfigStore
 {
-    private NexusSettings _settings = new();
+    // Decided, so FeatureGates reads the pillar flags as set rather than as undecided-off.
+    private NexusSettings _settings = new() { FeaturesOnboardingCompleted = true };
 
     public string SettingsPath => ":memory:";
 
@@ -103,7 +104,7 @@ internal sealed class InMemoryConfigStore : IConfigStore
         OnChanged?.Invoke();
     }
 
-    public void Reload() { _settings = new(); }
+    public void Reload() { _settings = new() { FeaturesOnboardingCompleted = true }; }
 
     public void FlushNow() { }
 

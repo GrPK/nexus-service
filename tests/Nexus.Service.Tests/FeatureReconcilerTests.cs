@@ -217,6 +217,52 @@ public class FeatureReconcilerTests
     }
 
     [Fact]
+    public void ApplyPatch_WhileUndecided_CoolingOff_QueuesNoRelease()
+    {
+        var (reconciler, _, fans, curveEngine, _, _, store) = Build();
+        store.Update(s => s.FeaturesOnboardingCompleted = false);
+
+        reconciler.ApplyPatch(s => s.Features.Cooling = false);
+        curveEngine.Tick();
+
+        Assert.Equal(0, fans.ReleaseAllCallCount);
+    }
+
+    [Fact]
+    public void ApplyPatch_CompletingTheFeatureStep_SwitchesTheChosenPillarsOnLive()
+    {
+        var (reconciler, lighting, fans, curveEngine, _, _, store) = Build();
+        store.Update(s =>
+        {
+            s.FeaturesOnboardingCompleted = false;
+            s.Lighting.Sync = "plasma";
+        });
+
+        reconciler.ApplyPatch(s => s.FeaturesOnboardingCompleted = true);
+
+        var call = Assert.Single(lighting.StartAnimateCalls);
+        Assert.Equal("plasma", call.Effect);
+        Assert.Equal(0, lighting.SuspendCallCount);
+        curveEngine.Tick();
+        Assert.Equal(0, fans.ReleaseAllCallCount);
+    }
+
+    [Fact]
+    public void ApplyPatch_CompletingTheFeatureStepWithLightingOff_StartsNothing()
+    {
+        var (reconciler, lighting, _, _, _, _, store) = Build();
+        store.Update(s =>
+        {
+            s.FeaturesOnboardingCompleted = false;
+            s.Features.Lighting = false;
+        });
+
+        reconciler.ApplyPatch(s => s.FeaturesOnboardingCompleted = true);
+
+        Assert.Empty(lighting.StartAnimateCalls);
+    }
+
+    [Fact]
     public void Apply_CoolingOnToOff_ReleasesOnce_OnTheNextDisabledTick()
     {
         var (reconciler, _, fans, curveEngine, _, _, store) = Build();

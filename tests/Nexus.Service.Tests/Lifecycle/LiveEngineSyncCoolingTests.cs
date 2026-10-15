@@ -26,6 +26,7 @@ public class LiveEngineSyncCoolingTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), "nexus-live-sync-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
         _store = new TestableConfigStore(Path.Combine(_tempDir, "settings.json"));
+        _store.Update(s => s.FeaturesOnboardingCompleted = true);
         _fans = new RecordingFanProvider(new List<FanChannel>
         {
             new() { Id = "fan1", Name = "Fan 1" },

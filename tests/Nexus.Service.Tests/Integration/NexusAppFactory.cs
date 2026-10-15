@@ -31,6 +31,9 @@ public class NexusAppFactory : WebApplicationFactory<Program>
     /// <summary>Per-factory settings.json path (temp). Survives for the host's lifetime.</summary>
     public string SettingsPath { get; }
 
+    /// <summary>False for a host that must start with the features onboarding step undecided, which reads Lighting and Cooling as off.</summary>
+    protected virtual bool FeaturesDecided => true;
+
     public NexusAppFactory()
     {
         // Must be set before the base class lazily starts the host (on first
@@ -63,6 +66,10 @@ public class NexusAppFactory : WebApplicationFactory<Program>
         store.FlushNow();
         try { File.Delete(SettingsPath); } catch { /* already gone */ }
         store.Reload();
+        if (FeaturesDecided)
+        {
+            store.Update(s => s.FeaturesOnboardingCompleted = true);
+        }
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -89,7 +96,12 @@ public class NexusAppFactory : WebApplicationFactory<Program>
             // temp file so integration tests never read or mutate the
             // developer's real settings.json.
             services.RemoveAll<IConfigStore>();
-            services.AddSingleton<IConfigStore>(new JsonConfigStore(SettingsPath));
+            var configStore = new JsonConfigStore(SettingsPath);
+            if (FeaturesDecided)
+            {
+                configStore.Update(s => s.FeaturesOnboardingCompleted = true);
+            }
+            services.AddSingleton<IConfigStore>(configStore);
 
             // IMcpAuditSink resolves McpServerHost -> McpToolRegistry ->
             // IAiEventLog even with hosted services stripped, since /ai/*

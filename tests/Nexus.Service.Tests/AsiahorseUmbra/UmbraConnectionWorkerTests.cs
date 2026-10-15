@@ -53,6 +53,21 @@ public class UmbraConnectionWorkerTests
     }
 
     [Fact]
+    public void HandBack_writes_nothing_while_both_pillars_are_off_and_never_were_on()
+    {
+        _store.Update(s => s.FeaturesOnboardingCompleted = false);
+        var worker = new UmbraConnectionWorker(new FakeEnumerator(_fake), _hub,
+            new AsiahorseUmbraLightingDeviceProvider(_hub, _store), new AsiahorseUmbraCoolingProvider(_hub, _store), _gate,
+            new HardwarePresence(new FakeUsb()), _store, new Nexus.Service.Lifecycle.FeatureGates(_store));
+        Connect();
+
+        worker.HandBack();
+
+        Assert.Empty(_fake.Writes);
+        Assert.False(_hub.IsConnected);
+    }
+
+    [Fact]
     public void HandBack_skips_the_fan_frame_when_fans_already_follow_the_motherboard()
     {
         _store.Update(s => s.Devices.AsiahorseUmbra.FanSyncMb = true);
