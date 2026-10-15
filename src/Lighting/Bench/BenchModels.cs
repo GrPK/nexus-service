@@ -57,6 +57,12 @@ public sealed class BenchEffectResult
     /// <summary>Whole-process CPU per frame, averaged over the run.</summary>
     public double ProcessCpuMsPerFrame { get; set; }
 
+    /// <summary>Shader renders per second actually done. Equals the target rate except on WARP, where the engine's CPU budget spaces renders out.</summary>
+    public double RendersPerSecond { get; set; }
+
+    /// <summary>Whole-process CPU per second of run, which is what the WARP budget bounds.</summary>
+    public double ProcessCpuMsPerSecond { get; set; }
+
     /// <summary>Warm ReadPixels of the idle target, measured after the timed run.</summary>
     public Percentiles? ReadbackProbeMs { get; set; }
     public long PrivateBytesBefore { get; set; }
@@ -348,7 +354,7 @@ internal static class BenchReport
         {
             sb.AppendLine();
             sb.AppendLine($"{Label(c)}  {c.GlVendor} | {c.GlRenderer} | {c.GlVersion}  init {c.InitMs.ToString("0", ci)} ms");
-            sb.AppendLine(Row(new[] { "effect", "compile", "p50", "p95", "p99", "max", "render p95", "sample p95", "cpu/frame", "glerr", "miss", "ahead/f" }, EffectWidths));
+            sb.AppendLine(Row(new[] { "effect", "compile", "p50", "p95", "p99", "max", "render p95", "sample p95", "cpu/frame", "glerr", "miss", "ahead/f", "fps", "cpu ms/s" }, EffectWidths));
             foreach (var e in c.Effects)
             {
                 if (!e.Ok || e.WorkMs is null || e.RenderWallMs is null || e.SampleMs is null)
@@ -365,6 +371,7 @@ internal static class BenchReport
                     e.ProcessCpuMsPerFrame.ToString("0.00", ci), e.GlErrors.ToString(ci),
                     e.MissedDeadlines.ToString(ci),
                     e.LookAhead is null ? "-" : e.LookAhead.PerFrameMs.ToString("0.00", ci),
+                    e.RendersPerSecond.ToString("0.0", ci), e.ProcessCpuMsPerSecond.ToString("0.0", ci),
                 }, EffectWidths));
             }
         }
@@ -381,7 +388,7 @@ internal static class BenchReport
     }
 
     private static readonly int[] ComboWidths = { 18, 9, 8, 8, 5, 13, 13, 14, 40 };
-    private static readonly int[] EffectWidths = { 18, 8, 7, 7, 7, 7, 11, 11, 10, 6, 5, 8 };
+    private static readonly int[] EffectWidths = { 18, 8, 7, 7, 7, 7, 11, 11, 10, 6, 5, 8, 6, 9 };
 
     private static string Row(string[] cells, int[] widths)
     {

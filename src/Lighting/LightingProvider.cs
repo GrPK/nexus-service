@@ -102,6 +102,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         _hub = hub;
         _rgb = rgb;
         _gpu = gpu;
+        _engine.SoftwareRenderProbe = () => _gpu is { Available: true, IsWarp: true };
         _media = media;
         _monitors = monitors;
         _frameSource = frameSource;

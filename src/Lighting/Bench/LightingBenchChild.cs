@@ -326,6 +326,10 @@ internal static partial class LightingBench
         var gcpu = new double[n];
         var toMs = 1000.0 / Stopwatch.Frequency;
         var missed = 0;
+        var renders = 0;
+        // The engine spaces shader renders on WARP; the bench applies the same budget so its numbers match the service.
+        var budgeted = ctx.IsWarp;
+        var budget = new WarpRenderBudget();
         long prevStart = 0;
         using var proc = Process.GetCurrentProcess();
         proc.Refresh();
@@ -338,8 +342,18 @@ internal static partial class LightingBench
             pacer.Wait();
             var t0 = Stopwatch.GetTimestamp();
             var c0 = ThreadCycles();
-            effect.RenderFrame(canvas, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var due = !budgeted || budget.ShouldRender(effect, nowMs, PeriodMs);
+            if (due)
+            {
+                effect.RenderFrame(canvas, nowMs);
+                renders++;
+            }
             var t1 = Stopwatch.GetTimestamp();
+            if (due && budgeted)
+            {
+                budget.Record(nowMs, (t1 - t0) * toMs);
+            }
             engine.SampleForBench(devices, canvas);
             foreach (var d in devices)
             {
@@ -368,6 +382,8 @@ internal static partial class LightingBench
         proc.Refresh();
         r.ProcessCpuMsPerFrame = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / Math.Max(1, n);
         r.Frames = n;
+        r.RendersPerSecond = renders / (double)Math.Max(1, seconds);
+        r.ProcessCpuMsPerSecond = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / Math.Max(1, seconds);
         r.MissedDeadlines = missed;
         r.FrameIntervalMs = BenchStats.Summarize(interval);
         r.RenderWallMs = BenchStats.Summarize(render);
