@@ -299,7 +299,7 @@ public sealed class LhmComputer : IDisposable
         }
     }
 
-    /// <summary>A forced walk for an explicit health refresh: opens the reader window first so the drives read, serialized with the other SMART readers.</summary>
+    /// <summary>A forced walk for an explicit health refresh; opens the reader window so every drive reads, serialized with the other SMART readers.</summary>
     public void WalkForSmartRefresh()
     {
         lock (_readerLock)

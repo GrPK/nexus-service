@@ -109,7 +109,7 @@ public sealed class SmartHealthMonitor : ISmartHealthSource
         lock (_lock)
         {
             if (!_hasSnapshot || _sinceRefresh.Elapsed >= RefreshInterval)
-                Refresh();
+                Refresh(explicitRefresh: false);
             return _cached;
         }
     }
@@ -122,7 +122,7 @@ public sealed class SmartHealthMonitor : ISmartHealthSource
             {
                 return;
             }
-            Refresh();
+            Refresh(explicitRefresh: true);
         }
     }
 
@@ -132,7 +132,7 @@ public sealed class SmartHealthMonitor : ISmartHealthSource
     // _hasSnapshot false and leaves the refresh clock unstarted - the next
     // Snapshot() call retries immediately rather than pinning an empty
     // Supported=true list for the full 10-minute cache window.
-    private void Refresh()
+    private void Refresh(bool explicitRefresh)
     {
         if (!_lhm.OpenTask.IsCompletedSuccessfully)
         {
@@ -141,7 +141,9 @@ public sealed class SmartHealthMonitor : ISmartHealthSource
 
         try
         {
-            _lhm.WalkForSmartRefresh();
+            // Only an explicit refresh opens the reader window; the staleness path reads just the drives something needs.
+            if (explicitRefresh) _lhm.WalkForSmartRefresh();
+            else _lhm.Update(SensorRefresh.Force);
             var drives = new List<SmartDriveInfo>();
             foreach (var hw in _lhm.Instance.Hardware)
             {
