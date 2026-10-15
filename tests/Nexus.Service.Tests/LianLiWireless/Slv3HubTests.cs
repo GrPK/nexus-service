@@ -365,16 +365,17 @@ public class Slv3HubTests
     }
 
     [Fact]
-    public void Owned_device_bound_to_another_master_is_never_touched()
+    public void Owned_device_bound_to_another_master_is_retaken_and_stays_owned()
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, saved, _) = CreateOwnershipHub(new() { [mac] = 2 });
-        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = OtherMasterMac, RxType = 5 });
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = OtherMasterMac, RxType = 5, IgnoresBind = true });
 
-        Ticks(hub, 3);
-
+        Ticks(hub, Slv3Hub.RebindConfirmPolls - 1);
         Assert.Equal(0, CountBindFrames(tx));
-        Assert.Equal(Convert.ToHexString(OtherMasterMac), hub.State.Fans[0].MasterMac);
+        Ticks(hub, 1);
+
+        Assert.True(CountBindFrames(tx) > 0);
         Assert.Contains(mac, saved.Keys);
     }
 
@@ -785,7 +786,7 @@ public class Slv3HubTests
     }
 
     [Fact]
-    public void A_device_that_moves_to_a_foreign_master_during_confirmation_is_not_stolen()
+    public void A_device_that_moves_to_a_foreign_master_during_confirmation_is_retaken_once_confirmed()
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 2 });
@@ -799,7 +800,7 @@ public class Slv3HubTests
         fan.MasterMac = OtherMasterMac;
         Ticks(hub, 5);
 
-        Assert.Equal(0, CountBindFrames(tx));
+        Assert.True(CountBindFrames(tx) > 0);
     }
 
     [Fact]
@@ -884,14 +885,16 @@ public class Slv3HubTests
         Ticks(hub, PendingOpTickBudget + 2);
         Assert.True(CountBindFrames(tx) > 0);
 
-        // Backoff elapsed, but the device now shows a foreign master except for one corrupt zero-master record.
+        // Backoff elapsed, but the device now reports our master except for one corrupt zero-master record.
         clock.AdvanceMs(Slv3Hub.AutoRebindIntervalMs + 1);
-        fan.MasterMac = OtherMasterMac;
+        fan.IgnoresBind = false;
+        fan.MasterMac = net.MasterMac;
+        fan.RxType = 2;
         Ticks(hub, 3);
         tx.SentFrames.Clear();
         fan.MasterMac = new byte[6];
         Ticks(hub, 1);
-        fan.MasterMac = OtherMasterMac;
+        fan.MasterMac = net.MasterMac;
         Ticks(hub, 5);
 
         Assert.Equal(0, CountBindFrames(tx));
@@ -974,7 +977,7 @@ public class Slv3HubTests
     }
 
     [Fact]
-    public void A_pending_auto_bind_stops_resending_once_the_device_shows_a_foreign_master()
+    public void A_pending_auto_bind_on_an_owned_chain_keeps_resending_when_the_device_shows_a_foreign_master()
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 2 });
@@ -988,7 +991,7 @@ public class Slv3HubTests
         var settled = CountBindFrames(tx);
         Ticks(hub, 5);
 
-        Assert.Equal(settled, CountBindFrames(tx));
+        Assert.True(CountBindFrames(tx) > settled);
     }
 
     private static byte[] Corrupted(byte[] master, int index, byte xor)
@@ -1045,31 +1048,84 @@ public class Slv3HubTests
     }
 
     [Theory]
-    [InlineData(1, 0x01, 0x00)]
-    [InlineData(5, 0x80, 0x00)]
-    [InlineData(2, 0x03, 0x00)]
-    [InlineData(1, 0x0F, 0x10)]
-    public void Master_corruptions_within_the_bit_budget_are_retaken_and_larger_ones_are_not(int index, int xorA, int xorB)
+    [InlineData("AABBCCDDEEFE")]
+    [InlineData("AABBCCDD1EFF")]
+    [InlineData("AABBCCE5E5E5")]
+    [InlineData("AABBCCFFFFFF")]
+    [InlineData("0102030405FF")]
+    [InlineData("AA00000000FF")]
+    public void An_owned_chain_on_any_master_but_ours_is_retaken(string master)
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 2 });
-        var master = Corrupted(Corrupted(net.MasterMac, index, (byte)xorA), (index + 1) % 6, (byte)xorB);
-        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = master, RxType = 2, IgnoresBind = true });
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = Convert.FromHexString(master), RxType = 2, IgnoresBind = true });
 
         Ticks(hub, Slv3Hub.RebindConfirmPolls + 2);
 
-        var bits = System.Numerics.BitOperations.PopCount((uint)xorA) + System.Numerics.BitOperations.PopCount((uint)xorB);
-        Assert.Equal(bits <= Slv3Protocol.MaxMasterBitErrors, CountBindFrames(tx) > 0);
+        Assert.True(CountBindFrames(tx) > 0);
     }
 
     [Fact]
-    public void A_near_miss_master_that_other_unowned_chains_also_report_is_a_real_neighbor_and_is_left_alone()
+    public void The_garbled_record_from_the_iamgarffi_bundle_is_retaken_through_a_fallback_pipe()
     {
         var mac = Convert.ToHexString(FanMac);
-        var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 1 });
-        var neighbor = Corrupted(net.MasterMac, 5, 0x01);
-        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = neighbor, RxType = 3 });
-        net.Fans.Add(new SimulatedFan { Mac = Convert.FromHexString("A1A2A3A4A5A6"), MasterMac = neighbor, RxType = 3 });
+        var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 2 });
+        var fan = new SimulatedFan
+        {
+            Mac = FanMac, MasterMac = Convert.FromHexString("AABBCCE5E5E5"), RxType = 229, Channel = 229,
+        };
+        net.Fans.Add(fan);
+
+        Ticks(hub, Slv3Hub.RebindConfirmPolls);
+
+        Assert.Empty(BindFramesAt(tx, 229, 229));
+        Assert.NotEmpty(BindFramesAt(tx, Slv3Protocol.DefaultChannel, 2));
+        Ticks(hub, 2);
+        Assert.True(hub.State.Fans[0].BoundToUs);
+        Assert.Equal(2, hub.State.Fans[0].Slot);
+    }
+
+    [Fact]
+    public void A_garbled_pipe_is_replaced_by_the_pipe_the_chain_last_reported_bound_to_us()
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 5 });
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 5, Channel = (byte)(Slv3Protocol.DefaultChannel | 0x40) };
+        net.Fans.Add(fan);
+        Ticks(hub, 2);
+
+        fan.MasterMac = Convert.FromHexString("AABBCCFFFFFF");
+        fan.RxType = 0xFF;
+        fan.Channel = 0xFF;
+        Ticks(hub, Slv3Hub.RebindConfirmPolls);
+
+        Assert.NotEmpty(BindFramesAt(tx, Slv3Protocol.DefaultChannel | 0x40, 5));
+        Assert.Empty(BindFramesAt(tx, 0xFF, 0xFF));
+    }
+
+    [Fact]
+    public void An_unowned_chain_on_a_foreign_master_is_never_touched()
+    {
+        var (hub, net, tx, _, _) = CreateOwnershipHub();
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = OtherMasterMac, RxType = 3 });
+
+        Ticks(hub, Established + Slv3Hub.RebindConfirmPolls + 5);
+
+        Assert.Equal(0, CountBindFrames(tx));
+    }
+
+    [Fact]
+    public void A_user_unbound_chain_on_a_foreign_master_is_never_retaken()
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 2 });
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 2 };
+        net.Fans.Add(fan);
+        Ticks(hub, 2);
+        Assert.True(hub.Unbind(mac));
+        Ticks(hub, PendingOpTickBudget + 2);
+        fan.MasterMac = OtherMasterMac;
+        tx.SentFrames.Clear();
 
         Ticks(hub, Slv3Hub.RebindConfirmPolls + 5);
 
@@ -1077,21 +1133,55 @@ public class Slv3HubTests
     }
 
     [Fact]
-    public void A_pending_retake_on_a_corrupted_master_stops_once_the_chain_shows_a_far_master()
+    public void A_foreign_master_that_keeps_pulling_the_chain_back_is_retaken_once_then_stood_down_from()
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 1 });
-        var fan = new SimulatedFan { Mac = FanMac, MasterMac = Corrupted(net.MasterMac, 4, 0x80), RxType = 3, IgnoresBind = true };
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = OtherMasterMac, RxType = 3 };
         net.Fans.Add(fan);
-        Ticks(hub, Slv3Hub.RebindConfirmPolls + 1);
+        Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
+        Assert.True(hub.State.Fans[0].BoundToUs);
         Assert.True(CountBindFrames(tx) > 0);
+        tx.SentFrames.Clear();
 
-        fan.MasterMac = OtherMasterMac;
-        Ticks(hub, 2);
-        var settled = CountBindFrames(tx);
-        Ticks(hub, 5);
+        PullBack(hub, fan, OtherMasterMac, Slv3Hub.RebindConfirmPolls + 5);
 
-        Assert.Equal(settled, CountBindFrames(tx));
+        Assert.Equal(0, CountBindFrames(tx));
+    }
+
+    [Fact]
+    public void A_stood_down_foreign_master_is_retaken_again_after_the_mark_lapses()
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, clock) = CreateOwnershipHub(new() { [mac] = 1 });
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = OtherMasterMac, RxType = 3 };
+        net.Fans.Add(fan);
+        Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
+        PullBack(hub, fan, OtherMasterMac, Slv3Hub.RebindConfirmPolls + 5);
+        clock.AdvanceMs(Slv3Hub.NeighborMarkMs + 1);
+        tx.SentFrames.Clear();
+
+        Ticks(hub, Slv3Hub.RebindConfirmPolls + 2);
+
+        Assert.True(CountBindFrames(tx) > 0);
+    }
+
+    [Fact]
+    public void A_chain_that_never_accepts_a_retake_is_not_resent_to_until_the_backoff_elapses_then_retried()
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, clock) = CreateOwnershipHub(new() { [mac] = 2 });
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = OtherMasterMac, RxType = 2, IgnoresBind = true });
+        Ticks(hub, Slv3Hub.RebindConfirmPolls);
+        Ticks(hub, PendingOpTickBudget + 2);
+        tx.SentFrames.Clear();
+
+        Ticks(hub, 3 * Slv3Hub.RebindConfirmPolls);
+        Assert.Equal(0, CountBindFrames(tx));
+
+        clock.AdvanceMs(Slv3Hub.AutoRebindIntervalMs + 1);
+        Ticks(hub, Slv3Hub.RebindConfirmPolls);
+        Assert.True(CountBindFrames(tx) > 0);
     }
 
     private static (Slv3Hub Hub, FakeSlv3Network Net, FakeTxTransport Tx, SimulatedFan Fan, ManualClock Clock, byte[] Near, string Mac) RetakenChain()
@@ -1228,8 +1318,7 @@ public class Slv3HubTests
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 1 });
-        var zeroed = (byte[])net.MasterMac.Clone();
-        zeroed[1] = zeroed[2] = zeroed[3] = 0;
+        var zeroed = new byte[6];
         var fan = new SimulatedFan { Mac = FanMac, MasterMac = zeroed, RxType = 3 };
         net.Fans.Add(fan);
         Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);

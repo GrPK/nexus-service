@@ -736,53 +736,6 @@ public static class Slv3Protocol
         return true;
     }
 
-    /// <summary>Most flipped bits a reported master may differ from ours by and still read as a corrupted copy of it.</summary>
-    public const int MaxMasterBitErrors = 2;
-
-    /// <summary>Fewest bytes a zero-damaged master must still share with ours.</summary>
-    public const int MinMasterBytesKept = 3;
-
-    /// <summary>A non-zero master within the bit budget of ours, or ours with bytes zeroed.</summary>
-    public static bool IsCorruptedMasterCopy(ReadOnlySpan<byte> reported, ReadOnlySpan<byte> ours)
-    {
-        if (reported.Length < MacLength || ours.Length < MacLength || MacIsZero(reported) || MacEquals(reported, ours))
-        {
-            return false;
-        }
-        if (IsBitFlippedMasterCopy(reported, ours))
-        {
-            return true;
-        }
-        var kept = 0;
-        for (var i = 0; i < MacLength; i++)
-        {
-            if (reported[i] == ours[i])
-            {
-                kept++;
-            }
-            else if (reported[i] != 0)
-            {
-                return false;
-            }
-        }
-        return kept >= MinMasterBytesKept;
-    }
-
-    /// <summary>A non-zero master that is not ours but within the bit budget of it.</summary>
-    public static bool IsBitFlippedMasterCopy(ReadOnlySpan<byte> reported, ReadOnlySpan<byte> ours)
-    {
-        if (reported.Length < MacLength || ours.Length < MacLength || MacIsZero(reported) || MacEquals(reported, ours))
-        {
-            return false;
-        }
-        var bits = 0;
-        for (var i = 0; i < MacLength; i++)
-        {
-            bits += System.Numerics.BitOperations.PopCount((uint)(reported[i] ^ ours[i]));
-        }
-        return bits <= MaxMasterBitErrors;
-    }
-
     /// <summary>True when the MAC is all zeros (an unbound device reports a zero master MAC).</summary>
     public static bool MacIsZero(ReadOnlySpan<byte> mac)
     {
