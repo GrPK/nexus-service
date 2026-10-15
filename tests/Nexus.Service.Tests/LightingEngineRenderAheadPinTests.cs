@@ -17,6 +17,9 @@ public class LightingEngineRenderAheadPinTests
 
     private static DevicePin Pin(string kind, string? effect = null) => new() { Kind = kind, Effect = effect };
 
+    // Live ticks are Unix milliseconds; any tick below this is an ahead-window tick the tests chose.
+    private const double LiveClockFloorMs = 1e11;
+
     // Red follows the render time, so a window sampled from "now" instead of its own ticks shows the wrong value.
     private sealed class TickRedEffect : IClockOnlyEffect
     {
@@ -322,7 +325,7 @@ public class LightingEngineRenderAheadPinTests
         public string Name => "spyglobal";
         public void RenderFrame(CanvasBuffer canvas, double tickMs)
         {
-            if (tickMs < 100_000) Interlocked.Increment(ref AheadRenders);
+            if (tickMs < LiveClockFloorMs) Interlocked.Increment(ref AheadRenders);
             canvas.Fill(9, 9, 9);
         }
         public void Dispose() { }
@@ -379,7 +382,7 @@ public class LightingEngineRenderAheadPinTests
         public string Name => "sleepy";
         public void RenderFrame(CanvasBuffer canvas, double tickMs)
         {
-            if (tickMs < 100_000) Thread.Sleep(8);
+            if (tickMs < LiveClockFloorMs) Thread.Sleep(8);
             canvas.Fill(9, 9, 9);
         }
         public void Dispose() { }
@@ -392,8 +395,10 @@ public class LightingEngineRenderAheadPinTests
         rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
         Assert.True(await rig.RollsEventually("d-0", "d-1"));
         rig.Pins.Clear("d-0");
-        // Queued while the removal's tombstone exists. Every ahead frame sleeps, so the request lasts at least
-        // 150 frames * 8 ms however fast the machine is, which outlives the expiry.
+        // The engine must have seen the removal (and made its tombstone) before the request begins.
+        Assert.True(await rig.BecomesFalse("d-0"));
+        // Every ahead frame sleeps, so the request lasts at least frames times the sleep however fast the
+        // machine is, which outlives the tombstone's expiry.
         var ticks = Enumerable.Range(1, 150).Select(i => (long)i).ToArray();
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var req = rig.Engine.RequestAhead(new[] { "d-0", "d-2" }, ticks);
@@ -402,12 +407,24 @@ public class LightingEngineRenderAheadPinTests
         Assert.NotNull(req.Frames);
     }
 
+    // Without GL the broken shader never reports a failure, so these tests have nothing to observe.
+    private static bool GpuAvailable(GpuContext gpu)
+    {
+        if (!gpu.Available)
+        {
+            gpu.EnsureInitializedLocked();
+            gpu.WaitForInit(TimeSpan.FromSeconds(20));
+        }
+        return gpu.Available;
+    }
+
     private static ShaderEffect FailingShader(GpuContext gpu) => new("broken", gpu, "this is not glsl");
 
     [Fact]
     public async Task A_pinned_shader_that_failed_without_throwing_keeps_its_chain_live()
     {
         using var gpu = new GpuContext(160, 90);
+        if (!GpuAvailable(gpu)) return;
         using var rig = new Rig(new RampEffect());
         rig.Build = _ => FailingShader(gpu);
         rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
@@ -421,6 +438,7 @@ public class LightingEngineRenderAheadPinTests
     public async Task A_global_shader_that_failed_is_not_time_pure()
     {
         using var gpu = new GpuContext(160, 90);
+        if (!GpuAvailable(gpu)) return;
         using var rig = new Rig(new RampEffect());
         Assert.True(await rig.RollsEventually("d-1"));
         rig.Engine.SetEffect(FailingShader(gpu));
