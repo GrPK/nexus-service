@@ -60,6 +60,9 @@ public interface ISensorProvider
     /// </summary>
     IReadOnlyDictionary<string, StorageComponent> GetStorageComponents(bool includeSmart = true);
 
+    /// <summary>Called before a poll-style read of SMART sensors, so the first read after drive reads stopped is not stale. A provider without gated SMART reads has nothing to do.</summary>
+    void BeforeSmartRead() { }
+
     /// <summary>Which SMART drives spin platters, keyed by LHM identifier. A drive whose media cannot be determined is absent.</summary>
     IReadOnlyDictionary<string, bool> GetRotationalDrives() => new Dictionary<string, bool>();
     IReadOnlyList<string> GetStoragePartitions();

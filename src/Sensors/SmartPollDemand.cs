@@ -51,6 +51,13 @@ internal sealed class SmartPollDemand
         Surfaces || driveIdentifiers.Any(IsNeededFor);
 
     /// <summary>
+    /// A reader that finds drive reads had stopped does its own walk before reading values. When reads were
+    /// already running, values are within the user's cadence and nothing is forced.
+    /// </summary>
+    public static bool ReaderMustWalk(bool windowWasClosed, SmartPollDemand demandWithoutWindow, IEnumerable<string> driveIdentifiers) =>
+        windowWasClosed && !demandWithoutWindow.IsActive(driveIdentifiers);
+
+    /// <summary>
     /// The skip count for one drive's walk. A drive nothing needs is never read, Force
     /// included, and forgotten so the first walk after it is needed reads it at once.
     /// A user's Never still wins over the seed and over Force.
@@ -77,35 +84,29 @@ internal static class SmartLiveConsumers
     // The smart-poll ping topic is deliberately absent: the Settings page's own subscription must not keep the reads alive.
     private static readonly string[] Topics = { "monitoring", "storage" };
 
-    // Poll-style readers (Deck tiles and dials, MCP, the diagnostics refresh) leave no subscription; the window outlasts their poll cadence.
-    private static int _cold;
+    // Readers that poll or call once leave no subscription, so a read keeps demand alive for this long; it outlasts the polling cadences.
     private const long ReaderWindowMs = 15_000;
     private static long _lastReadMs = long.MinValue / 2;
 
-    /// <summary>Called by poll-style readers of SMART sensors.</summary>
-    /// <summary>Returns true when the window was closed, i.e. drive values may be from before reads stopped.</summary>
+    /// <summary>Called by readers of SMART sensors. Returns true when the window was closed, i.e. drive reads may have stopped and cached values may be old.</summary>
     public static bool NoteRead()
     {
         var now = Environment.TickCount64;
         var wasCold = now - Volatile.Read(ref _lastReadMs) >= ReaderWindowMs;
         Volatile.Write(ref _lastReadMs, now);
-        if (wasCold) Volatile.Write(ref _cold, 1);
         return wasCold;
     }
 
-    /// <summary>True once after a cold <see cref="NoteRead"/>; the sensor walk then bypasses its rate floor so the first read is fresh.</summary>
-    public static bool TakeColdStart() => Interlocked.Exchange(ref _cold, 0) == 1;
+    internal static void Forget() => Volatile.Write(ref _lastReadMs, long.MinValue / 2);
 
-    internal static void Forget()
-    {
-        Volatile.Write(ref _lastReadMs, long.MinValue / 2);
-        Volatile.Write(ref _cold, 0);
-    }
+    /// <summary>Subscribers only, without the reader window: whether live frames alone keep drives reading.</summary>
+    public static bool Subscribed(Nexus.Service.Sockets.MultiplexHub? hub) =>
+        hub is not null && Topics.Any(hub.TopicHasSubscribers);
 
     public static bool Any(Nexus.Service.Sockets.MultiplexHub? hub)
     {
         if (Environment.TickCount64 - Volatile.Read(ref _lastReadMs) < ReaderWindowMs) return true;
-        return hub is not null && Topics.Any(hub.TopicHasSubscribers);
+        return Subscribed(hub);
     }
 }
 

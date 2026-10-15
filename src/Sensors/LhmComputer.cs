@@ -219,9 +219,6 @@ public sealed class LhmComputer : IDisposable
     {
         if (!_openTask.IsCompletedSuccessfully) return;
 
-        // First poll-style read after reads had stopped: the cached drive values are from before that, so walk now.
-        if (refresh == SensorRefresh.Normal && SmartLiveConsumers.TakeColdStart()) refresh = SensorRefresh.Force;
-
         var floorMs = refresh == SensorRefresh.Fast ? FastFloorMs : NormalFloorMs;
         if (refresh != SensorRefresh.Force && Environment.TickCount64 - Interlocked.Read(ref _lastUpdateTicks) < floorMs)
         {
@@ -282,6 +279,22 @@ public sealed class LhmComputer : IDisposable
 
             _updateErrorLoggedAt[key] = now;
             ServiceLog.Warn($"[lhm] update failed for {hw.Name}: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// A SMART reader calls this before reading drive values. When its read finds drive reads had stopped, it walks
+    /// itself, waiting for any walk in flight, so it never sees values from before they stopped. Drives nothing needs
+    /// or the user set to never are untouched; the seed was dropped, so each needed drive reads once.
+    /// </summary>
+    public void BeforeSmartRead()
+    {
+        var wasClosed = SmartLiveConsumers.NoteRead();
+        if (!wasClosed || !_openTask.IsCompletedSuccessfully) return;
+        var demand = SmartPollDemand.Capture(_gates, _config.Load(), SmartLiveConsumers.Subscribed(_hub));
+        if (SmartPollDemand.ReaderMustWalk(wasClosed, demand, StorageIdentifiers()))
+        {
+            Update(SensorRefresh.Force);
         }
     }
 

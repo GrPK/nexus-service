@@ -228,7 +228,7 @@ public static class SensorSnapshotResolver
     /// <summary>The "smart/"-prefixed components only, mirroring nexus-web's smartStorageSensors.</summary>
     private static IReadOnlyList<HardwareSensor> SmartStorageSensors(ISensorProvider sensors)
     {
-        SmartLiveConsumers.NoteRead();
+        sensors.BeforeSmartRead();
         var list = new List<HardwareSensor>();
         foreach (var entry in sensors.GetStorageComponents(includeSmart: true))
         {

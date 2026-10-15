@@ -135,7 +135,7 @@ public sealed class GetSensorsTool : IMcpTool
 
     private (List<HardwareSensor>? Sensors, string? Error) ResolveStorageSensors(JsonElement? args)
     {
-        Nexus.Service.Sensors.SmartLiveConsumers.NoteRead();
+        _sensors.BeforeSmartRead();
         var components = _sensors.GetStorageComponents(includeSmart: true);
         var drive = McpArgs.StringArg(args, "drive");
         if (string.IsNullOrEmpty(drive))

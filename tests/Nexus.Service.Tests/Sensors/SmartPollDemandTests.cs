@@ -168,15 +168,32 @@ public class SmartPollDemandTests
     }
 
     [Fact]
-    public void AColdNoteRead_IsReportedOnce_AndAWarmOneIsNot()
+    public void AReadAfterTheWindowClosed_IsReportedCold_AndAWarmOneIsNot()
     {
         SmartLiveConsumers.Forget();
 
         Assert.True(SmartLiveConsumers.NoteRead());
-        Assert.True(SmartLiveConsumers.TakeColdStart());
-        Assert.False(SmartLiveConsumers.TakeColdStart());
         Assert.False(SmartLiveConsumers.NoteRead());
-        Assert.False(SmartLiveConsumers.TakeColdStart());
         SmartLiveConsumers.Forget();
+    }
+
+    [Fact]
+    public void TheReaderWalksOnlyWhenReadsHadStopped()
+    {
+        var (store, gates) = Build();
+        Pillars(store, false, false, cooling: false);
+        var stopped = SmartPollDemand.Capture(gates, store.Load(), liveConsumers: false);
+        var drives = new[] { "/ata/0" };
+
+        Assert.True(SmartPollDemand.ReaderMustWalk(true, stopped, drives));
+        Assert.False(SmartPollDemand.ReaderMustWalk(false, stopped, drives));
+
+        // Reads were running: a live subscriber, a pillar, or a drive curve keeps cadence in charge.
+        Assert.False(SmartPollDemand.ReaderMustWalk(true, SmartPollDemand.Capture(gates, store.Load(), liveConsumers: true), drives));
+        store.Update(s => s.Features.Monitoring = true);
+        Assert.False(SmartPollDemand.ReaderMustWalk(true, SmartPollDemand.Capture(gates, store.Load(), liveConsumers: false), drives));
+        Pillars(store, false, false, cooling: true);
+        DriveCurve(store, "/ata/0/temperature/0");
+        Assert.False(SmartPollDemand.ReaderMustWalk(true, SmartPollDemand.Capture(gates, store.Load(), liveConsumers: false), drives));
     }
 }
