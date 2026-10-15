@@ -49,14 +49,14 @@ public sealed class IbpPeripheralHub : IDisposable
 
         public IbpAttachedPeripheral Info { get; }
         public IHidDevice Device { get; }
-        /// <summary>Reused encode buffer (no per-frame allocation at 30 Hz).</summary>
+        /// <summary>Reused encode buffer (no per-frame allocation).</summary>
         public byte[] Frame { get; }
         /// <summary>True once the host has taken the LEDs; reset when handed back to firmware.</summary>
         public bool SoftwareMode { get; set; }
         public int Failures { get; set; }
-        /// <summary>Stopwatch timestamp the next capped frame is due; 0 until the first.</summary>
-        public long NextDueStamp { get; set; }
-        public long LastSlowWarnStamp { get; set; }
+        /// <summary>Stopwatch timestamp of the last frame sent on a capped model; 0 until the first.</summary>
+        public long LastSentStamp { get; set; }
+        public bool SlowWarned { get; set; }
         public long WindowStartStamp { get; set; }
         public int WindowFrames { get; set; }
         public int WindowSkipped { get; set; }
@@ -66,11 +66,11 @@ public sealed class IbpPeripheralHub : IDisposable
     }
 
     private const int ConsecutiveWriteFailureThreshold = 5;
-    // A frame may go out this fraction of a period before its due time: the
-    // writer ticks on a jittery timer, so an exact compare would drop a tick.
-    private const double CapToleranceFraction = 0.1;
+    // A capped frame needs at least this fraction of a period since the last
+    // sent frame: the writer ticks on a jittery timer, so an exact compare
+    // would drop a tick, and a hard minimum gap can never burst.
+    private const double MinGapFraction = 0.9;
     private const double SlowWriteMs = 20;
-    private const double SlowWarnIntervalSec = 10;
     private const double StatsWindowSec = 60;
 
     private readonly IHidEnumerator _hid;
@@ -201,8 +201,8 @@ public sealed class IbpPeripheralHub : IDisposable
             if (slot is null) return false;
             var model = slot.Info.Model;
             var now = _clock();
-            if (model.MaxFrameRateHz > 0 && slot.NextDueStamp != 0
-                && now < slot.NextDueStamp - ToleranceStamps(model.MaxFrameRateHz))
+            if (model.MaxFrameRateHz > 0 && slot.LastSentStamp != 0
+                && now - slot.LastSentStamp < MinGapStamps(model.MaxFrameRateHz))
             {
                 slot.WindowSkipped++;
                 return true;
@@ -225,7 +225,7 @@ public sealed class IbpPeripheralHub : IDisposable
                 }
                 var writeEnd = _clock();
                 slot.Failures = 0;
-                if (model.MaxFrameRateHz > 0) AdvanceDueLocked(slot, now, model.MaxFrameRateHz);
+                if (model.MaxFrameRateHz > 0) slot.LastSentStamp = now;
                 RecordWriteTimingLocked(slot, writeEnd - writeStart, writeEnd);
                 return true;
             }
@@ -238,27 +238,16 @@ public sealed class IbpPeripheralHub : IDisposable
         }
     }
 
-    private static long PeriodStamps(int hz) => (long)(Stopwatch.Frequency / (double)hz);
-
-    private static long ToleranceStamps(int hz) => (long)(PeriodStamps(hz) * CapToleranceFraction);
-
-    // Due-time schedule: stepping by whole periods averages the cap rate even
-    // when the writer tick does not divide it. A frame later than a full period
-    // (a stall) resyncs to now plus one period, so there is no catch-up burst.
-    private static void AdvanceDueLocked(Slot slot, long now, int hz)
-    {
-        var period = PeriodStamps(hz);
-        var next = slot.NextDueStamp == 0 ? now + period : slot.NextDueStamp + period;
-        if (next < now) next = now + period;
-        slot.NextDueStamp = next;
-    }
+    private static long MinGapStamps(int hz) => (long)(Stopwatch.Frequency / (double)hz * MinGapFraction);
 
     private static double StampsToMs(long stamps) => stamps * 1000.0 / Stopwatch.Frequency;
 
     // Caller must hold _io. Per-unit SetFeature timing: one summary line per
-    // stats window while frames flow, and a rate-limited warning on a slow write.
+    // stats window while frames flow, and one warning per window on a slow
+    // write. Capped models only.
     private void RecordWriteTimingLocked(Slot slot, long writeStamps, long now)
     {
+        if (slot.Info.Model.MaxFrameRateHz <= 0) return;
         if (slot.WindowStartStamp == 0) slot.WindowStartStamp = now;
         slot.WindowFrames++;
         slot.WindowTotalStamps += writeStamps;
@@ -268,9 +257,9 @@ public sealed class IbpPeripheralHub : IDisposable
         if (ms > SlowWriteMs)
         {
             slot.WindowSlow++;
-            if (slot.LastSlowWarnStamp == 0 || StampsToMs(now - slot.LastSlowWarnStamp) >= SlowWarnIntervalSec * 1000)
+            if (!slot.SlowWarned)
             {
-                slot.LastSlowWarnStamp = now;
+                slot.SlowWarned = true;
                 ServiceLog.Warn($"[ibp] slow SetFeature on {slot.Info.Model.Id}: {ms:F1} ms for one frame");
             }
         }
@@ -280,12 +269,18 @@ public sealed class IbpPeripheralHub : IDisposable
         var avg = StampsToMs(slot.WindowTotalStamps) / slot.WindowFrames;
         ServiceLog.Info($"[ibp] write stats {slot.Info.Model.Id} ({slot.Info.Serial}): frames={slot.WindowFrames} skipped={slot.WindowSkipped} "
             + $"avg={avg:F2} ms max={StampsToMs(slot.WindowMaxStamps):F2} ms over{(int)SlowWriteMs}ms={slot.WindowSlow} window={windowMs / 1000:F0}s");
-        slot.WindowStartStamp = now;
+        ResetStatsWindow(slot);
+    }
+
+    private static void ResetStatsWindow(Slot slot)
+    {
+        slot.WindowStartStamp = 0;
         slot.WindowFrames = 0;
         slot.WindowSkipped = 0;
         slot.WindowSlow = 0;
         slot.WindowTotalStamps = 0;
         slot.WindowMaxStamps = 0;
+        slot.SlowWarned = false;
     }
 
     /// <summary>Return one unit's LEDs to its onboard animation. No-op unless the host holds them.</summary>
@@ -343,6 +338,7 @@ public sealed class IbpPeripheralHub : IDisposable
     {
         if (!slot.SoftwareMode) return;
         slot.SoftwareMode = false;
+        ResetStatsWindow(slot);
         var give = IbpPeripheralProtocol.FirmwareModeReport(slot.Info.Model);
         if (give is null) return;
         try

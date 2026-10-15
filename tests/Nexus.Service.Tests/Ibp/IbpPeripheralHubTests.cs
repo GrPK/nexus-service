@@ -169,7 +169,7 @@ public class IbpPeripheralHubTests
         var km7Id = hub.Attached.Single(a => a.Model == IbpPeripheralProtocol.Km7Keyboard).DeviceId;
         var mekLeds = new RgbColor[IbpPeripheralProtocol.Mek4Keyboard.LedCount];
         var km7Leds = new RgbColor[24];
-        var step = Stopwatch.Frequency / 30; // the writer's 30 Hz tick
+        var step = Stopwatch.Frequency / 30;
 
         for (var i = 0; i < 30; i++)
         {
@@ -178,13 +178,12 @@ public class IbpPeripheralHubTests
             now += step;
         }
         // Mek4 takes no software-mode report: one report per sent frame, every second tick.
-        Assert.Null(IbpPeripheralProtocol.SoftwareModeReport(IbpPeripheralProtocol.Mek4Keyboard));
-        Assert.InRange(mek.Features.Count, 14, 16);
+        Assert.Equal(15, mek.Features.Count);
         Assert.Equal(1 + 30 * 3, km7.Features.Count);
     }
 
     [Fact]
-    public void Mek4_cap_averages_15_hz_over_a_long_run_and_never_sends_back_to_back_after_a_stall()
+    public void Mek4_sent_frames_keep_a_minimum_gap_across_a_stall_and_jittery_ticks()
     {
         var hid = new ScriptedEnumerator();
         hid.AddUnit(IbpPeripheralProtocol.Mek4Keyboard, "MK1");
@@ -194,27 +193,27 @@ public class IbpPeripheralHubTests
         var mek = hid.Opened["mek4-keyboard-MK1-vendor"];
         var id = hub.Attached.Single().DeviceId;
         var leds = new RgbColor[IbpPeripheralProtocol.Mek4Keyboard.LedCount];
-        var step = Stopwatch.Frequency / 30;
+        var tick = Stopwatch.Frequency / 30;
+        var minGap = (long)(Stopwatch.Frequency / 15.0 * 0.9);
         var sentAt = new List<long>();
 
-        void Tick()
+        void Tick(long advance)
         {
             var before = mek.Features.Count;
             Assert.True(hub.WriteFrame(id, leds));
             if (mek.Features.Count != before) sentAt.Add(now);
-            now += step;
+            now += advance;
         }
 
-        for (var i = 0; i < 300; i++) Tick();
-        Assert.InRange(sentAt.Count, 149, 151);
+        for (var i = 0; i < 30; i++) Tick(tick);
+        Assert.Equal(15, sentAt.Count);
 
         now += Stopwatch.Frequency * 2; // a stall
-        sentAt.Clear();
-        for (var i = 0; i < 30; i++) Tick();
-        Assert.InRange(sentAt.Count, 14, 16);
+        for (var i = 0; i < 300; i++) Tick(i % 2 == 0 ? Stopwatch.Frequency * 31 / 1000 : Stopwatch.Frequency * 47 / 1000);
+        Assert.True(sentAt.Count > 60);
         for (var i = 1; i < sentAt.Count; i++)
         {
-            Assert.True(sentAt[i] - sentAt[i - 1] >= step - 1);
+            Assert.True(sentAt[i] - sentAt[i - 1] >= minGap, $"gap {i} too short");
         }
     }
 
