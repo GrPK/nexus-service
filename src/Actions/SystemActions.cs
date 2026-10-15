@@ -269,6 +269,11 @@ public sealed class SystemActions
     private readonly object _macCaptureLock = new();
     private Process? _macCapture;
 
+    // The bare scheme opens the native snip overlay like Win+Shift+S / Win+Shift+R;
+    // the //capture/ form opens the Snipping Tool app window instead.
+    internal const string ScreenShotUri = "ms-screenclip:";
+    internal const string ScreenRecordUri = "ms-screenclip:?type=recording";
+
     /// <summary>
     /// Opens the OS capture UI for the deck Screen Shot / Screen Record keys.
     /// Windows hands the Snipping Tool capture or record overlay URI to the
@@ -276,11 +281,6 @@ public sealed class SystemActions
     /// opens the Screenshot toolbar for a recording; Linux tries the common
     /// capture tools for a still and has no recorder to open.
     /// </summary>
-    // The bare scheme opens the native snip overlay like Win+Shift+S / Win+Shift+R;
-    // the //capture/ form opens the Snipping Tool app window instead.
-    internal const string ScreenShotUri = "ms-screenclip:";
-    internal const string ScreenRecordUri = "ms-screenclip:?type=recording";
-
     public async Task<ApiResponse> OpenScreenCaptureAsync(bool record)
     {
         if (OperatingSystem.IsWindows())
