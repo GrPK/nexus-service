@@ -530,6 +530,11 @@ if (!testHost)
         app.Services.GetRequiredService<Nexus.Service.Persistence.IConfigStore>());
 }
 
+if (!testHost)
+{
+    _ = app.Services.GetRequiredService<Nexus.Service.Deck.ListedAppIds>();
+}
+
 // Connect the session D-Bus once here - single-threaded, BEFORE hosted services
 // (curve engine etc.) start. A root daemon drops euid for this socket connect
 // (LinuxSession.ConnectAsSessionUser); doing it now keeps that process-wide euid

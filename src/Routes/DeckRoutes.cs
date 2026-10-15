@@ -41,7 +41,7 @@ public static class DeckRoutes
 
         app.MapPost("/deck/presets", (
             CreateDeckPresetRequest body, HttpContext ctx, TokenService tokens, IConfigStore store, MultiplexHub hub,
-            DeckPresetCatalog catalog, Nexus.Service.Activity.IShortcutsProvider shortcuts) =>
+            DeckPresetCatalog catalog, Nexus.Service.Activity.IShortcutsProvider shortcuts, ListedAppIds listed) =>
         {
             var optionCount = (body.Deck is not null ? 1 : 0) + (body.TemplateId is not null ? 1 : 0) + (body.CopyOfPresetId is not null ? 1 : 0);
             if (optionCount > 1)
@@ -51,17 +51,17 @@ public static class DeckRoutes
             var isDesktopCreate = ServiceTokenRequests.HasServiceToken(ctx, tokens);
             if (body.TemplateId is not null)
             {
-                return CreateFromTemplate(body.TemplateId, isDesktopCreate, store, hub, catalog, shortcuts);
+                return CreateFromTemplate(body.TemplateId, isDesktopCreate, store, hub, catalog, shortcuts, listed.Snapshot());
             }
             if (body.Deck is not null && !isDesktopCreate
-                && DeckLayoutPolicy.IntroducesPrivilegedActions(body.Deck, stored: null))
+                && DeckLayoutPolicy.IntroducesPrivilegedActions(body.Deck, stored: null, listed.Snapshot()))
             {
                 return Results.Json(ApiResponse.Fail("deck_action_requires_desktop"), AppJsonContext.Default.ApiResponse, statusCode: 403);
             }
             if (body.CopyOfPresetId is not null && !isDesktopCreate)
             {
                 var copySource = store.Load().StreamDeck.Presets.Find(p => p.Id == body.CopyOfPresetId);
-                if (copySource is not null && DeckLayoutPolicy.PrivilegedActions(copySource.Deck).Any())
+                if (copySource is not null && DeckLayoutPolicy.PrivilegedActions(copySource.Deck, listed.Snapshot()).Any())
                 {
                     return Results.Json(ApiResponse.Fail("deck_action_requires_desktop"), AppJsonContext.Default.ApiResponse, statusCode: 403);
                 }
@@ -139,7 +139,7 @@ public static class DeckRoutes
         }).AllowPanel();
 
         app.MapPut("/deck/presets/{id}", (
-            string id, UpdateDeckPresetRequest body, HttpContext ctx, TokenService tokens, IConfigStore store, MultiplexHub hub, StreamDeckConnectionWorker worker) =>
+            string id, UpdateDeckPresetRequest body, HttpContext ctx, TokenService tokens, IConfigStore store, MultiplexHub hub, StreamDeckConnectionWorker worker, ListedAppIds listed) =>
         {
             var existing = store.Load().StreamDeck.Presets.Find(p => p.Id == id);
             if (existing is null)
@@ -147,7 +147,7 @@ public static class DeckRoutes
                 return Results.Json(ApiResponse.Fail("preset not found"), AppJsonContext.Default.ApiResponse, statusCode: 404);
             }
             if (body.Deck is not null && !ServiceTokenRequests.HasServiceToken(ctx, tokens)
-                && DeckLayoutPolicy.IntroducesPrivilegedActions(body.Deck, existing.Deck))
+                && DeckLayoutPolicy.IntroducesPrivilegedActions(body.Deck, existing.Deck, listed.Snapshot()))
             {
                 return Results.Json(ApiResponse.Fail("deck_action_requires_desktop"), AppJsonContext.Default.ApiResponse, statusCode: 403);
             }
@@ -358,7 +358,7 @@ public static class DeckRoutes
         }).LocalhostOnly();
 
         app.MapPost("/deck/presets/import", async (
-            HttpContext ctx, IConfigStore store, MultiplexHub hub, DeckImageStore images, DeckPresetCatalog catalog) =>
+            HttpContext ctx, IConfigStore store, MultiplexHub hub, DeckImageStore images, DeckPresetCatalog catalog, ListedAppIds listed) =>
         {
             var bodySize = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
             if (bodySize is { IsReadOnly: false })
@@ -393,7 +393,7 @@ public static class DeckRoutes
             var manifest = read.Manifest!;
 
             var allowPrivileged = ctx.Request.Query["allowPrivileged"] == "1";
-            if (!allowPrivileged && DeckLayoutPolicy.PrivilegedActions(manifest.Deck).Any())
+            if (!allowPrivileged && DeckLayoutPolicy.PrivilegedActions(manifest.Deck, listed.Snapshot()).Any())
             {
                 return Results.Json(ApiResponse.Fail("deck_action_requires_desktop"), AppJsonContext.Default.ApiResponse, statusCode: 403);
             }
@@ -470,7 +470,7 @@ public static class DeckRoutes
 
         // A widget passes its own grid so a first-time instance gets a preset
         // authored at that size instead of the 2x2 fallback.
-        app.MapGet("/deck/instances/{id}", (string id, int? cols, int? rows, HttpContext ctx, TokenService tokens, IConfigStore store) =>
+        app.MapGet("/deck/instances/{id}", (string id, int? cols, int? rows, HttpContext ctx, TokenService tokens, IConfigStore store, ListedAppIds listed) =>
         {
             if (!IsValidInstanceId(id))
             {
@@ -483,7 +483,7 @@ public static class DeckRoutes
             }
             if (!id.StartsWith("streamdeck:", System.StringComparison.Ordinal))
             {
-                var lazy = CreateLazyWidgetInstance(store, id, cols, rows, ServiceTokenRequests.HasServiceToken(ctx, tokens));
+                var lazy = CreateLazyWidgetInstance(store, id, cols, rows, ServiceTokenRequests.HasServiceToken(ctx, tokens), listed.Snapshot());
                 return Results.Json(new DeckInstanceResponse { Instance = lazy }, AppJsonContext.Default.DeckInstanceResponse);
             }
             var serial = id["streamdeck:".Length..];
@@ -496,7 +496,7 @@ public static class DeckRoutes
         }).AllowPanel();
 
         app.MapPut("/deck/instances/{id}", (
-            string id, UpdateDeckInstanceRequest body, HttpContext ctx, TokenService tokens, IConfigStore store, DeckPresetActivator activator) =>
+            string id, UpdateDeckInstanceRequest body, HttpContext ctx, TokenService tokens, IConfigStore store, DeckPresetActivator activator, ListedAppIds listed) =>
         {
             if (!IsValidInstanceId(id))
             {
@@ -530,7 +530,7 @@ public static class DeckRoutes
                 // slot holds with no dispatch-time policy check of its own, so
                 // this reassignment is the only gate standing between a panel
                 // and code execution as the console user.
-                if (!isDesktop && DeckLayoutPolicy.PrivilegedActions(target.Deck).Any())
+                if (!isDesktop && DeckLayoutPolicy.PrivilegedActions(target.Deck, listed.Snapshot()).Any())
                 {
                     return Results.Json(ApiResponse.Fail("deck_action_requires_desktop"), AppJsonContext.Default.ApiResponse, statusCode: 403);
                 }
@@ -639,7 +639,7 @@ public static class DeckRoutes
     /// layout); a host with none gets a fresh preset at the widget's grid
     /// holding the Essentials keys.
     /// </summary>
-    private static DeckInstance CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop)
+    private static DeckInstance CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop, System.Func<string, bool> isListed)
     {
         DeckInstance? created = null;
         store.Update(s =>
@@ -652,7 +652,7 @@ public static class DeckRoutes
             // A panel caller joins only what PUT would let it activate. An empty
             // preset is never worth joining: the widget would show no keys.
             var presetId = s.StreamDeck.Presets
-                .FirstOrDefault(p => DeckConfigNavigation.HasContent(p.Deck) && (isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck).Any()))?.Id;
+                .FirstOrDefault(p => DeckConfigNavigation.HasContent(p.Deck) && (isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any()))?.Id;
             if (presetId is null)
             {
                 var (presetCols, presetRows, deck) = DeckDefaultPresets.EssentialsFor(
@@ -771,7 +771,7 @@ public static class DeckRoutes
 
     /// <summary>Copies a bundled template into a new host-wide preset: name unique-suffixed on collision (DeckModesMigration's numbered form, since a template has no natural device-name grouping to parenthesize), apps pre-bound to the resolved installed app when one exists and is not already bound to another preset.</summary>
     private static Microsoft.AspNetCore.Http.IResult CreateFromTemplate(
-        string templateId, bool isDesktopCreate, IConfigStore store, MultiplexHub hub, DeckPresetCatalog catalog, Nexus.Service.Activity.IShortcutsProvider shortcuts)
+        string templateId, bool isDesktopCreate, IConfigStore store, MultiplexHub hub, DeckPresetCatalog catalog, Nexus.Service.Activity.IShortcutsProvider shortcuts, System.Func<string, bool> isListed)
     {
         var template = catalog.Open(templateId);
         if (template is null)
@@ -782,7 +782,7 @@ public static class DeckRoutes
         // A bundled template is trusted data, but a panel session still may
         // not author a preset carrying a privileged (hotkey/file/text/audio)
         // key any more than it may via a deck/templateId of its own.
-        if (!isDesktopCreate && DeckLayoutPolicy.PrivilegedActions(manifest.Deck).Any())
+        if (!isDesktopCreate && DeckLayoutPolicy.PrivilegedActions(manifest.Deck, isListed).Any())
         {
             return Results.Json(ApiResponse.Fail("deck_action_requires_desktop"), AppJsonContext.Default.ApiResponse, statusCode: 403);
         }

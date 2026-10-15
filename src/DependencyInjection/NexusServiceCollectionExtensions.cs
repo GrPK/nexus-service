@@ -969,6 +969,7 @@ public static class NexusServiceCollectionExtensions
             return worker;
         });
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.StreamDeck.StreamDeckConnectionWorker>());
+        services.AddSingleton<Nexus.Service.Deck.ListedAppIds>();
         services.AddSingleton<Nexus.Service.Deck.DeckPresetActivator>();
         services.AddSingleton<Nexus.Service.Deck.DeckPresetCatalog>();
         services.AddSingleton<Nexus.Service.Deck.RecentAppsActivator>(sp => new Nexus.Service.Deck.RecentAppsActivator(

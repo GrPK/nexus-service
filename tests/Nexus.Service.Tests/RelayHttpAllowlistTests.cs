@@ -54,6 +54,7 @@ public class RelayHttpAllowlistTests
     [InlineData("GET", "/pawnio")]                   // off-allowlist
     [InlineData("GET", "/")]                          // SPA shell
     [InlineData("GET", "/panelX")]                   // not a /panel segment boundary
+    [InlineData("POST", "/system/launch-uri")]       // steam:// launch - desktop only
     [InlineData("POST", "/system/open-path")]        // opens arbitrary local files - LAN-only
     [InlineData("POST", "/system/input/keys")]       // raw keystroke injection - desktop only
     [InlineData("POST", "/system/input/text")]

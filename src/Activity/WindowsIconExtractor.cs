@@ -19,6 +19,9 @@ public interface IWindowsIconExtractor
     /// </summary>
     byte[] ExtractPng(string lnkOrTargetPath, int sizePx);
 
+    /// <summary>As <see cref="ExtractPng(string, int)"/> for a non-.lnk source, selecting the icon at iconIndex inside it.</summary>
+    byte[] ExtractPng(string iconPath, int sizePx, int iconIndex);
+
     /// <summary>
     /// Resolves a .lnk to the executable it launches. Unlike the icon path
     /// this ignores IconLocation, which frequently points at a resource DLL
@@ -73,6 +76,9 @@ public sealed unsafe class WindowsIconExtractor : IWindowsIconExtractor, IDispos
 
     public byte[] ExtractPng(string lnkOrTargetPath, int sizePx) =>
         RunOnComThread(() => ExtractPngCore(lnkOrTargetPath, sizePx), Array.Empty<byte>());
+
+    public byte[] ExtractPng(string iconPath, int sizePx, int iconIndex) =>
+        RunOnComThread(() => ExtractPngCore(iconPath, sizePx, iconIndex), Array.Empty<byte>());
 
     public string ResolveLinkTargetPath(string lnkPath) =>
         RunOnComThread(() => TryResolveLnkTarget(lnkPath, out var target) ? target : "", "");
@@ -129,10 +135,9 @@ public sealed unsafe class WindowsIconExtractor : IWindowsIconExtractor, IDispos
         return result;
     }
 
-    private static byte[] ExtractPngCore(string lnkOrTargetPath, int sizePx)
+    private static byte[] ExtractPngCore(string lnkOrTargetPath, int sizePx, int iconIndex = 0)
     {
         var iconPath = lnkOrTargetPath;
-        var iconIndex = 0;
         if (lnkOrTargetPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) &&
             TryResolveLnk(lnkOrTargetPath, out var resolvedPath, out var resolvedIndex))
         {

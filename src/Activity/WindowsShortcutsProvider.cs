@@ -43,6 +43,13 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
     private readonly Dictionary<string, string> _processNameCache = new();
     private readonly object _processNameLock = new();
 
+    // Unknown URI ids are caller-supplied and their misses are not icon-cached,
+    // so the URL -> .url file map is built once per TTL instead of per request.
+    private static readonly TimeSpan UrlIndexTtl = TimeSpan.FromMinutes(1);
+    private Dictionary<string, string>? _urlIndex;
+    private DateTime _urlIndexExpiry;
+    private readonly object _urlIndexLock = new();
+
     public WindowsShortcutsProvider() : this(new WindowsIconExtractor(), new IconDiskCache())
     {
     }
@@ -270,93 +277,120 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
     }
 
     /// <summary>A fully-qualified path on a local drive ("C:\..."), excluding UNC and device paths.</summary>
-    private static bool IsLocalRootedPath(string path)
-    {
-        if (!Path.IsPathFullyQualified(path))
-        {
-            return false;
-        }
-        var root = Path.GetPathRoot(path);
-        return root is not null && root.Length >= 2 && char.IsLetter(root[0]) && root[1] == ':';
-    }
+    private static bool IsLocalRootedPath(string path) => ShortcutTargets.IsLocalDrivePath(path);
 
-    /// <summary>Icon for a targetId that is an executable path rather than a Start-Menu id, so a deck key bound to a game's exe shows the game's icon.</summary>
+    /// <summary>Icon for a targetId that is a file path or URI rather than a Start-Menu id, so a deck key bound to a game's exe, a .url or a steam:// link shows the right icon.</summary>
     private byte[] ExtractExecutablePathIcon(string targetId)
     {
+        var path = ShortcutTargets.Normalize(targetId);
+        if (ShortcutTargets.IsLaunchUri(path))
+        {
+            var urlFile = FindUrlShortcutByUri(path);
+            return urlFile is null ? Array.Empty<byte>() : ExtractIconForFile(targetId, urlFile);
+        }
+
         // Extension allowlist, not just File.Exists: GetIcon is panel-reachable,
         // and this is the only branch that takes a caller-supplied path. The
         // local-drive test is what keeps a UNC path out - File.Exists on
         // \\host\share triggers outbound SMB auth and blocks this synchronous
         // call for the SMB timeout.
-        var ext = Path.GetExtension(targetId);
-        var isExecutable =
+        var ext = Path.GetExtension(path);
+        var isIconSource =
             ext.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
-            ext.Equals(".lnk", StringComparison.OrdinalIgnoreCase);
-        if (!isExecutable || !IsLocalRootedPath(targetId) || !File.Exists(targetId))
+            ext.Equals(".lnk", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".url", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".ico", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".bat", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".cmd", StringComparison.OrdinalIgnoreCase);
+        if (!isIconSource || !IsLocalRootedPath(path) || !File.Exists(path))
         {
             return Array.Empty<byte>();
         }
 
-        DateTime sourceWriteTimeUtc;
-        try
-        {
-            sourceWriteTimeUtc = File.GetLastWriteTimeUtc(targetId);
-        }
-        catch
-        {
-            return Array.Empty<byte>();
-        }
-
-        var cached = _diskCache.TryGet(targetId, targetId, sourceWriteTimeUtc);
-        if (cached is not null)
-        {
-            return cached;
-        }
-
-        var png = _iconExtractor.ExtractPng(targetId, IconSizePx);
-        if (png.Length > 0)
-        {
-            _diskCache.Store(targetId, targetId, sourceWriteTimeUtc, png);
-        }
-
-        return png;
+        return ExtractIconForFile(targetId, path);
     }
 
     private byte[] ExtractWin32Icon(Shortcut shortcut)
     {
-        var lnkPath = FindShortcutLnk(shortcut.Name);
-        if (lnkPath is null)
+        var shortcutFile = FindShortcutFile(shortcut.Name);
+        if (shortcutFile is not null)
         {
-            return Array.Empty<byte>();
+            var png = ExtractIconForFile(shortcut.Id, shortcutFile);
+            if (png.Length > 0)
+            {
+                return png;
+            }
         }
 
+        // Get-StartApps also returns bare exe paths, some behind a known-folder GUID prefix.
+        return ExtractExecutablePathIcon(shortcut.Id);
+    }
+
+    /// <summary>Disk-cached icon of a .lnk, .url or direct icon-bearing file.</summary>
+    private byte[] ExtractIconForFile(string cacheId, string sourcePath)
+    {
         DateTime sourceWriteTimeUtc;
         try
         {
-            sourceWriteTimeUtc = File.GetLastWriteTimeUtc(lnkPath);
+            sourceWriteTimeUtc = File.GetLastWriteTimeUtc(sourcePath);
         }
         catch
         {
             return Array.Empty<byte>();
         }
 
-        var cached = _diskCache.TryGet(shortcut.Id, lnkPath, sourceWriteTimeUtc);
+        var cached = _diskCache.TryGet(cacheId, sourcePath, sourceWriteTimeUtc);
         if (cached is not null)
         {
             return cached;
         }
 
-        var png = _iconExtractor.ExtractPng(lnkPath, IconSizePx);
+        var png = sourcePath.EndsWith(".url", StringComparison.OrdinalIgnoreCase)
+            ? ExtractInternetShortcutPng(sourcePath)
+            : _iconExtractor.ExtractPng(sourcePath, IconSizePx);
         if (png.Length > 0)
         {
-            _diskCache.Store(shortcut.Id, lnkPath, sourceWriteTimeUtc, png);
+            _diskCache.Store(cacheId, sourcePath, sourceWriteTimeUtc, png);
         }
 
         return png;
     }
 
+    /// <summary>A .url carries its icon as IconFile/IconIndex (Steam points these at its own .ico files). Empty when absent or unreadable.</summary>
+    private byte[] ExtractInternetShortcutPng(string urlPath)
+    {
+        try
+        {
+            if (new FileInfo(urlPath).Length > ShortcutTargets.MaxInternetShortcutBytes)
+            {
+                return Array.Empty<byte>();
+            }
+
+            var (_, iconFile, iconIndex) = ShortcutTargets.ParseInternetShortcut(ShortcutTargets.ReadInternetShortcutText(urlPath));
+            if (iconFile is null)
+            {
+                return Array.Empty<byte>();
+            }
+
+            var iconPath = ShortcutTargets.Normalize(iconFile);
+            return IsLocalRootedPath(iconPath) && File.Exists(iconPath)
+                ? _iconExtractor.ExtractPng(iconPath, IconSizePx, iconIndex)
+                : Array.Empty<byte>();
+        }
+        catch
+        {
+            return Array.Empty<byte>();
+        }
+    }
+
     /// <summary>Finds the Start-Menu .lnk whose base name matches, searching the same two roots the old PowerShell path did.</summary>
-    private static string? FindShortcutLnk(string name)
+    private static string? FindShortcutLnk(string name) => FindStartMenuFile(name, "*.lnk");
+
+    /// <summary>Like <see cref="FindShortcutLnk"/> but also matches .url internet shortcuts, which is what Steam games are.</summary>
+    private static string? FindShortcutFile(string name) =>
+        FindStartMenuFile(name, "*.lnk") ?? FindStartMenuFile(name, "*.url");
+
+    private static string? FindStartMenuFile(string name, string pattern)
     {
         foreach (var dir in StartMenuProgramsDirs())
         {
@@ -366,16 +400,62 @@ public sealed class WindowsShortcutsProvider : IShortcutsProvider
             }
 
             var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
-            foreach (var lnk in Directory.EnumerateFiles(dir, "*.lnk", options))
+            foreach (var file in Directory.EnumerateFiles(dir, pattern, options))
             {
-                if (string.Equals(Path.GetFileNameWithoutExtension(lnk), name, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(Path.GetFileNameWithoutExtension(file), name, StringComparison.OrdinalIgnoreCase))
                 {
-                    return lnk;
+                    return file;
                 }
             }
         }
 
         return null;
+    }
+
+    /// <summary>The Start-Menu .url whose URL equals the given URI, for ids like steam://rungameid/730 that name no file.</summary>
+    private string? FindUrlShortcutByUri(string uri)
+    {
+        lock (_urlIndexLock)
+        {
+            if (_urlIndex is null || _urlIndexExpiry <= DateTime.UtcNow)
+            {
+                _urlIndex = BuildUrlIndex();
+                _urlIndexExpiry = DateTime.UtcNow + UrlIndexTtl;
+            }
+            return _urlIndex.TryGetValue(uri, out var file) ? file : null;
+        }
+    }
+
+    private static Dictionary<string, string> BuildUrlIndex()
+    {
+        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        foreach (var dir in StartMenuProgramsDirs())
+        {
+            if (!Directory.Exists(dir))
+            {
+                continue;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(dir, "*.url", options))
+            {
+                try
+                {
+                    if (new FileInfo(file).Length > ShortcutTargets.MaxInternetShortcutBytes)
+                    {
+                        continue;
+                    }
+                    var url = ShortcutTargets.ParseInternetShortcut(ShortcutTargets.ReadInternetShortcutText(file)).Url;
+                    if (!string.IsNullOrEmpty(url))
+                    {
+                        index.TryAdd(url, file);
+                    }
+                }
+                catch { }
+            }
+        }
+
+        return index;
     }
 
     private static IEnumerable<string> StartMenuProgramsDirs()
