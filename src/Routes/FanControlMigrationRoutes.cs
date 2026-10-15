@@ -37,7 +37,8 @@ internal static class FanControlMigrationRoutes
                 AutostartPresent = result.AutostartPresent,
                 Version = result.Version,
                 InstallLocation = result.InstallLocation,
-                Pending = result.Detected && result.ImportAvailable && !settings.FanControlImportOffered,
+                Pending = result.Detected && result.ImportAvailable && !settings.FanControlImportOffered
+                    && !settings.FanControlImportCompleted,
                 Completed = settings.FanControlImportCompleted,
             };
             foreach (var c in result.Configs)
@@ -103,7 +104,7 @@ public sealed class FanControlStatusDto
     public string? Version { get; set; }
     public string? InstallLocation { get; set; }
     public List<FanControlConfigDto> Configs { get; set; } = new();
-    /// <summary>True when the onboarding screen should offer the import: detected, importable, and not yet dismissed.</summary>
+    /// <summary>True when the onboarding screen should offer the import: detected, importable, not yet dismissed, and not yet imported.</summary>
     public bool Pending { get; set; }
     /// <summary>True once any category has been imported. Survives an uninstall.</summary>
     public bool Completed { get; set; }
@@ -179,9 +180,6 @@ public sealed class FanControlApplyResponse
 {
     public bool Error { get; set; }
     public string Msg { get; set; } = "Ok";
-    /// <summary>Cooling preset the import created or replaced, and left active. Null when nothing preset-shaped was selected.</summary>
-    public string? PresetId { get; set; }
-    public string? PresetName { get; set; }
     public int CurvesImported { get; set; }
     public int CalibrationsImported { get; set; }
     public int NamesImported { get; set; }

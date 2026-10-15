@@ -72,6 +72,7 @@ public sealed class RgbBridge : IDisposable
     /// this long means detection ended without a COMPLETE we saw.
     /// </summary>
     private static readonly TimeSpan DetectionQuietWindow = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan BlackoutSettlePoll = TimeSpan.FromMilliseconds(25);
     /// <summary>A requested in-place rescan with no COMPLETE by now is a wedged detection pass: the next re-detect restarts the daemon instead.</summary>
     private static readonly TimeSpan DetectionStallLimit = TimeSpan.FromSeconds(60);
     /// <summary>A known RGB device that arrived over USB gets this long for the daemon's own hotplug to register it before a rescan is spent on it.</summary>
@@ -551,12 +552,67 @@ public sealed class RgbBridge : IDisposable
     /// drive them, so it has no business blanking them either.
     /// </summary>
     public async Task<int> BlackoutAsync(CancellationToken ct = default)
+        => (await BlackoutCoreAsync(null, ct).ConfigureAwait(false)).Pushed;
+
+    /// <summary>
+    /// The same push as <see cref="BlackoutAsync"/>, but first waits until
+    /// <paramref name="settleUntilUtc"/> for an in-progress detection or device
+    /// refresh to commit, so the black frame reaches the full device list instead
+    /// of the partial one a rescan leaves, and reports what it wrote. A wait that
+    /// runs out, or a null deadline, still pushes to the devices known by then.
+    /// </summary>
+    internal Task<BlackoutReport> BlackoutSettledAsync(DateTime? settleUntilUtc, CancellationToken ct = default)
+        => BlackoutCoreAsync(settleUntilUtc, ct);
+
+    /// <summary>True while a detection pass or the refresh that commits its device list is outstanding; a rescan with no COMPLETE past the stall limit no longer counts.</summary>
+    private bool DeviceListSettling()
     {
-        if (!IsActive || !_controller.IsConnected)
+        var requested = Interlocked.Read(ref _redetectRequestedTicks);
+        var requestedLive = requested != 0 && DateTime.UtcNow.Ticks - requested <= DetectionStallLimit.Ticks;
+        return DetectionInProgress()
+            || requestedLive
+            || Volatile.Read(ref _refreshPending) != 0
+            || _refreshSemaphore.CurrentCount == 0;
+    }
+
+    private async Task<BlackoutReport> BlackoutCoreAsync(DateTime? settleUntilUtc, CancellationToken ct)
+    {
+        if (!IsActive)
         {
-            return 0;
+            return new BlackoutReport(0, 0, BlackoutSkip.Inactive);
+        }
+        var unsettled = false;
+        if (settleUntilUtc is { } until)
+        {
+            var confirmed = false;
+            while (IsActive && DateTime.UtcNow < until && !ct.IsCancellationRequested)
+            {
+                if (DeviceListSettling())
+                {
+                    confirmed = false;
+                }
+                else if (confirmed)
+                {
+                    break;
+                }
+                else
+                {
+                    // The completion handler clears its flags a moment before the
+                    // refresh that commits the list raises its own; one more poll
+                    // tells that gap from settled.
+                    confirmed = true;
+                }
+                try { await Task.Delay(BlackoutSettlePoll, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+            }
+            unsettled = IsActive && DeviceListSettling();
+        }
+        if (!_controller.IsConnected)
+        {
+            return new BlackoutReport(0, _physBuffers.Count, BlackoutSkip.Disconnected);
         }
         var pushed = 0;
+        var known = _physBuffers.Count;
         // Local scratch, not the _physFullyUncontrolled field OnFrame owns:
         // this runs on the power-event thread while the engine may still tick.
         var fullyUncontrolled = new Dictionary<int, bool>();
@@ -571,7 +627,7 @@ public sealed class RgbBridge : IDisposable
             ct.ThrowIfCancellationRequested();
             if (!_controller.IsConnected)
             {
-                return pushed;
+                return new BlackoutReport(pushed, known, BlackoutSkip.Disconnected);
             }
             if (fullyUncontrolled.TryGetValue(kv.Key, out var skip) && skip)
             {
@@ -587,7 +643,7 @@ public sealed class RgbBridge : IDisposable
         // baselines so the first frame after resume always reaches hardware.
         _lastPushed.Clear();
         _lastPushTicks.Clear();
-        return pushed;
+        return new BlackoutReport(pushed, known, unsettled ? BlackoutSkip.Unsettled : BlackoutSkip.None);
     }
 
     /// <summary>
@@ -676,6 +732,10 @@ public sealed class RgbBridge : IDisposable
     /// </summary>
     private void Redetect(string reason, bool detectorsChanged)
     {
+        if (RefuseRestartDuringShutdown(reason))
+        {
+            return;
+        }
         if (!IsActive)
         {
             ServiceLog.Info($"[rgb-bridge] re-detect skipped ({reason}): bridge not active");
@@ -772,6 +832,24 @@ public sealed class RgbBridge : IDisposable
         });
     }
 
+    /// <summary>Whether the OS is going down; replaceable so a test need not flip the process-wide flag.</summary>
+    internal Func<bool> OsShuttingDown { get; set; } = () => Lifecycle.HostShutdown.IsOsShutdown;
+
+    /// <summary>Once the OS is going down, a daemon restart or rescan only competes with the lights-off.</summary>
+    private bool RefuseRestartDuringShutdown(string reason)
+    {
+        if (!OsShuttingDown())
+        {
+            return false;
+        }
+        ServiceLog.Info($"[rgb-bridge] {reason} skipped: OS shutting down");
+        // A rescan already requested cannot be retried by the bounce it falls back to,
+        // and no COMPLETE will clear these, so the lights-off must not wait on them.
+        Interlocked.Exchange(ref _redetectRequestedTicks, 0);
+        Interlocked.Exchange(ref _detectionActivityTicks, 0);
+        return true;
+    }
+
     private void MarkDetectionActivity() => Interlocked.Exchange(ref _detectionActivityTicks, DateTime.UtcNow.Ticks);
 
     /// <summary>True while detection is visibly running, so a commit would show a half-detected list.</summary>
@@ -816,7 +894,7 @@ public sealed class RgbBridge : IDisposable
         {
             return;
         }
-        if (deferred is not null)
+        if (deferred is not null && !OsShuttingDown())
         {
             Redetect(deferred, deferredDetectors);
             return;
@@ -848,6 +926,10 @@ public sealed class RgbBridge : IDisposable
 
     private void BounceSubprocess(string reason)
     {
+        if (RefuseRestartDuringShutdown(reason))
+        {
+            return;
+        }
         if (!IsActive)
         {
             ServiceLog.Info($"[rgb-bridge] bounce skipped ({reason}): bridge not active");
@@ -2061,7 +2143,7 @@ public sealed class RgbBridge : IDisposable
             _deferredRedetectReason = null;
             _deferredDetectorsChanged = false;
         }
-        if (deferred is not null)
+        if (deferred is not null && !OsShuttingDown())
         {
             Redetect(deferred, deferredDetectors);
             return;
@@ -2519,4 +2601,25 @@ public sealed class RgbBridge : IDisposable
         }
         Deactivate();
     }
+}
+
+/// <summary>Why a blackout push wrote nothing, stopped short, or ran against an unsettled device list.</summary>
+internal enum BlackoutSkip
+{
+    None,
+    Inactive,
+    Disconnected,
+    Unsettled,
+}
+
+/// <summary>What a blackout push did: physicals written, physicals known, and why it stopped short if it did.</summary>
+internal readonly record struct BlackoutReport(int Pushed, int Known, BlackoutSkip Skipped)
+{
+    public override string ToString() => Skipped switch
+    {
+        BlackoutSkip.None => $"pushed {Pushed}/{Known}",
+        BlackoutSkip.Inactive => "skipped:inactive",
+        BlackoutSkip.Disconnected => $"skipped:disconnected (pushed {Pushed}/{Known})",
+        _ => $"pushed {Pushed}/{Known} (device list still settling)",
+    };
 }

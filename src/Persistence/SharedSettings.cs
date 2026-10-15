@@ -67,6 +67,8 @@ public sealed class PanelSettings
     /// normal monitor. Default on. Surfaced as "Keep panel clear of other
     /// windows" under Panel settings.</summary>
     public bool ReserveMonitor { get; set; } = true;
+    /// <summary>False drops the Y70 kiosk out of the topmost band so other windows can cover it. Default on.</summary>
+    public bool AlwaysOnTop { get; set; } = true;
     public bool ThemeSyncWithDesktop { get; set; } = true;
     public string ThemeMode { get; set; } = "system";
     public bool AccentSyncWithDesktop { get; set; } = true;
@@ -308,6 +310,7 @@ public sealed class PanelSettingsPatch
 {
     public bool? AutoLaunch { get; set; }
     public bool? ReserveMonitor { get; set; }
+    public bool? AlwaysOnTop { get; set; }
     public bool? ThemeSyncWithDesktop { get; set; }
     public string? ThemeMode { get; set; }
     public bool? AccentSyncWithDesktop { get; set; }

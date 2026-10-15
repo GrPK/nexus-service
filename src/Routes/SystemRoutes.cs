@@ -96,6 +96,35 @@ public static class SystemRoutes
             return ApiResponse.Ok();
         }).AllowPanel();
 
+        // Default capture endpoint, same state shape as /system/volume.
+        app.MapGet("/system/mic", (IVolumeProvider v) => v.GetCaptureState()).AllowPanel();
+        app.MapPost("/system/mic", (SetVolumeBody body, IVolumeProvider v) =>
+        {
+            v.SetCaptureVolume(body.Volume);
+            return v.GetCaptureState();
+        }).AllowPanel();
+        app.MapPost("/system/mic/mute", (SetMutedBody body, IVolumeProvider v) =>
+        {
+            v.SetCaptureMuted(body.Muted);
+            return v.GetCaptureState();
+        }).AllowPanel();
+
+        app.MapGet("/system/radios", (Nexus.Service.Platform.Radios.IRadioProvider radios, CancellationToken ct) =>
+            radios.GetStateAsync(ct)).AllowPanel();
+        app.MapPost("/system/radios", async (Nexus.Service.Models.Radios.SetRadioBody body,
+            Nexus.Service.Platform.Radios.IRadioProvider radios, CancellationToken ct) =>
+        {
+            if (!Nexus.Service.Models.Radios.RadioKinds.IsKnown(body.Kind))
+            {
+                return Results.Json(ApiResponse.Fail("unknown radio kind"), AppJsonContext.Default.ApiResponse);
+            }
+            if (!await radios.SetAsync(body.Kind, body.On, ct).ConfigureAwait(false))
+            {
+                return Results.Json(ApiResponse.Fail("radio unavailable"), AppJsonContext.Default.ApiResponse);
+            }
+            return Results.Json(await radios.GetStateAsync(ct).ConfigureAwait(false), AppJsonContext.Default.RadiosState);
+        }).AllowPanel();
+
         // Volume target: the media widget's per-widget auto/app/output slider mode.
         app.MapGet("/system/volume/target", (string? mode, string? source, string? deviceId, VolumeTargetResolver resolver) =>
             resolver.Resolve(mode ?? "", source ?? "", deviceId ?? "")).AllowPanel();

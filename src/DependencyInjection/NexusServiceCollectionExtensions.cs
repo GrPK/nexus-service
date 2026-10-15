@@ -573,6 +573,12 @@ public static class NexusServiceCollectionExtensions
             return engine;
         });
         services.AddSingleton<Nexus.Service.Lighting.Scene.LightingSceneStore>();
+        services.AddSingleton<Nexus.Service.Lighting.CustomEffects.CustomEffectStore>();
+        services.AddSingleton<Nexus.Service.Lighting.CustomEffects.CustomFragCompiler>(sp =>
+        {
+            var gpu = sp.GetRequiredService<Nexus.Service.Lighting.Engine.Gpu.GpuContext>();
+            return frag => Nexus.Service.Lighting.Engine.Gpu.ShaderEffect.ValidateFragment(gpu, frag);
+        });
         services.AddSingleton<Nexus.Service.Lighting.Scene.LightingSceneService>();
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Lighting.Scene.LightingSceneService>());
         // Community LED mappings: resolver state for contributor frames, the
@@ -1975,6 +1981,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IProcessActionsProvider, HelperProcessActionsProxy>();
         services.AddSingleton<IMediaProvider, WindowsMediaProvider>();
         services.AddSingleton<IVolumeProvider, WindowsVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.WindowsRadioProvider>();
         // Explicit factory: the two constructors would otherwise leave which one
         // DI picks (and so whether the helper route is wired) to overload rules.
         services.AddSingleton<IAudioDeviceProvider>(sp =>
@@ -1999,6 +2006,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IProcessActionsProvider, DirectProcessActionsProvider>();
         services.AddSingleton<IMediaProvider, MacMediaProvider>();
         services.AddSingleton<IVolumeProvider, MacVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.StubRadioProvider>();
         services.AddSingleton<IAudioDeviceProvider, MacAudioDeviceProvider>();
         // macOS exposes no per-app volume API; the only implementations ship a
         // HAL driver, which Nexus does not.
@@ -2016,6 +2024,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<ISystemAccentProvider, Nexus.Service.Platform.Linux.LinuxSystemAccentProvider>();
         services.AddSingleton<IMediaProvider, LinuxMediaProvider>();
         services.AddSingleton<IVolumeProvider, LinuxVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.StubRadioProvider>();
         services.AddSingleton<IAudioDeviceProvider, LinuxAudioDeviceProvider>();
         // PipeWire/PulseAudio do expose per-sink-input volume; not wired yet.
         services.AddSingleton<IAudioSessionProvider, StubAudioSessionProvider>();
@@ -2028,6 +2037,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IProcessActionsProvider, DirectProcessActionsProvider>();
         services.AddSingleton<IMediaProvider, StubMediaProvider>();
         services.AddSingleton<IVolumeProvider, StubVolumeProvider>();
+        services.AddSingleton<Nexus.Service.Platform.Radios.IRadioProvider, Nexus.Service.Platform.Radios.StubRadioProvider>();
         services.AddSingleton<IAudioDeviceProvider, StubAudioDeviceProvider>();
         services.AddSingleton<IAudioSessionProvider, StubAudioSessionProvider>();
         services.AddSingleton<IBeatsProvider, StubBeatsProvider>();

@@ -8,6 +8,7 @@ public sealed class OverlayStateResponse
 {
     public bool AutoLaunch { get; set; }
     public bool ReserveMonitor { get; set; }
+    public bool PanelAlwaysOnTop { get; set; } = true;
     public string Y70Backdrop { get; set; } = "";
     public bool Y70CompatibilityRendering { get; set; }
     public bool Y70KeepCursorOff { get; set; }

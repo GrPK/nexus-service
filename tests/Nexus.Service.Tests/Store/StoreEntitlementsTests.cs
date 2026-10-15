@@ -111,6 +111,8 @@ public sealed class StoreEntitlementsTests : IDisposable
     {
         var (ent, api, _) = Make(signedIn: true);
         api.OnSendRaw = (_, _, _, _) => CloudApiResult<CloudRawResponse>.Fail(status, null, null);
+        // A 401 triggers a re-refresh; the cloud answers it with a refusal, which is a real sign-out.
+        api.OnRefresh = _ => CloudApiResult<CloudAuthSession>.Fail(401, "revoked", "revoked");
 
         var auth = await ent.AuthorizeAsync("com.hellonexus.aquarium", "1.0.2", null, CancellationToken.None);
 

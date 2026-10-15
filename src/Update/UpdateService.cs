@@ -7,6 +7,7 @@ using Nexus.Service.Devices.Firmware;
 using Nexus.Service.Lifecycle;
 using Nexus.Service.Models.Update;
 using Nexus.Service.Persistence;
+using Nexus.Service.Platform;
 using Nexus.Service.Sockets;
 #if WINDOWS
 using Nexus.Service.Helper;
@@ -88,6 +89,8 @@ public sealed class UpdateService : BackgroundService
     // boot-time failure (DNS not up, a refused request) isn't stranded until the
     // next PollInterval.
     private volatile bool _hadSuccessfulCheck;
+    // UTC ticks of the next automatic check after a rate-limit refusal; 0 when none. In memory only.
+    private long _retryAtTicks;
     private volatile string? _stagedInstallerPath;
     // Version the staged installer is for. A newer manifest supersedes it, so the
     // auto-stage guard re-stages instead of leaving the queued install on the old
@@ -205,20 +208,36 @@ public sealed class UpdateService : BackgroundService
         using var timer = new PeriodicTimer(PollInterval);
         do
         {
-            try
-            {
-                if (!Nexus.Service.FocusModes.FocusNetworkGate.IsHeld)
-                    await PollAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[update] poll iteration failed: {ex.GetType().Name}: {ex.Message}");
-            }
+            await PollGatedAsync(stoppingToken).ConfigureAwait(false);
 
             if (!_hadSuccessfulCheck
+                && Interlocked.Read(ref _retryAtTicks) == 0
                 && !await RetryUntilFirstCheckAsync(stoppingToken).ConfigureAwait(false))
             {
                 return;
+            }
+
+            // A rate-limit refusal sets the retry time: poll again then, not at the next 4h tick.
+            while (Interlocked.Read(ref _retryAtTicks) is var ticks and > 0)
+            {
+                var wait = new DateTimeOffset(ticks, TimeSpan.Zero) - DateTimeOffset.UtcNow;
+                try
+                {
+                    if (wait > TimeSpan.Zero)
+                        await Task.Delay(wait, stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                // A manual check may have set a later time while we waited; wait for that one instead.
+                if (Interlocked.CompareExchange(ref _retryAtTicks, 0, ticks) != ticks)
+                {
+                    continue;
+                }
+
+                await PollGatedAsync(stoppingToken).ConfigureAwait(false);
             }
         }
         while (await WaitAsync(timer, stoppingToken).ConfigureAwait(false));
@@ -237,7 +256,7 @@ public sealed class UpdateService : BackgroundService
         // back to the normal 4h cadence instead of polling (and logging) forever.
         const int maxAttempts = 8;
         var delaySeconds = 15;
-        for (var attempt = 0; attempt < maxAttempts && !_hadSuccessfulCheck && !ct.IsCancellationRequested; attempt++)
+        for (var attempt = 0; attempt < maxAttempts && !_hadSuccessfulCheck && Interlocked.Read(ref _retryAtTicks) == 0 && !ct.IsCancellationRequested; attempt++)
         {
             try
             {
@@ -250,7 +269,7 @@ public sealed class UpdateService : BackgroundService
 
             try
             {
-                await PollAsync(ct).ConfigureAwait(false);
+                await PollGatedAsync(ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -836,6 +855,22 @@ public sealed class UpdateService : BackgroundService
 
     // --- Internal ---
 
+    private async Task PollGatedAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!Nexus.Service.FocusModes.FocusNetworkGate.IsHeld)
+                await PollAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[update] poll iteration failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     private async Task PollAsync(CancellationToken ct)
     {
         var s = _store.Load();
@@ -849,6 +884,7 @@ public sealed class UpdateService : BackgroundService
         {
             var manifest = await _source.GetLatestAsync(channel, ct).ConfigureAwait(false);
             _hadSuccessfulCheck = true;
+            Interlocked.Exchange(ref _retryAtTicks, 0);
 
             _latestManifest = manifest;
 
@@ -953,7 +989,15 @@ public sealed class UpdateService : BackgroundService
                 CanAutoInstall = CanApplyUpdates,
                 CanStage = _latestManifest?.Sha256IsFromSumsFile == true,
             };
-            Console.Error.WriteLine($"[update] check failed: {ex.GetType().Name}: {ex.Message}");
+            if (ex is RateLimitedException limited)
+            {
+                Interlocked.Exchange(ref _retryAtTicks, limited.Until.UtcTicks);
+                ServiceLog.Warn($"[update] release API rate limited until {limited.Until.ToUniversalTime():u}");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[update] check failed: {ex.GetType().Name}: {ex.Message}");
+            }
         }
     }
 

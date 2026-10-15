@@ -275,6 +275,21 @@ public class LightingSleepBlackoutTests : IDisposable
     }
 
     [Fact]
+    public void Coordinator_OnHostShutdown_AfterLockBlackout_StaysDark()
+    {
+        using var engine = new LightingEngine();
+        var devices = MakeLitDevices();
+        engine.UpdateDevices(devices);
+        var coordinator = new SleepBlackoutCoordinator(engine, _store);
+
+        coordinator.OnSessionLocked();
+        coordinator.OnHostShutdown();
+
+        Assert.True(engine.Blackout);
+        Assert.All(devices, d => Assert.True(AllBlack(d)));
+    }
+
+    [Fact]
     public void Coordinator_OnHostShutdown_WhenSettingOff_LeavesLightingAlone()
     {
         using var engine = new LightingEngine();
@@ -290,11 +305,12 @@ public class LightingSleepBlackoutTests : IDisposable
     }
 
     [Fact]
-    public void Coordinator_ShutdownBudget_LeavesTheTerminalBlackFrameRoom()
+    public void Coordinator_ShutdownBudget_LeavesRoomUnderTheOsShutdownTeardownCap()
     {
-        // The fast teardown that calls OnHostShutdown caps every task at 1500ms;
-        // a budget at or above that would see the terminal black push cut off.
-        Assert.True(SleepBlackoutCoordinator.ShutdownBudget < TimeSpan.FromMilliseconds(1500));
+        Assert.True(SleepBlackoutCoordinator.Budget <= SleepBlackoutCoordinator.ShutdownBudget);
+        Assert.True(
+            SleepBlackoutCoordinator.ShutdownBudget + TimeSpan.FromMilliseconds(500)
+                <= Nexus.Service.Lifecycle.HostShutdown.OsShutdownTeardownBudget);
         Assert.True(SleepBlackoutCoordinator.FadeDuration < SleepBlackoutCoordinator.Budget);
     }
 
@@ -344,8 +360,7 @@ public class LightingSleepBlackoutTests : IDisposable
     [Fact]
     public void Coordinator_OnHostShutdown_StaysInsideItsBudget()
     {
-        // The shutdown budget is tighter than the suspend one; the black frame
-        // has to land inside it either way.
+        // The black frame has to land inside the shutdown budget.
         using var engine = new LightingEngine();
         var devices = MakeLitDevices();
         engine.UpdateDevices(devices);

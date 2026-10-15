@@ -1,45 +1,45 @@
 {
-  "count": 1972,
+  "count": 2010,
   "devices": [
     {
       "name": "Bloody B820R",
       "vid": "0x09DA",
-      "pid": null,
+      "pid": "0xFA10",
       "controller": "A4TechController",
       "kind": "hid"
     },
     {
       "name": "Bloody MP 50RS",
       "vid": "0x09DA",
-      "pid": null,
+      "pid": "0xFA60",
       "controller": "A4TechController",
       "kind": "hid"
     },
     {
       "name": "Bloody W60 Pro",
       "vid": "0x09DA",
-      "pid": null,
+      "pid": "0x37EA",
       "controller": "A4TechController",
       "kind": "hid"
     },
     {
       "name": "Bloody W70 Max",
       "vid": "0x09DA",
-      "pid": null,
+      "pid": "0x79EF",
       "controller": "A4TechController",
       "kind": "hid"
     },
     {
       "name": "Bloody W90 Max",
       "vid": "0x09DA",
-      "pid": null,
+      "pid": "0x3666",
       "controller": "A4TechController",
       "kind": "hid"
     },
     {
       "name": "Bloody W90 Pro",
       "vid": "0x09DA",
-      "pid": null,
+      "pid": "0x39B6",
       "controller": "A4TechController",
       "kind": "hid"
     },
@@ -101,6 +101,20 @@
     },
     {
       "name": "ASRock Motherboard SMBus Controllers",
+      "vid": null,
+      "pid": null,
+      "controller": "ASRockSMBusController",
+      "kind": "i2c"
+    },
+    {
+      "name": "ASRock Radeon RX 7900 XTX Phantom Gaming",
+      "vid": null,
+      "pid": null,
+      "controller": "ASRockSMBusController",
+      "kind": "i2c"
+    },
+    {
+      "name": "ASRock Radeon RX 7900 XTX Taichi 24GB OC",
       "vid": null,
       "pid": null,
       "controller": "ASRockSMBusController",
@@ -298,7 +312,7 @@
     {
       "name": "ASUS ROG Strix SCAR 15",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x19B6",
       "controller": "AsusAuraCoreController",
       "kind": "hid"
     },
@@ -823,7 +837,7 @@
     {
       "name": "ASUS ROG Chakram (Wireless)",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x18E5",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
@@ -851,133 +865,140 @@
     {
       "name": "ASUS ROG Gladius II",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1845",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius II Core",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x18DD",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius II Origin",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1877",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius II Origin COD",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x18B1",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius II Origin PNK LTD",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x18CD",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius II Wireless",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x189E",
+      "controller": "AsusAuraUSBController",
+      "kind": "hid"
+    },
+    {
+      "name": "ASUS ROG Gladius II Wireless",
+      "vid": "0x0B05",
+      "pid": "0x18A0",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius III",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x197B",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius III Core",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1C8D",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius III Wireless 2.4Ghz",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x197F",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius III Wireless AimPoint 2.4Ghz",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A72",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius III Wireless AimPoint USB",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A70",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius III Wireless Bluetooth",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1981",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Gladius III Wireless USB",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x197D",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Keris",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x195C",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Keris Wireless 2.4Ghz",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1960",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Keris Wireless AimPoint 2.4Ghz",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A68",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Keris Wireless AimPoint USB",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A66",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Keris Wireless Bluetooth",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1962",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Keris Wireless USB",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x195E",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
@@ -991,21 +1012,21 @@
     {
       "name": "ASUS ROG Pugio",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1846",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Pugio II (Wired)",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1906",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Pugio II (Wireless)",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1908",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
@@ -1082,56 +1103,56 @@
     {
       "name": "ASUS ROG Strix Impact",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1847",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Strix Impact II",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x18E1",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Strix Impact II Electro Punk",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1956",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Strix Impact II Gundam",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x189E",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Strix Impact II Moonlight White",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x19D2",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Strix Impact II Wireless 2.4 Ghz",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1949",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Strix Impact II Wireless USB",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1947",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS ROG Strix Impact III",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A88",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
@@ -1139,6 +1160,13 @@
       "name": "ASUS ROG Strix LC",
       "vid": "0x0B05",
       "pid": "0x879E",
+      "controller": "AsusAuraUSBController",
+      "kind": "hid"
+    },
+    {
+      "name": "ASUS ROG Strix LC III",
+      "vid": "0x0B05",
+      "pid": "0x1B29",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
@@ -1327,70 +1355,70 @@
     {
       "name": "ASUS TUF Gaming M3",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1910",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS TUF Gaming M3 Gen II",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A9B",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "ASUS TUF Gaming M5",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1898",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "Asus ROG Chakram (Wired)",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x18E3",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "Asus ROG Chakram Core",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1958",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "Asus ROG Chakram X 2.4GHz",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A1A",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "Asus ROG Chakram X USB",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1A18",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "Asus ROG Spatha X 2.4GHz",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1979",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "Asus ROG Spatha X Dock",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1979",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
     {
       "name": "Asus ROG Spatha X USB",
       "vid": "0x0B05",
-      "pid": null,
+      "pid": "0x1977",
       "controller": "AsusAuraUSBController",
       "kind": "hid"
     },
@@ -1481,175 +1509,175 @@
     {
       "name": "Cherry Keyboard CCF MX 1.0 TKL BL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00CA",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard CCF MX 1.0 TKL NBL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00CB",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard CCF MX 8.0 TKL BL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00C9",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard G80-3000 TKL NBL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00C3",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard G80-3000 TKL NBL KOREAN",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00CD",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard G80-3000 TKL RGB",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00C5",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard G80-3000N FL RGB (EU)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00DE",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard G80-3000N FL RGB (US)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00E1",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard G80-3000N TKL RGB (EU)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00DD",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard G80-3000N TKL RGB (US)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00E0",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MV BOARD 3.0 FL RGB",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00C7",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX 1.0 FL BL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00AB",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX 1.0 FL NBL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00D2",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX 1.0 FL RGB",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00D3",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 1.0 TKL RGB",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00AC",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 10.0 FL RGB",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00BB",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 10.0N FL RGB (EU)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00DF",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 10.0N FL RGB (US)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00E2",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 2.0S FL NBL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00CE",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 2.0S FL RGB (EU)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x01A6",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 2.0S FL RGB (US)",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00C4",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 3.0S FL NBL",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x0077",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 3.0S FL RGB",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x0079",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 3.0S FL RGB KOREAN",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x0083",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Cherry Keyboard MX BOARD 8.0 TKL RGB",
       "vid": "0x046A",
-      "pid": null,
+      "pid": "0x00B7",
       "controller": "CherryKeyboardController",
       "kind": "hid"
     },
@@ -1857,6 +1885,13 @@
       "kind": "i2c"
     },
     {
+      "name": "iGame GeForce RTX 5080 Ultra W OC",
+      "vid": null,
+      "pid": null,
+      "controller": "ColorfulGPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "iGame GeForce RTX 2070 SUPER Advanced OC-V",
       "vid": null,
       "pid": null,
@@ -1894,28 +1929,28 @@
     {
       "name": "Cooler Master CK530",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x009F",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master CK530 V2",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0147",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master CK550 V1 / CK552",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x007F",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master CK550 V2",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0145",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
@@ -1943,21 +1978,21 @@
     {
       "name": "Cooler Master MK730",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x008F",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master MK750",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0067",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master MK850",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0069",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
@@ -2027,21 +2062,21 @@
     {
       "name": "Cooler Master MasterKeys Pro L",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x003B",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master MasterKeys Pro L White",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0047",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master MasterKeys Pro S",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x003C",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
@@ -2055,70 +2090,70 @@
     {
       "name": "Cooler Master Radeon RX 6000 GPU",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x014D",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master Radeon RX 6900 GPU",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x015B",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK620 Black",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0157",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK620 White",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0159",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK622 Black",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0149",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK622 White",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x014B",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK630",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x0089",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK650",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x008D",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK652",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x015D",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
     {
       "name": "Cooler Master SK653",
       "vid": "0x2516",
-      "pid": null,
+      "pid": "0x01AB",
       "controller": "CoolerMasterController",
       "kind": "hid"
     },
@@ -2132,14 +2167,49 @@
     {
       "name": "Corsair Commander Core",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x0C1C",
+      "controller": "CorsairCommanderCoreController",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Commander Core",
+      "vid": "0x1B1C",
+      "pid": "0x0C32",
+      "controller": "CorsairCommanderCoreController",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Commander Core",
+      "vid": "0x1B1C",
+      "pid": "0x0C1D",
+      "controller": "CorsairCommanderCoreController",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Commander Core",
+      "vid": "0x1B1C",
+      "pid": "0x0C3C",
+      "controller": "CorsairCommanderCoreController",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Commander Core",
+      "vid": "0x1B1C",
+      "pid": "0x0C3D",
+      "controller": "CorsairCommanderCoreController",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Commander Core",
+      "vid": "0x1B1C",
+      "pid": "0x0C3E",
       "controller": "CorsairCommanderCoreController",
       "kind": "hid"
     },
     {
       "name": "Corsair Commander Core XT",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x0C2A",
       "controller": "CorsairCommanderCoreController",
       "kind": "hid"
     },
@@ -2580,245 +2650,266 @@
     {
       "name": "Corsair Dark Core RGB Pro SE (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B7E",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Dark Core RGB SE (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B4B",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Harpoon Wireless (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B5E",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Ironclaw Wireless (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B4C",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Ironclaw Wireless SE",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x2B00",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Ironclaw Wireless SE (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x2B32",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K100 MX Red",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B7D",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K100 RGB Optical",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B7C",
+      "controller": "CorsairPeripheralV2Controller",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair K100 RGB Optical",
+      "vid": "0x1B1C",
+      "pid": "0x1BC5",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K55 RGB PRO",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BA4",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K57 RGB (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B6E",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K60 RGB PRO",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BA0",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K60 RGB PRO Low Profile",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BAD",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K60 RGB PRO SE",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B8D",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K60 RGB PRO TKL Black",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BC7",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K60 RGB PRO TKL White",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BED",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K70 Core RGB",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BFD",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K70 Core RGB TKL",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x2B01",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K70 RGB PRO",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BC4",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K70 RGB PRO V2",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BB3",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K70 RGB TKL",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B73",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K70 RGB TKL Champion Series",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BB9",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair K95 RGB PLATINUM XT",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B89",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Katar Pro",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B93",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Katar Pro V2",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BBA",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Katar Pro XT",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BAC",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair M55 RGB PRO",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B70",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair M65 RGB Ultra Wired",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B9E",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair M65 RGB Ultra Wireless (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BB5",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair M75 Gaming Mouse",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BF0",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair M75 Wireless",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BDC",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair M75 Wireless (Wired)",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BF1",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair MM700",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B9B",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair MM700 3XL",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BC9",
+      "controller": "CorsairPeripheralV2Controller",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Scimitar Elite RGB",
+      "vid": "0x1B1C",
+      "pid": "0x1BE3",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Slipstream Wireless Receiver HW",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1BA6",
+      "controller": "CorsairPeripheralV2Controller",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Slipstream Wireless Receiver HW",
+      "vid": "0x1B1C",
+      "pid": "0x1B66",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
     {
       "name": "Corsair Slipstream Wireless Receiver SW",
       "vid": "0x1B1C",
-      "pid": null,
+      "pid": "0x1B65",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
@@ -2887,225 +2978,232 @@
     },
     {
       "name": "Airgoo AG-DRGB04",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3204",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "Airgoo AG-DRGB08",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3F08",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "Airgoo AG-DRGB16",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3216",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "Airgoo AG-F12-DRGB16",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3F28",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "Airgoo AG-F8-DRGB08",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3F16",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB C16 V5",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3228",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB C16 V5F",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3229",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB CORE V3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1226",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB CORE V4F",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3628",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB E16",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1416",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB E8",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1407",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB E8 F",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1408",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB L8 V5",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3208",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB LED",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1209",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB LED Controller",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1208",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB LED V4",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3608",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB S16 V5F",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3232",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB SIG AB",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1210",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB SIG CD",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1211",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB SIG V4F",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3636",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB Strimer Controller",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1215",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB U16 V5",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3215",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB U16 V5F",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3217",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB ULTRA",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1220",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB ULTRA V4F",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x3616",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "DeepRGB Ultra V3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1221",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "JPU ELITE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1412",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "NEEDMAX 10 ELITE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1410",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "YICO 08 ELITE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1368",
+      "pid": "0x6078",
+      "controller": "DRGBController",
+      "kind": "hid"
+    },
+    {
+      "name": "YICO 08 ELITE",
+      "vid": "0x1368",
+      "pid": "0x6079",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "YICO 14 LCD",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2023",
+      "pid": "0x1614",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "YICO 16 ELITE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x2486",
+      "pid": "0x1616",
       "controller": "DRGBController",
       "kind": "hid"
     },
     {
       "name": "YICO 8 ELITE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1368",
+      "pid": "0x6077",
       "controller": "DRGBController",
       "kind": "hid"
     },
@@ -3153,15 +3251,15 @@
     },
     {
       "name": "Ducky One 2 RGB TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x04D9",
+      "pid": "0x0356",
       "controller": "DuckyKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Ducky Shine 7/Ducky One 2 RGB",
-      "vid": null,
-      "pid": null,
+      "vid": "0x04D9",
+      "pid": "0x0348",
       "controller": "DuckyKeyboardController",
       "kind": "hid"
     },
@@ -3671,6 +3769,13 @@
     },
     {
       "name": "ASUS ROG STRIX GeForce RTX 4090 OC EVA-02",
+      "vid": null,
+      "pid": null,
+      "controller": "ENESMBusController",
+      "kind": "i2c"
+    },
+    {
+      "name": "ASUS ROG STRIX GeForce RTX 5070 Gaming OC",
       "vid": null,
       "pid": null,
       "controller": "ENESMBusController",
@@ -5085,64 +5190,64 @@
     },
     {
       "name": "GaiZhongGai 17 PRO",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4771",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai 17+4+Touch PRO",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4770",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai 20 PRO",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4772",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai 42 PRO",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4701",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai 68+4 PRO",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4700",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai Dial",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4720",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai LightBoard",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4710",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai RGB HUB Blue",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4712",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
     {
       "name": "GaiZhongGai RGB HUB Green",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4711",
       "controller": "GaiZongGaiKeyboardController",
       "kind": "hid"
     },
@@ -5220,6 +5325,13 @@
       "name": "GameSir Nova 2 Lite",
       "vid": "0x3537",
       "pid": "0x100F",
+      "controller": "GameSirController",
+      "kind": "hid"
+    },
+    {
+      "name": "GameSir Nova 2 Lite (Wireless)",
+      "vid": "0x3537",
+      "pid": "0x1098",
       "controller": "GameSirController",
       "kind": "hid"
     },
@@ -5323,6 +5435,13 @@
     },
     {
       "name": "Gigabyte AORUS Radeon RX 9070 XT Elite",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2BlackwellGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte GeForce RTX 5060 Ti Aero OC",
       "vid": null,
       "pid": null,
       "controller": "GigabyteRGBFusion2BlackwellGPUController",
@@ -5455,7 +5574,21 @@
       "kind": "i2c"
     },
     {
+      "name": "Gigabyte Radeon RX 9060 XT GAMING OC ICE 16G",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2BlackwellGPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "Gigabyte Radeon RX 9070 GAMING OC",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2BlackwellGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte Radeon RX 9070 GRE GAMING OC 12G",
       "vid": null,
       "pid": null,
       "controller": "GigabyteRGBFusion2BlackwellGPUController",
@@ -5847,6 +5980,20 @@
       "kind": "i2c"
     },
     {
+      "name": "Gigabyte GeForce RTX 4070 Ti SUPER AORUS MASTER",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2GPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte GeForce RTX 4070 Ti SUPER Eagle OC ICE",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2GPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "Gigabyte GeForce RTX 4070 Ti SUPER GAMING OC",
       "vid": null,
       "pid": null,
@@ -5932,6 +6079,13 @@
     },
     {
       "name": "Gigabyte Radeon RX 6700 XT GAMING OC 12G",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2GPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte Radeon RX 6750 XT GAMING OC 12G",
       "vid": null,
       "pid": null,
       "controller": "GigabyteRGBFusion2GPUController",
@@ -6526,6 +6680,13 @@
       "kind": "i2c"
     },
     {
+      "name": "Gigabyte GeForce RTX 4070 Ti SUPER AERO OC",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusionGPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "Gigabyte GeForce RTX 4070 Ti SUPER EAGLE OC",
       "vid": null,
       "pid": null,
@@ -6863,29 +7024,29 @@
     },
     {
       "name": "Advanced GTA 250 USB Gaming Mouse",
-      "vid": null,
-      "pid": null,
+      "vid": "0x30FA",
+      "pid": "0x1030",
       "controller": "InstantMouseController",
       "kind": "hid"
     },
     {
       "name": "Anko KM43243952 USB Gaming Mouse",
-      "vid": null,
-      "pid": null,
+      "vid": "0x30FA",
+      "pid": "0x1440",
       "controller": "InstantMouseController",
       "kind": "hid"
     },
     {
       "name": "Anko KM43277483 USB Gaming Mouse",
-      "vid": null,
-      "pid": null,
+      "vid": "0x30FA",
+      "pid": "0x1540",
       "controller": "InstantMouseController",
       "kind": "hid"
     },
     {
       "name": "AntEsports GM600 USB Gaming Mouse",
-      "vid": null,
-      "pid": null,
+      "vid": "0x30FA",
+      "pid": "0x1040",
       "controller": "InstantMouseController",
       "kind": "hid"
     },
@@ -6997,133 +7158,140 @@
     {
       "name": "Lenovo 5 2020",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC955",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo 5 2021",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC965",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo 5 2021 Ideapad",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC963",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo 5 2022",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC975",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo 5 2022 Ideapad",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC973",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo 5 2023",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC985",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo 5 2023 Ideapad",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC984",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Ideapad 3-15ach6",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC963",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 5 Gen 10",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC195",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7 Gen 10",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC197",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7 Gen 5",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC956",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7 Gen 6",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC968",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7 Gen 7",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC978",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7 Gen 8",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC988",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7 Gen 9",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC997",
+      "controller": "LenovoControllers",
+      "kind": "hid"
+    },
+    {
+      "name": "Lenovo Legion 7 Gen 9",
+      "vid": "0x048D",
+      "pid": "0xC998",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7S Gen 5",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC957",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7S Gen 6",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC967",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7S Gen 7",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC977",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
     {
       "name": "Lenovo Legion 7S Gen 8",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC987",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
@@ -7151,7 +7319,7 @@
     {
       "name": "Lenovo Legion Y740",
       "vid": "0x048D",
-      "pid": null,
+      "pid": "0xC935",
       "controller": "LenovoControllers",
       "kind": "hid"
     },
@@ -7612,14 +7780,14 @@
     },
     {
       "name": "MNT Pocket Reform Keyboard",
-      "vid": null,
+      "vid": "0x1209",
       "pid": "0x6D06",
       "controller": "MNTKeyboardController",
       "kind": "hid"
     },
     {
       "name": "MNT Reform Keyboard",
-      "vid": null,
+      "vid": "0x1209",
       "pid": "0x6D02",
       "controller": "MNTKeyboardController",
       "kind": "hid"
@@ -8290,6 +8458,27 @@
       "kind": "i2c"
     },
     {
+      "name": "MSI GeForce RTX 5060 8G Gaming Trio OC",
+      "vid": null,
+      "pid": null,
+      "controller": "MSIGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "MSI GeForce RTX 5060 Ti 16G Gaming Trio OC",
+      "vid": null,
+      "pid": null,
+      "controller": "MSIGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "MSI GeForce RTX 5060 Ti Gaming OC",
+      "vid": null,
+      "pid": null,
+      "controller": "MSIGPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "MSI GeForce RTX 5070 Gaming Trio",
       "vid": null,
       "pid": null,
@@ -8493,6 +8682,20 @@
       "kind": "hid"
     },
     {
+      "name": "MSI GE68HX Keyboard",
+      "vid": "0x1038",
+      "pid": "0x113a",
+      "controller": "MSILaptopController",
+      "kind": "hid"
+    },
+    {
+      "name": "MSI GE68HX Lightbar",
+      "vid": "0x1038",
+      "pid": "0x114b",
+      "controller": "MSILaptopController",
+      "kind": "hid"
+    },
+    {
       "name": "MSI Laptop Keyboard",
       "vid": "0x1038",
       "pid": "0x1122",
@@ -8516,7 +8719,7 @@
     {
       "name": "MSI Mystic Light Common",
       "vid": "0x0DB0",
-      "pid": null,
+      "pid": "0x0076",
       "controller": "MSIMotherboardController",
       "kind": "hid"
     },
@@ -9291,6 +9494,13 @@
       "kind": "hid"
     },
     {
+      "name": "MSI Mystic Light MS_7E30",
+      "vid": "0x1462",
+      "pid": "0x7E30",
+      "controller": "MSIMotherboardController",
+      "kind": "hid"
+    },
+    {
       "name": "MSI Mystic Light MS_7E32",
       "vid": "0x1462",
       "pid": "0x7E32",
@@ -9370,7 +9580,7 @@
     {
       "name": "MSI Mystic Light X870",
       "vid": "0x0DB0",
-      "pid": null,
+      "pid": "0x0076",
       "controller": "MSIMotherboardController",
       "kind": "hid"
     },
@@ -9419,7 +9629,7 @@
     {
       "name": "Mountain Everest",
       "vid": "0x3282",
-      "pid": null,
+      "pid": "0x0001",
       "controller": "MountainKeyboardController",
       "kind": "hid"
     },
@@ -9503,14 +9713,14 @@
     {
       "name": "NZXT Kraken X3 Series",
       "vid": "0x1E71",
-      "pid": null,
+      "pid": "0x2007",
       "controller": "NZXTHue2Controller",
       "kind": "hid"
     },
     {
       "name": "NZXT Kraken X3 Series RGB",
       "vid": "0x1E71",
-      "pid": null,
+      "pid": "0x2014",
       "controller": "NZXTHue2Controller",
       "kind": "hid"
     },
@@ -9642,113 +9852,113 @@
     },
     {
       "name": "Nollie 16CH",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4716",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 16_OS2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x4716",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 16_OS2_1",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x2A16",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 1CH",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D2",
+      "pid": "0x1F11",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 1_OS2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x1F11",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 1_OS2_1",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x2A01",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 28 12",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D2",
+      "pid": "0x1616",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 28 L1",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D2",
+      "pid": "0x1617",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 28 L2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D2",
+      "pid": "0x1618",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 32CH",
-      "vid": null,
-      "pid": null,
+      "vid": "0x3061",
+      "pid": "0x4714",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 32_OS2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x4714",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 32_OS2_1",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x2A32",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 8CH",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D2",
+      "pid": "0x1F01",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 8_OS2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x1F01",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Nollie 8_OS2_1",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x2A08",
       "controller": "NollieController",
       "kind": "hid"
     },
     {
       "name": "Prism8 8_OS2_1",
-      "vid": null,
-      "pid": null,
+      "vid": "0x16D5",
+      "pid": "0x2C08",
       "controller": "NollieController",
       "kind": "hid"
     },
@@ -9761,8 +9971,8 @@
     },
     {
       "name": "OKS Optical Axis RGB",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1C4F",
+      "pid": "0xEE88",
       "controller": "OKSController",
       "kind": "hid"
     },
@@ -10027,6 +10237,13 @@
     },
     {
       "name": "PNY GeForce RTX 3060 XLR8 Revel EPIC-X",
+      "vid": null,
+      "pid": null,
+      "controller": "PalitGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "PNY GeForce RTX 3070 Ti XLR8 Gaming REVEL EPIC-X",
       "vid": null,
       "pid": null,
       "controller": "PalitGPUController",
@@ -10391,7 +10608,7 @@
     },
     {
       "name": "Keychron RGB QMK/ZMK Keyboard",
-      "vid": null,
+      "vid": "0x3434",
       "pid": null,
       "controller": "QMKController",
       "kind": "hid"
@@ -10426,1408 +10643,1422 @@
     },
     {
       "name": "Lian Li O11 Dynamic - Razer Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F13",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Abyssus Elite D.Va Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x006A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Abyssus Essential",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x006B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Base Station Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F08",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Base Station V2 Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F20",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0064",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk Essential",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0065",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk Ultimate (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0086",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk Ultimate (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0088",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0085",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0099",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 35K",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00CB",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro (Bluetooth)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00AC",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00AA",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00AB",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro 35K (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00CC",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro 35K (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00CD",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro 35K Phantom Green (Bluetooth)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x068E",
+      "pid": "0x00D8",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro 35K Phantom Green (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00D6",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 Pro 35K Phantom Green (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00D7",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Basilisk V3 X HyperSpeed",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00B9",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow 2019",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0241",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0203",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow Chroma Tournament Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0209",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow Chroma V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0221",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow Elite",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0228",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow Overwatch",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0211",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x024E",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V3 Mini (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0258",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V3 Mini (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0271",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V3 Pro (Bluetooth)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x025B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V3 Pro (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x025A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V3 Pro (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x025C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V3 TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0A24",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0287",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 75% (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02A5",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 Low Profile TKL (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02D4",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 Low Profile TKL (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02D2",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x028D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 Pro 75% (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02B3",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 Pro 75% (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02B4",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 TKL (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02D7",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 TKL (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02D5",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow V4 X",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0293",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow X Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0216",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blackwidow X Chroma Tournament Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x021A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade (2016)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x020F",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade (Late 2016)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0224",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 14 (2021)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0270",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 14 (2022)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x028C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 14 (2023)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x029D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2018 Advanced)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0233",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2018 Base)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x023B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2018 Mercury)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0240",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2019 Advanced)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x023A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2019 Base)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0246",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2019 Mercury)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0245",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2019 Studio)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x024D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2020 Advanced)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0253",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2020 Base)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0255",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2021 Advanced)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x026D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2021 Base)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x026F",
+      "controller": "RazerController",
+      "kind": "hid"
+    },
+    {
+      "name": "Razer Blade 15 (2021 Base)",
+      "vid": "0x1532",
+      "pid": "0x027A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (2022)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x028A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (Late 2020)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0268",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade 15 (Late 2021 Advanced)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0276",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Pro (2016)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0210",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Pro (2017 FullHD)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x022F",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Pro (2017)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0225",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Pro (2019)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0234",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Pro (Late 2019)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x024C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Pro 17 (2020)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0256",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Pro 17 (2021)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0279",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (2016)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0205",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (2017)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x022D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (2019)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0239",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (2020)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0252",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (Late 2016)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0220",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (Late 2017)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0232",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (Late 2019)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x024A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Blade Stealth (Late 2020)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0259",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Book 13 (2020)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x026A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Charging Pad Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F26",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Chroma Addressable RGB Controller",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F1F",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Chroma HDK",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F09",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Chroma Mug Holder",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F07",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Chroma PC Case Lighting Kit",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F0E",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Cobra",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00A3",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Cobra Pro (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00AF",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Cobra Pro (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00B0",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Core",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0215",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Core X",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F1A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Cynosa Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x022A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Cynosa Chroma V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x025E",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Cynosa Lite",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x023F",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0043",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder Elite",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x005C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder Essential",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x006E",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder Essential V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0098",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder Essential White Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0071",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0084",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder V2 Mini",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x008C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder V2 Pro (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x007C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathadder V2 Pro (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x007D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathstalker Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0204",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathstalker V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0295",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathstalker V2 Pro (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0292",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathstalker V2 Pro (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0290",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathstalker V2 Pro TKL (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0298",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Deathstalker V2 Pro TKL (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0296",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Diamondback",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x004C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Firefly",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0C00",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Firefly Hyperflux",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0068",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Firefly V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0C04",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Firefly V2 Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0C08",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Goliathus",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0C01",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Goliathus Chroma 3XL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0C06",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Goliathus Extended",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0C02",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Hanbo Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F35",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0227",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman Elite",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0226",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman Mini",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0257",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman Mini Analog",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0282",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman Tournament Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0243",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x026C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman V2 Analog",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0266",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman V2 TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x026B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman V3 HE Magnetic Mini",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02E4",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman V3 Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02A6",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Huntsman V3 Pro TKL White",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02A7",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken 7.1",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0501",
+      "controller": "RazerController",
+      "kind": "hid"
+    },
+    {
+      "name": "Razer Kraken 7.1",
+      "vid": "0x1532",
+      "pid": "0x0506",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken 7.1 Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0504",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken 7.1 V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0510",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken Kitty Black Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F21",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken Kitty Black Edition V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0560",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken Kitty Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F19",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken Kitty V2 Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0554",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken Kitty V3 Pro (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0587",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken Kitty V3 Pro (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0588",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken Ultimate",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0527",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken V3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0549",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken V3 HyperSense",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0533",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken V3 X",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0537",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken V4 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x056B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Kraken V4 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x056C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Lancehead 2017 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0059",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Lancehead 2017 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x005A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Lancehead 2019 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0070",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Lancehead 2019 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x006F",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Lancehead Tournament Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0060",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Laptop Stand Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F0D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Laptop Stand Chroma V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F2B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Leviathan V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0532",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Leviathan V2 X",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x054A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba 2012 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0024",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba 2012 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0025",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba 2015 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0044",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba 2015 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0045",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba 2018 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0073",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba 2018 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0072",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba Elite",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x006C",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba Hyperflux (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0069",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mamba Tournament Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0046",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mouse Bungee V3 Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F1D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mouse Dock Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x007E",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Mouse Dock Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00A4",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0053",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Classic",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0093",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Epic Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x003E",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Hex V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0050",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Left Handed",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x008D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Pro (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x008F",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Pro (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0090",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Pro V2 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00A7",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Pro V2 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00A8",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Pro V3 (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00E7",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Pro V3 (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x00E8",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Naga Trinity",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0067",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Nommo Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0517",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Nommo Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0518",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Orbweaver Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0207",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Ornata Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x021E",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Ornata Chroma V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x025D",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Ornata V3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x028F",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Ornata V3 Rev2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02A1",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Ornata V3 TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02A3",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Ornata V3 X",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0294",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Ornata V3 X Rev2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x02A2",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Seiren Emote",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F1B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Strider Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0C05",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Tartarus Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0208",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Tartarus Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0244",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Tartarus V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x022B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Thunderbolt 4 Dock Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F21",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Thunderbolt 5 Dock Chroma",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F52",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Tiamat 7.1 V2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0F03",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Viper",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0078",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Viper 8kHz",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x0091",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Viper Mini",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x008A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Viper Ultimate (Wired)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x007A",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "Razer Viper Ultimate (Wireless)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1532",
+      "pid": "0x007B",
       "controller": "RazerController",
       "kind": "hid"
     },
     {
       "name": "RTL9209",
-      "vid": null,
-      "pid": null,
+      "vid": "0x0BDA",
+      "pid": "0x9209",
       "controller": "RealtekARGBController",
       "kind": "hid"
     },
@@ -12037,21 +12268,21 @@
     {
       "name": "Roccat Magma",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x3124",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Magma Mini",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x69A0",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Pyro",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x314C",
       "controller": "RoccatController",
       "kind": "hid"
     },
@@ -12072,70 +12303,77 @@
     {
       "name": "Roccat Vulcan 100 Aimo",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x307A",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Vulcan 120-Series Aimo",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x3098",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Vulcan II",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x2F4E",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Vulcan II Max",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x2EE2",
+      "controller": "RoccatController",
+      "kind": "hid"
+    },
+    {
+      "name": "Roccat Vulcan II Mini",
+      "vid": "0x1E7D",
+      "pid": "0x2F09",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Vulcan Pro",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x30F7",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Vulcan TKL",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x2FEE",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Roccat Vulcan TKL Pro",
       "vid": "0x1E7D",
-      "pid": null,
+      "pid": "0x311A",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Turtle Beach Vulcan II",
       "vid": "0x10F5",
-      "pid": null,
+      "pid": "0x501B",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Turtle Beach Vulcan II TKL",
       "vid": "0x10F5",
-      "pid": null,
+      "pid": "0x5023",
       "controller": "RoccatController",
       "kind": "hid"
     },
     {
       "name": "Turtle Beach Vulcan II TKL Pro",
       "vid": "0x10F5",
-      "pid": null,
+      "pid": "0x5001",
       "controller": "RoccatController",
       "kind": "hid"
     },
@@ -12547,505 +12785,533 @@
     },
     {
       "name": "Acer Predator Gaming Mouse (Rival 300)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1714",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 3 CS2 Dragon Lore Edition Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1878",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 3 CS2 Dragon Lore Edition Wireless Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x187A",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 3 Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1836",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 3 Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1838",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 3 Wireless Gen 2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1890",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 3 Wireless Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x183A",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 5 Destiny 2 Edition Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x185C",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 5 Destiny 2 Edition Wireless Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x185E",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 5 Diablo IV Edition Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1860",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 5 Diablo IV Edition Wireless Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1862",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 5 Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1850",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 5 Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1852",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 5 Wireless Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1854",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 9 Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1858",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Aerox 9 Wireless Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x185A",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex (OG)/Apex Fnatic",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1202",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x161A",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 3 TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1622",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 350",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1206",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 5",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x161C",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 7",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1612",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 7 TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1618",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 9 Mini",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1620",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex 9 TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1634",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex M750",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x0616",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1610",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex Pro 3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1640",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex Pro TKL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1614",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex Pro TKL 2023 Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1628",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex Pro TKL 2023 Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1630",
+      "controller": "SteelSeriesController",
+      "kind": "hid"
+    },
+    {
+      "name": "SteelSeries Apex Pro TKL 2023 Wireless",
+      "vid": "0x1038",
+      "pid": "0x1632",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex Pro TKL Gen 3 Wired",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1642",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Apex Pro TKL Gen 3 Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1644",
+      "controller": "SteelSeriesController",
+      "kind": "hid"
+    },
+    {
+      "name": "SteelSeries Apex Pro TKL Gen 3 Wireless",
+      "vid": "0x1038",
+      "pid": "0x1646",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Arctis 5",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1250",
+      "controller": "SteelSeriesController",
+      "kind": "hid"
+    },
+    {
+      "name": "SteelSeries Arctis 5",
+      "vid": "0x1038",
+      "pid": "0x12AA",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Arctis Nova 3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x12EC",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth 3XL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1516",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth 4XL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1518",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth 5XL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x151A",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth Medium",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x150A",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth XL",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x150D",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth XL CS:GO Neo Noir Ed.",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x151C",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth XL CS:GO Neon Rider Ed.",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1514",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth XL Destiny 2 Lightfall Ed.",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1520",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries QCK Prism Cloth XL Destiny Ed.",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x151E",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 100",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1702",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 100 DotA 2 Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x170C",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 105",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1814",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 106",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1816",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 110",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1729",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 3",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x184C",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 3 (Old Firmware)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1824",
+      "controller": "SteelSeriesController",
+      "kind": "hid"
+    },
+    {
+      "name": "SteelSeries Rival 3 Wireless",
+      "vid": "0x1038",
+      "pid": "0x1830",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 300",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1710",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 300 Black Ops Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1710",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 300 CS:GO Fade Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1394",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 300 CS:GO Fade Edition (stm32)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1716",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 300 CS:GO Hyperbeast Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x171A",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 300 Dota 2 Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1392",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 300 HP Omen Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1718",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 310",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1720",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 310 CS:GO Howl Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x171E",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 310 PUBG Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1736",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 5",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x183C",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 600",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1724",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 600 Dota 2 Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x172E",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 650",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x172B",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 650 Wireless",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1726",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 700",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1700",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Rival 710",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1730",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Sensei 310",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1722",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Sensei TEN",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1832",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Sensei TEN CS:GO Neon Rider Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1834",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
     {
       "name": "SteelSeries Siberia 350",
-      "vid": null,
-      "pid": null,
+      "vid": "0x1038",
+      "pid": "0x1229",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
@@ -13464,22 +13730,22 @@
     },
     {
       "name": "Turtle Beach Command Series KP7",
-      "vid": null,
-      "pid": null,
+      "vid": "0x10F5",
+      "pid": "0x503A",
       "controller": "TurtleBeachKP7Controller",
       "kind": "hid"
     },
     {
       "name": "Valkyrie VK99",
-      "vid": null,
-      "pid": null,
+      "vid": "0x05AC",
+      "pid": "0x024F",
       "controller": "ValkyrieKeyboardController",
       "kind": "hid"
     },
     {
       "name": "Valkyrie VK99 Pro",
-      "vid": null,
-      "pid": null,
+      "vid": "0x05AC",
+      "pid": "0x024F",
       "controller": "ValkyrieKeyboardController",
       "kind": "hid"
     },
@@ -13527,45 +13793,45 @@
     },
     {
       "name": "Wooting 60HE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1300",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting 60HE (ARM)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1310",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting 60HE+",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1320",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting 60HEv2",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1340",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting 80HE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1400",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting One",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1100",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting One (Legacy)",
@@ -13576,10 +13842,10 @@
     },
     {
       "name": "Wooting Two",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1200",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting Two (Legacy)",
@@ -13590,31 +13856,31 @@
     },
     {
       "name": "Wooting Two HE",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1220",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting Two HE (ARM)",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1230",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting Two Lekker Edition",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1210",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "Wooting UwU RGB",
-      "vid": null,
-      "pid": null,
+      "vid": "0x31E3",
+      "pid": "0x1510",
       "controller": "WootingKeyboardController",
-      "kind": "generic"
+      "kind": "hid"
     },
     {
       "name": "JSAUX RGB Docking Station",
@@ -13625,8 +13891,8 @@
     },
     {
       "name": "XPG Summoner Gaming Keyboard",
-      "vid": null,
-      "pid": null,
+      "vid": "0x125F",
+      "pid": "0x9418",
       "controller": "XPGSummonerKeyboardController",
       "kind": "hid"
     },

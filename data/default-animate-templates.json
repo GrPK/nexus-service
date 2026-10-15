@@ -3524,6 +3524,91 @@
    }
   ]
  },
+ "clockfill": {
+  "selected": 0,
+  "slots": [
+   {
+    "speed": 50,
+    "intensity": 1,
+    "hue": 0,
+    "colorize": 0,
+    "saturation": 1,
+    "contrast": 1,
+    "params": {
+     "u_aHue": 0.55,
+     "u_aSpan": 0,
+     "u_aSat": 1,
+     "u_aVal": 1,
+     "u_bHue": 0,
+     "u_bSpan": 0,
+     "u_bSat": 1,
+     "u_bVal": 0,
+     "u_softness": 0.0,
+     "u_arms": 1
+    }
+   },
+   {
+    "speed": 50,
+    "intensity": 1,
+    "hue": 0,
+    "colorize": 0,
+    "saturation": 1,
+    "contrast": 1,
+    "params": {
+     "u_aHue": 0,
+     "u_aSpan": 0,
+     "u_aSat": 0,
+     "u_aVal": 1,
+     "u_bHue": 0.67,
+     "u_bSpan": 0,
+     "u_bSat": 1,
+     "u_bVal": 1,
+     "u_softness": 0.35,
+     "u_arms": 1
+    }
+   },
+   {
+    "speed": 50,
+    "intensity": 1,
+    "hue": 0,
+    "colorize": 0,
+    "saturation": 1,
+    "contrast": 1,
+    "params": {
+     "u_aHue": 0,
+     "u_aSpan": 1,
+     "u_aSat": 1,
+     "u_aVal": 1,
+     "u_bHue": 0,
+     "u_bSpan": 0,
+     "u_bSat": 1,
+     "u_bVal": 0,
+     "u_softness": 0.02,
+     "u_arms": 3
+    }
+   },
+   {
+    "speed": 50,
+    "intensity": 1,
+    "hue": 0,
+    "colorize": 0,
+    "saturation": 1,
+    "contrast": 1,
+    "params": {
+     "u_aHue": 0.0,
+     "u_aSpan": 0,
+     "u_aSat": 1,
+     "u_aVal": 1,
+     "u_bHue": 0.08,
+     "u_bSpan": 0,
+     "u_bSat": 1,
+     "u_bVal": 1,
+     "u_softness": 0.25,
+     "u_arms": 2
+    }
+   }
+  ]
+ },
  "silkwave": {
   "selected": 0,
   "slots": [

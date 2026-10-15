@@ -907,11 +907,22 @@ return 0;
 // dies with the process.
 static void FastServiceShutdown(WebApplication app)
 {
-    Nexus.Service.Lifecycle.UserHelperBootstrapper.NoteServiceStopping();
-    Nexus.Service.Cooling.AdlxInitGuard.Stop(Nexus.Service.Persistence.NexusDataPaths.NexusRoot());
     var sp = app.Services;
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var osShutdown = Nexus.Service.Lifecycle.HostShutdown.IsOsShutdown;
+    // Started before any other teardown work and on its own thread: the lights-off
+    // is the one item the OS-shutdown race is lost on, so it must not queue behind
+    // the synchronous setup below or the thread pool's other teardown tasks. Only
+    // when the OS is going down: any other stop is followed by a service that
+    // comes back and repaints, so blanking there would be a blink.
+    var lightsOff = osShutdown
+        ? Task.Factory.StartNew(() =>
+        {
+            try { sp.GetService<Nexus.Service.Lighting.SleepBlackoutCoordinator>()?.OnHostShutdown(); } catch { }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+        : Task.CompletedTask;
+    Nexus.Service.Lifecycle.UserHelperBootstrapper.NoteServiceStopping();
+    Nexus.Service.Cooling.AdlxInitGuard.Stop(Nexus.Service.Persistence.NexusDataPaths.NexusRoot());
     // Awaited past the cap below (it bounds itself): a refresh token the server
     // already rotated must reach disk, or the next start is signed out.
     var cloudQuiesce = Task.Run(() =>
@@ -941,21 +952,7 @@ static void FastServiceShutdown(WebApplication app)
             try { sp.GetService<ProfileManager>()?.SaveActiveProfile(); } catch { }
         }),
         Task.Run(() => { try { sp.GetService<IFanControlProvider>()?.ReleaseAll(); } catch { } }),
-        // Only when the OS is going down. A stop that is not that (tray quit,
-        // /service/stop, an OTA install, a GPU-change restart) is followed by a
-        // service that comes back and repaints, so blanking would just be a
-        // blink - and it would cost every one of those stops the fade's second.
-        Task.Run(() =>
-        {
-            try
-            {
-                if (osShutdown)
-                {
-                    sp.GetService<Nexus.Service.Lighting.SleepBlackoutCoordinator>()?.OnHostShutdown();
-                }
-            }
-            catch { }
-        }),
+        lightsOff,
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.StreamDeck.StreamDeckConnectionWorker>()?.ResetConnectedSurfacesForShutdown(); } catch { } }),
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.Nollie.NollieConnectionWorker>()?.ReleaseAllForShutdown(); } catch { } }),
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurvePlayer>()?.ReleaseForShutdown(); } catch { } }),

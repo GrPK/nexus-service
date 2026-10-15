@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using Nexus.Service.Peripherals.Hyte.Np50;
 using Nexus.Service.Peripherals.Hid;
@@ -151,6 +152,69 @@ public class IbpPeripheralHubTests
         hub.Disconnect();
         hub.Reconcile(AllowAll);
         Assert.Equal(id1, hub.Attached.Single().DeviceId);
+    }
+
+    [Fact]
+    public void Mek4_frames_are_capped_to_15_hz_and_other_models_are_not()
+    {
+        var hid = new ScriptedEnumerator();
+        hid.AddUnit(IbpPeripheralProtocol.Mek4Keyboard, "MK1");
+        hid.AddUnit(IbpPeripheralProtocol.Km7Keyboard, "KB1");
+        long now = 1000;
+        using var hub = new IbpPeripheralHub(hid, () => now);
+        hub.Reconcile(AllowAll);
+        var mek = hid.Opened["mek4-keyboard-MK1-vendor"];
+        var km7 = hid.Opened["km7-keyboard-KB1-vendor"];
+        var mekId = hub.Attached.Single(a => a.Model == IbpPeripheralProtocol.Mek4Keyboard).DeviceId;
+        var km7Id = hub.Attached.Single(a => a.Model == IbpPeripheralProtocol.Km7Keyboard).DeviceId;
+        var mekLeds = new RgbColor[IbpPeripheralProtocol.Mek4Keyboard.LedCount];
+        var km7Leds = new RgbColor[24];
+        var step = Stopwatch.Frequency / 30;
+
+        for (var i = 0; i < 30; i++)
+        {
+            Assert.True(hub.WriteFrame(mekId, mekLeds));
+            Assert.True(hub.WriteFrame(km7Id, km7Leds));
+            now += step;
+        }
+        // Mek4 takes no software-mode report: one report per sent frame, every second tick.
+        Assert.Equal(15, mek.Features.Count);
+        Assert.Equal(1 + 30 * 3, km7.Features.Count);
+    }
+
+    [Fact]
+    public void Mek4_sent_frames_keep_a_minimum_gap_across_a_stall_and_jittery_ticks()
+    {
+        var hid = new ScriptedEnumerator();
+        hid.AddUnit(IbpPeripheralProtocol.Mek4Keyboard, "MK1");
+        long now = 1000;
+        using var hub = new IbpPeripheralHub(hid, () => now);
+        hub.Reconcile(AllowAll);
+        var mek = hid.Opened["mek4-keyboard-MK1-vendor"];
+        var id = hub.Attached.Single().DeviceId;
+        var leds = new RgbColor[IbpPeripheralProtocol.Mek4Keyboard.LedCount];
+        var tick = Stopwatch.Frequency / 30;
+        var minGap = (long)(Stopwatch.Frequency / (double)IbpPeripheralProtocol.Mek4MaxFrameRateHz * 0.9);
+        var sentAt = new List<long>();
+
+        void Tick(long advance)
+        {
+            var before = mek.Features.Count;
+            Assert.True(hub.WriteFrame(id, leds));
+            if (mek.Features.Count != before) sentAt.Add(now);
+            now += advance;
+        }
+
+        for (var i = 0; i < 30; i++) Tick(tick);
+        Assert.Equal(15, sentAt.Count);
+
+        now += Stopwatch.Frequency * 2; // a stall
+        for (var i = 0; i < 300; i++) Tick(i % 2 == 0 ? Stopwatch.Frequency * 31 / 1000 : Stopwatch.Frequency * 47 / 1000);
+        Assert.True(sentAt.Count > 60);
+        for (var i = 1; i < sentAt.Count; i++)
+        {
+            Assert.True(sentAt[i] - sentAt[i - 1] >= minGap, $"gap {i} too short");
+        }
     }
 
     [Fact]

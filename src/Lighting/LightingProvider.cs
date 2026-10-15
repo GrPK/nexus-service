@@ -29,7 +29,7 @@ namespace Nexus.Service.Lighting;
 /// New effect modes plug in by adding an interface method, a route, and a Start*
 /// implementation that calls _engine.SetEffect.
 /// </summary>
-public sealed class LightingProvider : ILightingProvider, IDisposable
+public sealed partial class LightingProvider : ILightingProvider, IDisposable
 {
     /// <summary>Cap on the stop-path OpenRGB push. Bounds the per-device queueing only: a socket send already in flight does not observe cancellation, so a daemon that stops draining can still overrun this.</summary>
     private static readonly TimeSpan StopBlackoutBudget = TimeSpan.FromSeconds(2);
@@ -85,8 +85,9 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     private readonly FeatureGates _gates;
 
-    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null)
+    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null, MultiplexHub? panelHub = null)
     {
+        _panelHub = panelHub;
         _gates = gates ?? FeatureGates.AllEnabled;
         _store = store;
         _engine = engine;
@@ -118,6 +119,16 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         _store.OnChanged += RefreshPinnedLooks;
         RefreshPinnedLooks();
         _scanner?.OnScanComplete = OnGameScanComplete;
+        // A store that was unreadable at boot registers its sources late; a custom effect
+        // restored meanwhile is running the rainbow stand-in until this rebuilds it.
+        customEffects?.Recovered += () =>
+        {
+            if (_engine.CurrentEffect is ShaderEffect running && ShaderLibrary.IsCustomKey(running.Name))
+            {
+                ReloadCustomEffect(running.Name);
+            }
+            RefreshPinnedLooks();
+        };
     }
 
     /// <summary>
@@ -167,7 +178,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         {
             var music = _store.Load().Lighting.MusicReactive;
             var forLeds = music && (ShaderLibrary.IsAudioEffect(_engine.CurrentEffectName) || _pinnedAudio);
-            if (forLeds || Volatile.Read(ref _audioCaptureDemand) > 0)
+            if (forLeds || Volatile.Read(ref _audioCaptureDemand) > 0 || _studioAudio)
             {
                 _beats.Start();
             }
@@ -596,6 +607,19 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     public (byte[] Bytes, string Tag)? CaptureAnimateThumbnail(string key, int slot, bool skipCache = false, bool frozen = false)
     {
+        try
+        {
+            return CaptureAnimateThumbnailCore(key, slot, skipCache, frozen);
+        }
+        catch (System.IO.FileNotFoundException)
+        {
+            // A custom effect deleted mid-request is simply unknown.
+            return null;
+        }
+    }
+
+    private (byte[] Bytes, string Tag)? CaptureAnimateThumbnailCore(string key, int slot, bool skipCache, bool frozen)
+    {
         // Shader thumbnails are GPU-rendered; with no usable GPU the render is a
         // no-op and the frame stays black, so skip it and let the caller 404 -
         // the UI shows a placeholder instead of a grid of black tiles.
@@ -604,7 +628,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             return null;
         }
         var name = (key ?? "").ToLowerInvariant();
-        if (!ShaderLibrary.AllEffectKeys.Contains(name))
+        if (!ShaderLibrary.IsKnownKey(name))
         {
             return null;
         }
@@ -737,6 +761,132 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
+    // Test seam: runs between reading the source and swapping it in.
+    internal Action? BeforeCustomSwap;
+
+    // Each lost swap means another thread changed the effect; a bounded retry keeps a
+    // pathological stream of concurrent edits from spinning this call forever.
+    private const int MaxCustomSwapAttempts = 32;
+
+    public void ReloadCustomEffect(string key)
+    {
+        ClearThumbnails(key);
+        // Devices pinned to it rebuild from the new source.
+        RefreshPinnedLooks();
+        // A lost swap means another thread changed the effect after we read it (often a
+        // concurrent PUT of the same id). Re-read until our swap lands or the running effect
+        // is no longer this key, so the engine never keeps older source than the store.
+        for (var attempt = 0; attempt < MaxCustomSwapAttempts; attempt++)
+        {
+            if (_engine.CurrentEffect is not ShaderEffect cur || cur.Name != key || !ShaderLibrary.IsKnownKey(key))
+            {
+                return;
+            }
+            var extras = cur.ExtraParams is null
+                ? null
+                : new System.Collections.Generic.Dictionary<string, float>(cur.ExtraParams);
+            ShaderEffect fresh;
+            try
+            {
+                fresh = MakeShader(key, ShaderLibrary.Get(key), cur.Speed, cur.Intensity, cur.Hue, cur.Colorize, cur.Saturation, cur.Contrast, extras);
+            }
+            catch (System.IO.FileNotFoundException)
+            {
+                return;
+            }
+            BeforeCustomSwap?.Invoke();
+            // Compare-and-swap under the engine lock: a concurrent effect switch wins, and
+            // paused, frozen and blackout state survive the swap.
+            if (_engine.SwapEffectIfCurrent(cur, fresh))
+            {
+                return;
+            }
+            fresh.Dispose();
+        }
+    }
+
+    public void DropCustomEffect(string key)
+    {
+        ClearThumbnails(key);
+        var running = _engine.CurrentEffect is ShaderEffect cur && cur.Name == key;
+        _store.Update(s =>
+        {
+            s.Lighting.Animate.States.Remove(key);
+            s.Lighting.Animate.Templates.Remove(key);
+            // Devices pinned to the deleted effect are unpinned rather than left on a look that cannot render.
+            foreach (var (deviceId, pin) in s.Lighting.DevicePins.ToArray())
+            {
+                if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate
+                    && string.Equals(pin.Effect, key, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    s.Lighting.DevicePins.Remove(deviceId);
+                }
+            }
+            // A layout preset that captured such a pin would write it back on activation.
+            foreach (var preset in s.Lighting.LayoutPresets)
+            {
+                if (preset.DevicePins is null)
+                {
+                    continue;
+                }
+                foreach (var (deviceId, pin) in preset.DevicePins.ToArray())
+                {
+                    if (pin?.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate
+                        && string.Equals(pin.Effect, key, System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        preset.DevicePins.Remove(deviceId);
+                    }
+                }
+            }
+            // Not running (static mode, stopped): the next animate start must not run rainbow under the dead name.
+            if (string.Equals(s.Lighting.Animate.Effect, key, System.StringComparison.OrdinalIgnoreCase))
+            {
+                s.Lighting.Animate.Effect = "rainbow";
+            }
+            if (string.Equals(s.Lighting.Sync, key, System.StringComparison.OrdinalIgnoreCase))
+            {
+                s.Lighting.Sync = "rainbow";
+            }
+        });
+        if (!running)
+        {
+            return;
+        }
+        var a = _store.Load().Lighting.Animate;
+        if (!a.States.TryGetValue("rainbow", out var look) || look is null)
+        {
+            look = AnimateTemplateDefaults.ResolveSelected(a.Templates, "rainbow") ?? new Nexus.Service.Persistence.AnimateEffectState();
+        }
+        var list = new List<ShaderParam>();
+        foreach (var kv in look.Params)
+        {
+            list.Add(new ShaderParam { Name = kv.Key, Value = kv.Value });
+        }
+        StartAnimate(new AnimateHeadlessStart
+        {
+            Effect = "rainbow",
+            Speed = look.Speed,
+            Intensity = look.Intensity,
+            Hue = look.Hue,
+            Colorize = look.Colorize,
+            Saturation = look.Saturation,
+            Contrast = look.Contrast,
+            Params = list,
+        });
+    }
+
+    private void ClearThumbnails(string key)
+    {
+        var prefix = key + ":";
+        foreach (var k in _thumbnailCache.Keys)
+        {
+            if (k.StartsWith(prefix, System.StringComparison.Ordinal))
+            {
+                _thumbnailCache.TryRemove(k, out _);
+            }
+        }
+    }
+
     // Immutable look per pinned Animate effect, resolved off the engine thread and
     // published by reference swap; the engine only ever reads this.
     private sealed record PinnedLook(Nexus.Service.Persistence.AnimateEffectState State, string Tag);
@@ -763,6 +913,8 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
     private volatile PinnedMedia? _pinnedMedia;
 
     private IScreenFrameSource? ScreenSource() => _sharedSource is null ? _frameSource : _sharedSource.CreateHandle();
+
+    internal string? PinTagForTest(string key) => PinTag(key);
 
     private string? PinTag(string key) =>
         key == LightingEngine.MirrorPinKey
@@ -806,6 +958,11 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
                 {
                     continue;
                 }
+                // A deleted (or not yet loaded) custom effect has nothing to build.
+                if (ShaderLibrary.IsCustomKey(key) && !ShaderLibrary.IsKnownKey(key))
+                {
+                    continue;
+                }
                 var slot = AnimateTemplateDefaults.ResolveSelected(s.Lighting.Animate.Templates, key);
                 if (slot is null && ShaderLibrary.IsSweepEffect(key))
                 {
@@ -813,6 +970,14 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
                     // mode last persisted for them, else the plain defaults.
                     slot = s.Lighting.Animate.States.TryGetValue(key, out var persisted) && persisted is not null
                         ? persisted
+                        : new Nexus.Service.Persistence.AnimateEffectState();
+                }
+                if (slot is null && ShaderLibrary.IsCustomKey(key))
+                {
+                    // A custom effect with no saved preset runs as a fresh start of it does: its last
+                    // activation state, else the install defaults.
+                    slot = s.Lighting.Animate.States.TryGetValue(key, out var customState) && customState is not null
+                        ? customState
                         : new Nexus.Service.Persistence.AnimateEffectState();
                 }
                 if (slot is null)
@@ -831,7 +996,13 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
                         ? new()
                         : new System.Collections.Generic.Dictionary<string, float>(slot.Params),
                 };
-                next[key] = new PinnedLook(copy, HashSlot(copy));
+                // A custom effect's source can change under the same look, so the tag carries it.
+                var tag = HashSlot(copy);
+                if (ShaderLibrary.IsCustomKey(key) && ShaderLibrary.IsKnownKey(key))
+                {
+                    tag += "|" + ShaderLibrary.SourceTag(key);
+                }
+                next[key] = new PinnedLook(copy, tag);
             }
         });
         var audio = false;
@@ -955,7 +1126,11 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         var extras = look.Params is { Count: > 0 }
             ? new System.Collections.Generic.Dictionary<string, float>(look.Params)
             : null;
-        if (existing is ShaderEffect cur && cur.Name == effect)
+        // A custom effect updates in place unless its source changed since the instance was built.
+        var custom = ShaderLibrary.IsCustomKey(effect);
+        var sourceTag = custom ? ShaderLibrary.SourceTag(effect) : null;
+        if (existing is ShaderEffect cur && cur.Name == effect
+            && (!custom || (_pinBuiltSource.TryGetValue(effect, out var builtFrom) && builtFrom == sourceTag)))
         {
             cur.Speed = effect == "pulse" ? speed * 0.5f : speed;
             cur.Intensity = intensity;
@@ -966,8 +1141,15 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             cur.ExtraParams = extras;
             return cur;
         }
+        if (custom)
+        {
+            _pinBuiltSource[effect] = sourceTag!;
+        }
         return BuildAnimateEffect(effect, speed, intensity, look.Hue, look.Colorize, look.Saturation, look.Contrast, extras);
     }
+
+    // Source tag each pinned custom instance was compiled from; only the engine thread writes it.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _pinBuiltSource = new(System.StringComparer.Ordinal);
 
     private string? _builtMirrorTag;
     private string? _builtMediaTag;
@@ -1132,6 +1314,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         "rainbow" => new(0.00f, 0.00f, 50f, 1.00f, 1.00f, 1f),
         "sharplines" => new(0.00f, 0.00f, 50f, 1.00f, 1.00f, 1f),
         "breathing" => new(0.00f, 0.00f, 50f, 1.00f, 1.00f, 1f),
+        "clockfill" => new(0.00f, 0.00f, 50f, 1.00f, 1.00f, 1f),
         "fire" => new(0.03f, 0.80f, 70f, 1.10f, 1.05f, 1f),
         "plasma" => new(0.85f, 0.30f, 60f, 1.00f, 1.00f, 1f),
         "spiral" => new(0.00f, 0.00f, 55f, 1.00f, 1.00f, 1f),
@@ -1256,6 +1439,21 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
         // the context can't initialise, the canvas stays dark. Pulse gets
         // a 0.5x speed scale to match the legacy feel.
         var effectSpeed = name == "pulse" ? speed * 0.5f : speed;
+        // A user-made effect carries its whole source; one the store no longer
+        // holds falls back to rainbow like any other unknown key.
+        if (ShaderLibrary.IsCustomKey(name))
+        {
+            string customSrc;
+            try
+            {
+                customSrc = ShaderLibrary.Get(name);
+            }
+            catch (System.IO.FileNotFoundException)
+            {
+                customSrc = ShaderLibrary.Rainbow;
+            }
+            return MakeShader(name, customSrc, effectSpeed, intensity, hue, colorize, saturation, contrast, extras);
+        }
         // Simple solid-colour fills all share one cheap shader; the colour is
         // carried by the post-process tint, not the GLSL.
         if (name.StartsWith("simple", System.StringComparison.Ordinal))
@@ -1359,6 +1557,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
             "mosaic" => ShaderLibrary.Get("mosaic"),
             "sharplines" => ShaderLibrary.Get("sharplines"),
             "breathing" => ShaderLibrary.Get("breathing"),
+            "clockfill" => ShaderLibrary.Get("clockfill"),
             "constellation" => ShaderLibrary.Get("constellation"),
             "cybertunnel" => ShaderLibrary.Get("cybertunnel"),
             "hyperspace" => ShaderLibrary.Get("hyperspace"),
@@ -1652,6 +1851,7 @@ public sealed class LightingProvider : ILightingProvider, IDisposable
 
     public void Dispose()
     {
+        _studioTimer?.Dispose();
         _rgb?.Dispose();
         _engine.Dispose();
     }

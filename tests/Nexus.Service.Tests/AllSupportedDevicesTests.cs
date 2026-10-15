@@ -23,10 +23,31 @@ public class AllSupportedDevicesTests
         var dups = AllSupportedDevices.All
             .Where(d => d.VendorId is not ("-" or "") && d.ProductId is not ("-" or ""))
             .GroupBy(d => d.VendorId.ToUpperInvariant() + ":" + d.ProductId.ToUpperInvariant())
+            .Where(g => g.Count() > 1 && g.Any(d => d.Source != "openrgb"))
+            .Select(g => g.Key)
+            .ToList();
+        Assert.Empty(dups);
+    }
+
+    [Fact]
+    public void Merged_HasNoExactDuplicateAmongOpenRgbRows()
+    {
+        var dups = AllSupportedDevices.All
+            .Where(d => d.Source == "openrgb" && d.VendorId is not ("-" or "") && d.ProductId is not ("-" or ""))
+            .GroupBy(d => d.Vendor + "|" + d.Model + "|" + d.VendorId.ToUpperInvariant() + ":" + d.ProductId.ToUpperInvariant())
             .Where(g => g.Count() > 1)
             .Select(g => g.Key)
             .ToList();
         Assert.Empty(dups);
+    }
+
+    [Theory]
+    [InlineData("Valkyrie", "VK99")]
+    [InlineData("Valkyrie", "VK99 Pro")]
+    [InlineData("Keychron", "Gaming Keyboard 1")]
+    public void Merged_KeepsDistinctOpenRgbProductsThatShareAnId(string vendor, string model)
+    {
+        Assert.Contains(AllSupportedDevices.All, d => d.Vendor == vendor && d.Model == model);
     }
 
     [Fact]
@@ -40,7 +61,7 @@ public class AllSupportedDevicesTests
         var peripheralKeys = SupportedDevicesCatalog.All.Where(Real).Select(Key).ToHashSet();
         var overlap = LightingDevicesCatalog.All.Where(Real).Where(d => peripheralKeys.Contains(Key(d))).ToList();
 
-        var merged = AllSupportedDevices.All.Where(Real).ToDictionary(Key, d => d);
+        var merged = AllSupportedDevices.All.Where(Real).GroupBy(Key).ToDictionary(g => g.Key, g => g.First());
         foreach (var lit in overlap)
         {
             var per = SupportedDevicesCatalog.All.First(d => Real(d) && Key(d) == Key(lit));
