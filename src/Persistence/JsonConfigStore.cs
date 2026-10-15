@@ -221,6 +221,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
     /// widget's inline layout config does the same (DeckModesMigration).
     /// v19: ConflictWhitelistMigration.
     /// v20: ConflictWhitelistMigration.KeepThirdPartyDevicesOn.
+    /// v22: Lighting.RenderBackend "wgl" (the old default, always persisted) becomes "angle".
     /// </summary>
     private static void Migrate(NexusSettings doc)
     {
@@ -312,6 +313,11 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         {
             // Lighting and Cooling read off until this flag is set; no existing install may lose control on update.
             doc.FeaturesOnboardingCompleted = true;
+        }
+        if (doc.SchemaVersion < 22 && doc.Lighting is { } lighting
+            && string.Equals(lighting.RenderBackend, "wgl", StringComparison.OrdinalIgnoreCase))
+        {
+            lighting.RenderBackend = "angle";
         }
         doc.SchemaVersion = NexusSettings.CurrentSchemaVersion;
     }
