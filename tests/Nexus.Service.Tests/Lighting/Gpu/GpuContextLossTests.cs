@@ -84,4 +84,34 @@ public class GpuContextLossTests
             gpu.Dispose();
         }
     }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    public void Only_a_passing_probe_allows_leaving_warp(int exitCode, bool allowed)
+    {
+        Assert.Equal(allowed, GpuProbeExit.AllowsWarpUpgrade(GpuProbeExit.Verdict(exitCode, true, false)));
+    }
+
+    [Fact]
+    public void Upgrade_gate_keeps_init_suppressed_across_a_rearm_until_released()
+    {
+        var gpu = Started(out _);
+        gpu.ReportContextLost("test");
+        using var raised = new ManualResetEventSlim(false);
+        gpu.ContextLost += _ => raised.Set();
+        Assert.True(SpinWait.SpinUntil(() => gpu.Failed, TimeSpan.FromSeconds(5)));
+        Thread.Sleep(100);
+
+        gpu.OpenUpgradeGateForTest();
+        Assert.True(gpu.RearmAfterLatch());
+        Assert.True(gpu.InitSuppressed);
+        Assert.True(gpu.UpgradeGated);
+
+        gpu.ReleaseUpgradeGate();
+        Assert.False(gpu.InitSuppressed);
+        Assert.False(gpu.UpgradeGated);
+        gpu.Dispose();
+    }
 }

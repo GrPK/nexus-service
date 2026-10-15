@@ -53,6 +53,7 @@ public sealed class GpuContext : IDisposable
     private volatile bool _disposed;
     // Set by ReportContextLost: the GL thread leaves its loop so the context is freed and a fresh one can start.
     private volatile bool _lostExit;
+    private volatile bool _upgradeGate;
     private int _generation;
 #if !MACOS && !LINUX
     private volatile bool _isEs;
@@ -81,7 +82,7 @@ public sealed class GpuContext : IDisposable
 
     /// <summary>Backend to use in place of the stored one. Set by the probe
     /// child, which runs with no config store.</summary>
-    public string? BackendOverride { get; set; }
+    public string? BackendOverride { get; init; }
 
     /// <summary>ANGLE only: render on this DXGI adapter ("high:low" LUID as GpuAdapterLuids formats it), in place of the render-GPU setting.</summary>
     public string? AdapterLuid { get; init; }
@@ -167,6 +168,28 @@ public sealed class GpuContext : IDisposable
 
     public bool IsDisposed => _disposed;
 
+    /// <summary>A retired WARP context is being replaced: init stays suppressed, across rearms, until the selection starts it (<see cref="ReleaseUpgradeGate"/>), so the render loop cannot bring up the wrong thing in between.</summary>
+    public bool UpgradeGated => _upgradeGate;
+
+    internal void OpenUpgradeGateForTest()
+    {
+        lock (_lock)
+        {
+            _upgradeGate = true;
+            _initSuppressed = true;
+        }
+    }
+
+    /// <summary>Let the next init run. Called by whoever owns starting it, under <see cref="Lock"/>.</summary>
+    public void ReleaseUpgradeGate()
+    {
+        lock (_lock)
+        {
+            _upgradeGate = false;
+            _initSuppressed = false;
+        }
+    }
+
     /// <summary>Lift a decline so a scheduled re-probe can attempt the card
     /// again, with a fresh retry budget. Refused after an abandon: that thread is
     /// still parked in native GLFW.</summary>
@@ -181,7 +204,7 @@ public sealed class GpuContext : IDisposable
             {
                 return false;
             }
-            _initSuppressed = false;
+            _initSuppressed = _upgradeGate;
             _initError = null;
             _failed = false;
             _ready = false;
@@ -495,6 +518,9 @@ public sealed class GpuContext : IDisposable
             _ready = false;
             _failed = true;
             _initError = new InvalidOperationException("retired WARP context");
+            UseWarp = false;
+            _upgradeGate = true;
+            _initSuppressed = true;
             thread = _glThread;
         }
         // Wake the thread out of its blocking Take.
@@ -645,6 +671,9 @@ public sealed class GpuContext : IDisposable
         // (WinWglContext) or the GLFW fallback. D3D11CreateDevice screens out a
         // ghost adapter but does not prove WGL works; the GL verdict is the
         // context creation itself.
+        // A previous attempt's ES/WARP state must not leak into this one, whatever backend it picks.
+        _isEs = false;
+        _isWarp = false;
         var backend = ResolvedBackend;
         if (backend == GpuBackend.Angle)
         {
