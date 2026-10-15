@@ -65,6 +65,18 @@ licenses. Their respective license texts ship alongside the bundled binaries.
   service binary, draws every device-screen bitmap (Stream Deck keys and dials,
   LCD screens), shapes its text and encodes its JPEGs
 
+## ANGLE
+
+- **Project**: ANGLE (OpenGL ES on Direct3D 11), https://github.com/google/angle
+- **License**: BSD-3-Clause, Copyright 2018 The ANGLE Project Authors
+- **License text**: `Bundled/win-x64/angle/ANGLE-LICENSE.txt`, shipped beside the
+  binaries in the `angle/` folder
+- **Usage**: `libEGL.dll` and `libGLESv2.dll` (ANGLE 2.1.28016, taken unmodified
+  from the Electron v43.7.7 win32-x64 release) are the default Windows lighting
+  renderer. They are loaded by full path from `angle/` only and render the
+  shader effects through Direct3D 11. win-x64 only; win-arm64 renders through
+  the system OpenGL driver
+
 ## PawnIO
 
 - **Project**: PawnIO (signed kernel I/O driver + module loader)

@@ -25,8 +25,8 @@ namespace Nexus.Service.Lighting.Engine.Gpu;
 ///
 /// A crash-guard marker is written before every direct init and cleared after it
 /// returns; a boot that finds the marker still present knows the previous boot
-/// died initializing that card. There is no CPU fallback: if no card works the
-/// GPU is latched off (shader effects don't render; static colours, LED
+/// died initializing that card. On the ANGLE backend a CPU fallback (WARP) covers
+/// the case where no card works; on WGL the GPU is latched off (shader effects don't render; static colours, LED
 /// highlight, game sync and firmware-owned lighting are unaffected) and the
 /// service stays up. The latch always carries a re-probe time, because the
 /// driver behind it can fail context creation intermittently and a permanent

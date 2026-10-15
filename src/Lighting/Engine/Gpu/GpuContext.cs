@@ -9,14 +9,15 @@ using Silk.NET.OpenGL;
 namespace Nexus.Service.Lighting.Engine.Gpu;
 
 /// <summary>
-/// Owns a single shared offscreen OpenGL 3.3 core context used by every shader
+/// Owns a single shared offscreen OpenGL 3.3 core (or ES 3.0 on ANGLE) context used by every shader
 /// effect. Thread-safety: all GL work runs on the dedicated <c>_glThread</c>;
 /// callers off that thread go through <see cref="Invoke"/>, which marshals the
 /// work onto it and blocks until completion. <see cref="Lock"/> only guards
 /// lazy initialization.
 ///
 /// If init fails the context is marked unavailable and shader effects do not
-/// render at all - there is no CPU fallback.
+/// render at all, except that the ANGLE backend falls back to WARP (see
+/// GpuRenderSelect.TryWarpFallback).
 /// </summary>
 public sealed class GpuContext : IDisposable
 {
@@ -701,6 +702,14 @@ public sealed class GpuContext : IDisposable
         else if (!string.IsNullOrEmpty(AdapterLuid))
         {
             target = new AngleTarget(AdapterLuid, false, $"luid {AdapterLuid}");
+        }
+        else if (GpuAdapterRequest.Kind == GpuAdapterKind.Warp)
+        {
+            target = AngleTarget.WarpTarget;
+        }
+        else if (GpuAdapterRequest.Kind != GpuAdapterKind.Auto && !string.IsNullOrEmpty(GpuAdapterRequest.Luid))
+        {
+            target = new AngleTarget(GpuAdapterRequest.Luid, false, $"luid {GpuAdapterRequest.Luid}");
         }
         else
         {

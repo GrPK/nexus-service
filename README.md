@@ -142,6 +142,11 @@ dotnet publish -c Release -r linux-x64 -o publish-linux
   configuration, compiled by `scripts/build-ffmpeg-minimal.sh`. It is optional
   at build time: `bash scripts/fetch-ffmpeg.sh all` (or `mac | win | linux`)
   produces it once per RID.
+- `Bundled/win-x64/angle/` holds the ANGLE `libEGL.dll` and `libGLESv2.dll`
+  (unmodified, from the Electron v43.7.7 win32-x64 release; license in
+  `ANGLE-LICENSE.txt`) and publishes to `<publish>/angle/`. They are the default
+  Windows lighting renderer (`Lighting.RenderBackend` = `angle`, OpenGL ES 3 on
+  Direct3D 11); `wgl` and `glfw` remain as fallbacks and win-arm64 uses `wgl`.
 - `Bundled/<rid>/skia/libSkiaSharp` is a raster-only Skia build with HarfBuzz
   and libjpeg-turbo linked in, committed per RID and rebuilt with
   `Bundled/skia/build.sh` / `build.ps1` (see `Bundled/skia/NOTES.md`). It

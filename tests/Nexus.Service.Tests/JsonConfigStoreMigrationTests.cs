@@ -825,6 +825,27 @@ public class JsonConfigStoreMigrationTests : IDisposable
         }
     }
 
+    /// <summary>v22: "wgl" was the old default and was always persisted, so it moves to ANGLE; "glfw" and an already-migrated document are left alone.</summary>
+    [Theory]
+    [InlineData(21, "wgl", "angle")]
+    [InlineData(21, "glfw", "glfw")]
+    [InlineData(22, "wgl", "wgl")]
+    public void Load_RenderBackend_WglMovesToAngleOnce(int schema, string stored, string expected)
+    {
+        File.WriteAllText(_settingsPath,
+            $$"""{ "schemaVersion": {{schema}}, "lighting": { "renderBackend": "{{stored}}" } }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        try
+        {
+            Assert.Equal(expected, store.Load().Lighting.RenderBackend);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
     /// <summary>"fixed" is the pre-rename instance mode name; JsonConfigStore.Load must normalize any already-persisted value to "custom" on every load, independently of SchemaVersion, since the rename is a value change rather than a structural migration.</summary>
     [Fact]
     public void Load_PersistedFixedMode_NormalizesToCustom()
