@@ -223,7 +223,10 @@ public static class SystemRoutes
         app.MapPost("/system/power/logout", (Nexus.Service.Actions.SystemActions actions) => actions.Logout() ? ApiResponse.Ok() : ApiResponse.Fail("logout failed")).AllowPanel();
 
         // ── Audio device enumeration + default switching ──
-        app.MapGet("/system/audio/devices", (IAudioDeviceProvider a) => a.ListDevices()).AllowPanel();
+        app.MapGet("/system/audio/devices", (Nexus.Service.Audio.AudioMixerService mixer) => mixer.ListDevices()).AllowPanel();
+        // Pins apply at once; the bump re-reads the list on every open mixer.
+        app.MapPost("/system/audio/pinned", (SetPinnedAudioDevicesBody body, Nexus.Service.Audio.AudioMixerService mixer) =>
+            mixer.SetPinned(body.Direction ?? "", body.Ids) ? ApiResponse.Ok() : ApiResponse.Fail("unknown direction")).AllowPanel();
         // The bump is what tells other open mixers to re-read the endpoints; the
         // caller's own view updates off its POST resolving.
         app.MapPost("/system/audio/default-output", (SetAudioDefaultBody body,

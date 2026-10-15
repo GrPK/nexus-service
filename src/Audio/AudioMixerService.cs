@@ -247,6 +247,44 @@ public sealed class AudioMixerService : IDisposable
         return true;
     }
 
+    /// <summary>Most pinned ids kept per direction.</summary>
+    public const int MaxPinned = 64;
+
+    /// <summary>Replaces the pinned list for one direction. Blank and repeated ids
+    /// are dropped; ids of devices that are not plugged in are kept on purpose.
+    /// Returns false for an unknown direction.</summary>
+    public bool SetPinned(string direction, IEnumerable<string>? ids)
+    {
+        var isOutput = string.Equals(direction, "output", StringComparison.OrdinalIgnoreCase);
+        if (!isOutput && !string.Equals(direction, "input", StringComparison.OrdinalIgnoreCase)) return false;
+
+        var clean = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in ids ?? Array.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
+            clean.Add(id);
+            if (clean.Count >= MaxPinned) break;
+        }
+        _store.Update(s =>
+        {
+            if (isOutput) s.AudioMixer.PinnedOutputIds = clean;
+            else s.AudioMixer.PinnedInputIds = clean;
+        });
+        BumpConfig();
+        return true;
+    }
+
+    /// <summary>The device list with the saved pins attached.</summary>
+    public AudioDeviceList ListDevices()
+    {
+        var list = _devices.ListDevices();
+        var settings = _store.Load().AudioMixer;
+        list.PinnedOutputIds = new List<string>(settings.PinnedOutputIds);
+        list.PinnedInputIds = new List<string>(settings.PinnedInputIds);
+        return list;
+    }
+
     /// <summary>The default output or input moved, so open mixers must re-read
     /// the device list rather than wait out their poll.</summary>
     public void NotifyEndpointsChanged() => BumpConfig();

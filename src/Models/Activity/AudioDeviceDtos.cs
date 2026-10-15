@@ -17,6 +17,9 @@ public sealed class AudioDeviceList : ApiResponse
 {
     public List<AudioDevice> Outputs { get; set; } = new();
     public List<AudioDevice> Inputs { get; set; } = new();
+    /// <summary>User-pinned endpoint ids in pinned order, including ones not currently detected.</summary>
+    public List<string> PinnedOutputIds { get; set; } = new();
+    public List<string> PinnedInputIds { get; set; } = new();
     /// <summary>Spatial sound on the default output. Unsupported off Windows.</summary>
     public AudioSpatialState Spatial { get; set; } = new();
 }
@@ -40,6 +43,14 @@ public sealed class AudioSpatialState
     /// <summary>Encoder id of the active format; empty means off.</summary>
     public string ActiveId { get; set; } = "";
     public List<AudioSpatialFormat> Formats { get; set; } = new();
+}
+
+/// <summary>POST /system/audio/pinned body. <see cref="Ids"/> replaces the whole pinned list for the direction.</summary>
+public sealed class SetPinnedAudioDevicesBody
+{
+    /// <summary>"output" or "input".</summary>
+    public string Direction { get; set; } = "output";
+    public List<string> Ids { get; set; } = new();
 }
 
 public sealed class SetAudioDefaultBody
