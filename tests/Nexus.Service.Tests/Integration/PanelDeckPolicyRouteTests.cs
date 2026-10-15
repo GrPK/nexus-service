@@ -38,7 +38,7 @@ public sealed class PanelDeckPolicyRouteTests : IDisposable
         {
             // An empty provider never loads, so the listed-app snapshot stays cold.
             services.RemoveAll<Nexus.Service.Deck.ListedAppIds>();
-            services.AddSingleton(new Nexus.Service.Deck.ListedAppIds(new EmptyShortcutsProvider()));
+            services.AddSingleton(_ => new Nexus.Service.Deck.ListedAppIds(new EmptyShortcutsProvider()));
         }));
     }
 
