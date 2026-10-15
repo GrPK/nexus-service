@@ -29,6 +29,18 @@ public class AllSupportedDevicesTests
         Assert.Empty(dups);
     }
 
+    [Fact]
+    public void Merged_HasNoExactDuplicateAmongOpenRgbRows()
+    {
+        var dups = AllSupportedDevices.All
+            .Where(d => d.Source == "openrgb" && d.VendorId is not ("-" or "") && d.ProductId is not ("-" or ""))
+            .GroupBy(d => d.Vendor + "|" + d.Model + "|" + d.VendorId.ToUpperInvariant() + ":" + d.ProductId.ToUpperInvariant())
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToList();
+        Assert.Empty(dups);
+    }
+
     [Theory]
     [InlineData("Valkyrie", "VK99")]
     [InlineData("Valkyrie", "VK99 Pro")]
