@@ -1,5 +1,5 @@
 {
-  "count": 2010,
+  "count": 2011,
   "devices": [
     {
       "name": "Bloody B820R",
@@ -2777,6 +2777,13 @@
       "name": "Corsair K70 RGB PRO",
       "vid": "0x1B1C",
       "pid": "0x1BC4",
+      "controller": "CorsairPeripheralV2Controller",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair K70 RGB PRO Optical",
+      "vid": "0x1B1C",
+      "pid": "0x1BD4",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
