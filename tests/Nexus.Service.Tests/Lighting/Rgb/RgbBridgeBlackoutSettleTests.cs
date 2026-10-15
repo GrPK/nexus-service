@@ -210,4 +210,22 @@ public class RgbBridgeBlackoutSettleTests : IDisposable
         Assert.True(_engine.Blackout);
         Assert.True(_controller.Pushes > before);
     }
+
+    [Fact]
+    public async Task Rescan_and_bounce_are_refused_once_the_os_is_shutting_down()
+    {
+        await ActivateAndWaitForBuffersAsync();
+        _bridge.OsShuttingDown = () => true;
+        var before = _controller.Pushes;
+
+        _bridge.RecoverAfterConflictExit();
+        _bridge.ForceRescan();
+        _bridge.OnSystemResume();
+
+        // A refused rescan never marks detection, so the lights-off has nothing to wait on.
+        var report = await _bridge.BlackoutSettledAsync(Until(1));
+        Assert.Equal(BlackoutSkip.None, report.Skipped);
+        Assert.True(report.Pushed > 0);
+        Assert.True(_controller.Pushes > before);
+    }
 }

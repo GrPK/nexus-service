@@ -252,36 +252,4 @@ public class ConflictExitRecoveryTickTests
         recovery.Tick(1_000 + Debounce * 5);
         Assert.Equal(0, restarts);
     }
-
-    [Fact]
-    public void AnExitAfterTheOsShutdownSignalNeverRestartsTheDaemon()
-    {
-        var detector = new FakeDetector { Conflicts = new[] { App("icue") } };
-        var restarts = 0;
-        var shuttingDown = false;
-        var recovery = new ConflictExitRecovery(detector, () => true, () => restarts++, () => shuttingDown);
-
-        recovery.Tick(0);
-        detector.Conflicts = Array.Empty<DetectedConflict>();
-        recovery.Tick(1_000);
-        // Preshutdown lands inside the delay: the armed restart is dropped.
-        shuttingDown = true;
-        recovery.Tick(1_000 + Debounce - 1);
-        recovery.Tick(1_000 + Debounce * 2);
-        Assert.Equal(0, restarts);
-    }
-
-    [Fact]
-    public void WithoutTheShutdownSignalAnExitStillRestartsTheDaemon()
-    {
-        var detector = new FakeDetector { Conflicts = new[] { App("icue") } };
-        var restarts = 0;
-        var recovery = new ConflictExitRecovery(detector, () => true, () => restarts++, () => false);
-
-        recovery.Tick(0);
-        detector.Conflicts = Array.Empty<DetectedConflict>();
-        recovery.Tick(1_000);
-        recovery.Tick(1_000 + Debounce);
-        Assert.Equal(1, restarts);
-    }
 }

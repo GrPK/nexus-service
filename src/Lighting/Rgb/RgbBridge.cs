@@ -732,6 +732,10 @@ public sealed class RgbBridge : IDisposable
     /// </summary>
     private void Redetect(string reason, bool detectorsChanged)
     {
+        if (RefuseRestartDuringShutdown(reason))
+        {
+            return;
+        }
         if (!IsActive)
         {
             ServiceLog.Info($"[rgb-bridge] re-detect skipped ({reason}): bridge not active");
@@ -828,6 +832,24 @@ public sealed class RgbBridge : IDisposable
         });
     }
 
+    /// <summary>Whether the OS is going down; replaceable so a test need not flip the process-wide flag.</summary>
+    internal Func<bool> OsShuttingDown { get; set; } = () => Lifecycle.HostShutdown.IsOsShutdown;
+
+    /// <summary>Once the OS is going down, a daemon restart or rescan only competes with the lights-off.</summary>
+    private bool RefuseRestartDuringShutdown(string reason)
+    {
+        if (!OsShuttingDown())
+        {
+            return false;
+        }
+        ServiceLog.Info($"[rgb-bridge] {reason} skipped: OS shutting down");
+        // A rescan already requested cannot be retried by the bounce it falls back to,
+        // and no COMPLETE will clear these, so the lights-off must not wait on them.
+        Interlocked.Exchange(ref _redetectRequestedTicks, 0);
+        Interlocked.Exchange(ref _detectionActivityTicks, 0);
+        return true;
+    }
+
     private void MarkDetectionActivity() => Interlocked.Exchange(ref _detectionActivityTicks, DateTime.UtcNow.Ticks);
 
     /// <summary>True while detection is visibly running, so a commit would show a half-detected list.</summary>
@@ -872,7 +894,7 @@ public sealed class RgbBridge : IDisposable
         {
             return;
         }
-        if (deferred is not null)
+        if (deferred is not null && !OsShuttingDown())
         {
             Redetect(deferred, deferredDetectors);
             return;
@@ -904,6 +926,10 @@ public sealed class RgbBridge : IDisposable
 
     private void BounceSubprocess(string reason)
     {
+        if (RefuseRestartDuringShutdown(reason))
+        {
+            return;
+        }
         if (!IsActive)
         {
             ServiceLog.Info($"[rgb-bridge] bounce skipped ({reason}): bridge not active");
@@ -2117,7 +2143,7 @@ public sealed class RgbBridge : IDisposable
             _deferredRedetectReason = null;
             _deferredDetectorsChanged = false;
         }
-        if (deferred is not null)
+        if (deferred is not null && !OsShuttingDown())
         {
             Redetect(deferred, deferredDetectors);
             return;
