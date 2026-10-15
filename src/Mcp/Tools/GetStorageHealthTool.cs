@@ -14,7 +14,13 @@ public sealed class GetStorageHealthTool : IMcpTool
 {
     private readonly SmartHealthMonitor _smart;
 
-    public GetStorageHealthTool(SmartHealthMonitor smart) => _smart = smart;
+    private readonly Nexus.Service.Lifecycle.FeatureGates _gates;
+
+    public GetStorageHealthTool(SmartHealthMonitor smart, Nexus.Service.Lifecycle.FeatureGates? gates = null)
+    {
+        _smart = smart;
+        _gates = gates ?? Nexus.Service.Lifecycle.FeatureGates.AllEnabled;
+    }
 
     public string Name => "get_storage_health";
     public string Title => "Storage Health";
@@ -39,6 +45,10 @@ public sealed class GetStorageHealthTool : IMcpTool
 
     public Task<McpToolExecutionResult> ExecuteAsync(JsonElement? args, CancellationToken ct)
     {
+        if (!_gates.Diagnostics)
+        {
+            return Task.FromResult(McpToolExecutionResult.Error("Diagnostics is disabled in Settings."));
+        }
         if (McpArgs.BoolArg(args, "refresh"))
         {
             _smart.ForceRefresh();

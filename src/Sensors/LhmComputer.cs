@@ -48,6 +48,7 @@ public sealed class LhmComputer : IDisposable
     private readonly IConfigStore _config;
     private readonly DeviceControlGate _gate;
     private readonly FeatureGates _gates;
+    private readonly Nexus.Service.Sockets.MultiplexHub? _hub;
     private readonly HashSet<string> _smartSeeded = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool?> _rotational = new(StringComparer.Ordinal);
 
@@ -63,8 +64,9 @@ public sealed class LhmComputer : IDisposable
     // floor would feed it the same cached value four times.
     private const long FastFloorMs = 100;
 
-    public LhmComputer(IConfigStore config, DeviceControlGate gate, FeatureGates? gates = null)
+    public LhmComputer(IConfigStore config, DeviceControlGate gate, FeatureGates? gates = null, Nexus.Service.Sockets.MultiplexHub? hub = null)
     {
+        _hub = hub;
         _gates = gates ?? FeatureGates.AllEnabled;
         _config = config;
         _gate = gate;
@@ -221,7 +223,9 @@ public sealed class LhmComputer : IDisposable
             return;
         }
         // Outside _updateLock: an IConfigStore.Update mutator can hold the store lock while waiting for it.
-        var monitoring = _config.Load().Monitoring;
+        var settings = _config.Load();
+        var monitoring = settings.Monitoring;
+        var smartDemand = SmartPollDemand.Capture(_gates, settings, SmartLiveConsumers.Any(_hub));
 
         lock (_updateLock)
         {
@@ -245,7 +249,7 @@ public sealed class LhmComputer : IDisposable
                     // at the top of its own Update, so setting it here is per-drive. Throughput
                     // and free space are on separate paths and still refresh every walk.
                     if (hw.HardwareType == HardwareType.Storage)
-                        StorageDevice.SmartUpdateCycleCount = SmartCyclesFor(hw, monitoring, refresh);
+                        StorageDevice.SmartUpdateCycleCount = SmartCyclesFor(hw, monitoring, smartDemand, refresh);
 
                     TryUpdate(hw);
                     foreach (var sub in hw.SubHardware)
@@ -275,34 +279,19 @@ public sealed class LhmComputer : IDisposable
         }
     }
 
-    private uint SmartCyclesFor(IHardware hw, MonitoringSettings monitoring, SensorRefresh refresh)
+    private uint SmartCyclesFor(IHardware hw, MonitoringSettings monitoring, SmartPollDemand demand, SensorRefresh refresh)
     {
         var identifier = hw.Identifier.ToString();
-
-        // No consumer: no read at all, Force walks included. Forgetting the seed makes the
-        // walk after a switch-on read the drive at once.
-        if (!SmartPollDemand.IsNeededFor(_gates, _config.Load(), identifier))
-        {
-            _smartSeeded.Remove(identifier);
-            return SmartPollPolicy.ToCycleCount(SmartPollPolicy.NeverSeconds);
-        }
-
-        var seconds = monitoring.SmartPollPerDrive
-            ? monitoring.SmartPollSeconds.TryGetValue(identifier, out var configured)
-                ? configured
-                : SmartPollPolicy.DefaultSecondsFor(IsRotational(hw))
-            : monitoring.SmartPollDefaultSeconds;
-
-        // Never is absolute: not even a Force walk (the diagnostics health snapshot)
-        // touches a drive the user has opted out of.
-        if (seconds <= SmartPollPolicy.NeverSeconds) return SmartPollPolicy.ToCycleCount(seconds);
-
-        // Read once on the walk that first sees a drive so temperature and health have
-        // a value before the configured period elapses, and on any Force walk, which
-        // only ever comes from an explicit read of drive health.
-        if (_smartSeeded.Add(identifier) || refresh == SensorRefresh.Force) return 1;
-
-        return SmartPollPolicy.ToCycleCount(seconds);
+        return SmartPollDemand.Cycles(
+            demand.IsNeededFor(identifier),
+            _smartSeeded,
+            identifier,
+            () => monitoring.SmartPollPerDrive
+                ? monitoring.SmartPollSeconds.TryGetValue(identifier, out var configured)
+                    ? configured
+                    : SmartPollPolicy.DefaultSecondsFor(IsRotational(hw))
+                : monitoring.SmartPollDefaultSeconds,
+            refresh == SensorRefresh.Force);
     }
 
     /// <summary>Cached: the seek-penalty query opens the physical drive, so it runs once per drive.</summary>

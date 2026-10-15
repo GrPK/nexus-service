@@ -46,7 +46,7 @@ public sealed class MonitoringSettings
     public bool FpsOverlayEnabled { get; set; } = true;
     /// <summary>Event kinds the user has hidden. Unknown/new kinds default to visible.</summary>
     public List<string> EventKindsHidden { get; set; } = new();
-    /// <summary>Seconds between SMART reads per drive, keyed by LHM hardware identifier ("/hdd/0"). 0 = never read. A drive with no entry uses SmartPollDefaultSeconds.</summary>
+    /// <summary>Seconds between SMART reads per drive, keyed by LHM hardware identifier ("/nvme/0"). 0 = never read. A drive with no entry uses SmartPollDefaultSeconds.</summary>
     public Dictionary<string, int> SmartPollSeconds { get; set; } = new();
     /// <summary>Seconds between SMART reads applied to every drive while SmartPollPerDrive is false.</summary>
     public int SmartPollDefaultSeconds { get; set; } = MonitoringSettings.DefaultSmartPollSeconds;

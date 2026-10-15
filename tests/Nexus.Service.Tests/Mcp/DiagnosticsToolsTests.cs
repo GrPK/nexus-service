@@ -144,6 +144,20 @@ public sealed class DiagnosticsToolsTests : IDisposable
     }
 
     [Fact]
+    public async Task GetStorageHealth_DiagnosticsOff_IsAnErrorAndNeverRefreshes()
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Features.Diagnostics = false);
+        var tool = new GetStorageHealthTool(new SmartHealthMonitor(), new Nexus.Service.Lifecycle.FeatureGates(store));
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new { refresh = true }), CancellationToken.None);
+
+        Assert.True(result.IsError);
+        Assert.Contains("Diagnostics is disabled", result.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetStorageHealth_UnknownDrive_IsErrorListingKnownDrives()
     {
         var tool = new GetStorageHealthTool(new SmartHealthMonitor());

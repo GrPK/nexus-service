@@ -51,6 +51,24 @@ public sealed class MultiplexHubDesktopOnlyTopicsTests
     }
 
     [Fact]
+    public async Task A_monitoring_subscriber_is_a_live_smart_consumer_until_it_leaves()
+    {
+        Nexus.Service.Sensors.SmartLiveConsumers.Forget();
+        var hub = new MultiplexHub();
+        using var cts = new CancellationTokenSource();
+        var dash = new ScriptedWebSocket("{\"sub\":[\"monitoring\"]}");
+        Assert.False(Nexus.Service.Sensors.SmartLiveConsumers.Any(hub));
+
+        var loop = hub.HandleClientAsync(dash, "sess-dash", MultiplexHub.ClientTransport.Lan, cts.Token);
+        await WaitUntilAsync(() => hub.TopicHasSubscribers("monitoring"), TimeSpan.FromSeconds(5), "the subscription never registered");
+        Assert.True(Nexus.Service.Sensors.SmartLiveConsumers.Any(hub));
+
+        dash.Unblock();
+        await loop;
+        Assert.False(Nexus.Service.Sensors.SmartLiveConsumers.Any(hub));
+    }
+
+    [Fact]
     public async Task Desktop_socket_can_subscribe_to_the_pair_request_topic()
     {
         var hub = new MultiplexHub();

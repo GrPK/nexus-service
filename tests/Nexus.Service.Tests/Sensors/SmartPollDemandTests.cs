@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Nexus.Service.Lifecycle;
 using Nexus.Service.Persistence;
 using Nexus.Service.Sensors;
@@ -30,6 +31,9 @@ public class SmartPollDemandTests
             Input = new CurveInputDocument { Id = input, Type = "Temperature" },
         }));
 
+    private static SmartPollDemand Demand(InMemoryConfigStore store, FeatureGates gates) =>
+        SmartPollDemand.Capture(gates, store.Load());
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(true, false, true)]
@@ -39,21 +43,28 @@ public class SmartPollDemandTests
     {
         var (store, gates) = Build();
         Pillars(store, monitoring, diagnostics, cooling: false);
+        var demand = Demand(store, gates);
 
-        Assert.Equal(active, SmartPollDemand.IsActive(gates, store.Load()));
-        Assert.Equal(active, SmartPollDemand.IsNeededFor(gates, store.Load(), "/nvme/0"));
+        Assert.Equal(active, demand.IsActive(new[] { "/nvme/0" }));
+        Assert.Equal(active, demand.IsNeededFor("/nvme/0"));
     }
 
-    [Fact]
-    public void ADriveTemperatureCurve_KeepsThatDriveReadingWhileCoolingIsOn()
+    [Theory]
+    [InlineData("/nvme/0", "/nvme/0/temperature/0")]
+    [InlineData("/ata/0", "/ata/0/temperature/0")]
+    [InlineData("/scsi/2", "/scsi/2/temperature/0")]
+    [InlineData("/usb/1", "/usb/1/temperature/0")]
+    public void ADriveTemperatureCurve_KeepsThatDriveReadingWhileCoolingIsOn(string drive, string sensor)
     {
         var (store, gates) = Build();
         Pillars(store, false, false, cooling: true);
-        DriveCurve(store, "/nvme/0/temperature/0");
+        DriveCurve(store, sensor);
+        var demand = Demand(store, gates);
 
-        Assert.True(SmartPollDemand.IsActive(gates, store.Load()));
-        Assert.True(SmartPollDemand.IsNeededFor(gates, store.Load(), "/nvme/0"));
-        Assert.False(SmartPollDemand.IsNeededFor(gates, store.Load(), "/nvme/1"));
+        Assert.True(demand.IsActive(new[] { drive }));
+        Assert.True(demand.IsNeededFor(drive));
+        Assert.False(demand.IsNeededFor("/nvme/9"));
+        Assert.False(demand.IsActive(new[] { "/nvme/9" }));
     }
 
     [Fact]
@@ -61,24 +72,79 @@ public class SmartPollDemandTests
     {
         var (store, gates) = Build();
         Pillars(store, false, false, cooling: false);
-        DriveCurve(store, "/nvme/0/temperature/0");
-        Assert.False(SmartPollDemand.IsActive(gates, store.Load()));
+        DriveCurve(store, "/ata/0/temperature/0");
+        Assert.False(Demand(store, gates).IsActive(new[] { "/ata/0" }));
 
         var (cpuStore, cpuGates) = Build();
         Pillars(cpuStore, false, false, cooling: true);
         DriveCurve(cpuStore, "/intelcpu/0/temperature/0");
-        Assert.False(SmartPollDemand.IsActive(cpuGates, cpuStore.Load()));
+        Assert.False(Demand(cpuStore, cpuGates).IsActive(new[] { "/ata/0" }));
     }
 
     [Fact]
-    public void SwitchingAPillarBackOn_IsSeenLive()
+    public void SwitchingAPillarBackOn_IsSeenByTheNextCapture()
     {
         var (store, gates) = Build();
         Pillars(store, false, false, cooling: false);
-        Assert.False(SmartPollDemand.IsNeededFor(gates, store.Load(), "/hdd/0"));
+        Assert.False(Demand(store, gates).IsNeededFor("/ata/0"));
 
         store.Update(s => s.Features.Diagnostics = true);
 
-        Assert.True(SmartPollDemand.IsNeededFor(gates, store.Load(), "/hdd/0"));
+        Assert.True(Demand(store, gates).IsNeededFor("/ata/0"));
+    }
+
+    [Fact]
+    public void Cycles_ADriveNothingNeeds_IsNeverReadEvenOnForce_AndItsSeedIsForgotten()
+    {
+        var seeded = new HashSet<string> { "/ata/0" };
+
+        var forced = SmartPollDemand.Cycles(false, seeded, "/ata/0", () => 30, force: true);
+
+        Assert.Equal(SmartPollPolicy.ToCycleCount(SmartPollPolicy.NeverSeconds), forced);
+        Assert.DoesNotContain("/ata/0", seeded);
+        Assert.Equal(1u, SmartPollDemand.Cycles(true, seeded, "/ata/0", () => 30, force: false));
+        Assert.Equal(SmartPollPolicy.ToCycleCount(30), SmartPollDemand.Cycles(true, seeded, "/ata/0", () => 30, force: false));
+    }
+
+    [Fact]
+    public void Cycles_AUserNeverStillWinsOverTheSeedAndForce()
+    {
+        var seeded = new HashSet<string>();
+        var never = SmartPollPolicy.ToCycleCount(SmartPollPolicy.NeverSeconds);
+
+        Assert.Equal(never, SmartPollDemand.Cycles(true, seeded, "/ata/0", () => SmartPollPolicy.NeverSeconds, force: true));
+        Assert.Empty(seeded);
+    }
+
+    [Fact]
+    public void ALiveConsumer_KeepsEveryDriveReading_AndItsDepartureStopsThem()
+    {
+        var (store, gates) = Build();
+        Pillars(store, false, false, cooling: false);
+        var seeded = new HashSet<string>();
+
+        var idle = SmartPollDemand.Capture(gates, store.Load(), liveConsumers: false);
+        Assert.False(idle.IsActive(new[] { "/ata/0" }));
+
+        var live = SmartPollDemand.Capture(gates, store.Load(), liveConsumers: true);
+        Assert.True(live.IsActive(new[] { "/ata/0" }));
+        Assert.Equal(1u, SmartPollDemand.Cycles(live.IsNeededFor("/ata/0"), seeded, "/ata/0", () => 30, force: false));
+
+        Assert.Equal(
+            SmartPollPolicy.ToCycleCount(SmartPollPolicy.NeverSeconds),
+            SmartPollDemand.Cycles(idle.IsNeededFor("/ata/0"), seeded, "/ata/0", () => 30, force: false));
+        Assert.Equal(1u, SmartPollDemand.Cycles(live.IsNeededFor("/ata/0"), seeded, "/ata/0", () => 30, force: false));
+    }
+
+    [Fact]
+    public void APollStyleReader_CountsForAWhile()
+    {
+        SmartLiveConsumers.Forget();
+        Assert.False(SmartLiveConsumers.Any(null));
+
+        SmartLiveConsumers.NoteRead();
+
+        Assert.True(SmartLiveConsumers.Any(null));
+        SmartLiveConsumers.Forget();
     }
 }
