@@ -203,6 +203,18 @@ public sealed class SystemActions
         return await LaunchUrlAsync(parsed.AbsoluteUri).ConfigureAwait(false);
     }
 
+    /// <summary>Desktop-only launch of an http, https or steam URI (the deck launchApp fallback allowlist).</summary>
+    public async Task<ApiResponse> LaunchUriAsync(string uri)
+    {
+        var target = Nexus.Service.Activity.ShortcutTargets.Normalize(uri);
+        if (!Nexus.Service.Activity.ShortcutTargets.IsLaunchUri(target) ||
+            !Nexus.Service.Activity.ShortcutTargets.IsAllowedLaunchScheme(target))
+        {
+            return ApiResponse.Fail("invalid uri - must be http, https or a steam game id (rungameid or run)");
+        }
+        return await LaunchUrlAsync(target).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Hands an absolute URI to the user session's default handler. The
     /// caller owns the scheme allowlist, so a caller that permits more than

@@ -109,4 +109,37 @@ public sealed class DeckLayoutPolicyTests
         broken.Pages[0].Widgets[0].Config!["deck"] = doc.RootElement.Clone();
         Assert.False(DeckLayoutPolicy.IntroducesPrivilegedActions(broken, stored: null));
     }
+
+    [Theory]
+    [InlineData("C:\\\\x\\\\a.bat", true)]
+    [InlineData("ms-msdt:/id x", true)]
+    [InlineData("steam://rungameid/730", true)]
+    [InlineData("{6D809377-6AF0-444B-8957-A3773F02200E}\\\\Vendor\\\\app.exe", false)]
+    [InlineData("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", false)]
+    public void LaunchApp_IsPrivilegedOnlyForDirectPathOrUriTargets(string appId, bool privileged)
+    {
+        var action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"" + appId + "\"}}";
+
+        Assert.Equal(privileged, DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), null));
+    }
+
+    [Theory]
+    [InlineData("steam://rungameid/730", true, false)]
+    [InlineData("steam://rungameid/731", false, true)]
+    [InlineData("C:\\\\Games\\\\a.exe", true, false)]
+    [InlineData("C:\\\\Games\\\\b.exe", false, true)]
+    public void LaunchApp_ListedDirectIdsStayUnprivileged(string appId, bool listed, bool privileged)
+    {
+        var action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"" + appId + "\"}}";
+
+        Assert.Equal(privileged, DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), null, _ => listed));
+    }
+
+    [Fact]
+    public void LaunchApp_UnchangedDirectKeyNeverFlips()
+    {
+        const string action = "{\"action\":{\"type\":\"launchApp\",\"appId\":\"steam://rungameid/9\"}}";
+
+        Assert.False(DeckLayoutPolicy.IntroducesPrivilegedActions(Layout(Deck(action)), Layout(Deck(action)), _ => false));
+    }
 }
