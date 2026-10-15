@@ -272,9 +272,10 @@ public sealed class AudioMixerService : IDisposable
             var list = _devices.ListDevices();
             var detected = new HashSet<string>(StringComparer.Ordinal);
             foreach (var d in isOutput ? list.Outputs : list.Inputs) detected.Add(d.Id);
-            // A provider that failed to enumerate returns an empty list; trimming
-            // then would cut by position and could drop what the user just dragged.
-            if (detected.Count == 0) return ErrorDevicesUnavailable;
+            // A provider that failed to enumerate returns nothing in either
+            // direction; trimming then would cut by position and could drop what
+            // the user just dragged. One empty direction alone is a real PC.
+            if (list.Outputs.Count == 0 && list.Inputs.Count == 0) return ErrorDevicesUnavailable;
             var budget = Math.Max(0, MaxOrdered - unique.FindAll(detected.Contains).Count);
             clean = unique.FindAll(id => detected.Contains(id) || budget-- > 0);
         }

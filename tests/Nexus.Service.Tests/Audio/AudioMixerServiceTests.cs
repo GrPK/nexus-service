@@ -479,6 +479,19 @@ public sealed class AudioMixerServiceTests
     }
 
     [Fact]
+    public void OverTheCapStillTrimsWhenOnlyOneDirectionHasNoDevices()
+    {
+        var devices = new FakeDevices { NoInputs = true };
+        var mixer = new AudioMixerService(new FakeSessions(), new FakeVolume(), devices, new InMemoryConfigStore(), new MultiplexHub());
+        var ids = new List<string>();
+        for (var i = 0; i < 100; i++) ids.Add("mic-" + i);
+
+        Assert.Equal("", mixer.SetOrder("input", ids));
+
+        Assert.Equal(AudioMixerService.MaxOrdered, mixer.ListDevices().InputOrder.Count);
+    }
+
+    [Fact]
     public void OverTheCapWithNothingDetectedRefusesAndKeepsTheSavedOrder()
     {
         var devices = new FakeDevices();
@@ -551,19 +564,17 @@ public sealed class AudioMixerServiceTests
         public string DefaultInput { get; private set; } = "in-a";
 
         public bool Empty { get; set; }
+        public bool NoInputs { get; set; }
 
-        public AudioDeviceList ListDevices() => Empty ? new() : new()
+        public AudioDeviceList ListDevices()
         {
-            Outputs =
-            {
-                new AudioDevice { Id = "out-a", Name = "Headset", IsDefault = DefaultOutput == "out-a", Direction = "output" },
-                new AudioDevice { Id = "out-b", Name = "Speakers", IsDefault = DefaultOutput == "out-b", Direction = "output" },
-            },
-            Inputs =
-            {
-                new AudioDevice { Id = "in-a", Name = "Mic", IsDefault = DefaultInput == "in-a", Direction = "input" },
-            },
-        };
+            var list = new AudioDeviceList();
+            if (Empty) return list;
+            list.Outputs.Add(new AudioDevice { Id = "out-a", Name = "Headset", IsDefault = DefaultOutput == "out-a", Direction = "output" });
+            list.Outputs.Add(new AudioDevice { Id = "out-b", Name = "Speakers", IsDefault = DefaultOutput == "out-b", Direction = "output" });
+            if (!NoInputs) list.Inputs.Add(new AudioDevice { Id = "in-a", Name = "Mic", IsDefault = DefaultInput == "in-a", Direction = "input" });
+            return list;
+        }
 
         public bool SetDefaultOutput(string deviceId) { DefaultOutput = deviceId; return true; }
         public bool SetDefaultInput(string deviceId) { DefaultInput = deviceId; return true; }
