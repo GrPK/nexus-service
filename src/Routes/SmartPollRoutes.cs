@@ -9,7 +9,7 @@ public static class SmartPollRoutes
 {
     public static void MapSmartPollRoutes(this WebApplication app)
     {
-        app.MapGet("/monitoring/smart-poll", (ISensorProvider sensors, IConfigStore config) =>
+        app.MapGet("/monitoring/smart-poll", (ISensorProvider sensors, IConfigStore config, Nexus.Service.Lifecycle.FeatureGates gates) =>
         {
             var monitoring = config.Load().Monitoring;
             var rotational = sensors.GetRotationalDrives();
@@ -36,6 +36,7 @@ public static class SmartPollRoutes
 
             return Results.Ok(new SmartPollResponse
             {
+                Active = SmartPollDemand.IsActive(gates, config.Load()),
                 DefaultSeconds = monitoring.SmartPollDefaultSeconds,
                 PerDrive = monitoring.SmartPollPerDrive,
                 Choices = SmartPollPolicy.Choices,

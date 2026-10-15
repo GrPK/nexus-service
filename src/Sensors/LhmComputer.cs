@@ -47,6 +47,7 @@ public sealed class LhmComputer : IDisposable
     private readonly Dictionary<string, long> _updateErrorLoggedAt = new(StringComparer.Ordinal);
     private readonly IConfigStore _config;
     private readonly DeviceControlGate _gate;
+    private readonly FeatureGates _gates;
     private readonly HashSet<string> _smartSeeded = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool?> _rotational = new(StringComparer.Ordinal);
 
@@ -62,8 +63,9 @@ public sealed class LhmComputer : IDisposable
     // floor would feed it the same cached value four times.
     private const long FastFloorMs = 100;
 
-    public LhmComputer(IConfigStore config, DeviceControlGate gate)
+    public LhmComputer(IConfigStore config, DeviceControlGate gate, FeatureGates? gates = null)
     {
+        _gates = gates ?? FeatureGates.AllEnabled;
         _config = config;
         _gate = gate;
         // MemoryGroup probes 0x50-0x57 through its own PawnIO SMBus module at
@@ -276,6 +278,15 @@ public sealed class LhmComputer : IDisposable
     private uint SmartCyclesFor(IHardware hw, MonitoringSettings monitoring, SensorRefresh refresh)
     {
         var identifier = hw.Identifier.ToString();
+
+        // No consumer: no read at all, Force walks included. Forgetting the seed makes the
+        // walk after a switch-on read the drive at once.
+        if (!SmartPollDemand.IsNeededFor(_gates, _config.Load(), identifier))
+        {
+            _smartSeeded.Remove(identifier);
+            return SmartPollPolicy.ToCycleCount(SmartPollPolicy.NeverSeconds);
+        }
+
         var seconds = monitoring.SmartPollPerDrive
             ? monitoring.SmartPollSeconds.TryGetValue(identifier, out var configured)
                 ? configured

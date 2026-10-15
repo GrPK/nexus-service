@@ -14,6 +14,8 @@ public sealed class SmartPollDriveDto
 public sealed class SmartPollResponse
 {
     public int DefaultSeconds { get; set; }
+    /// <summary>False while no pillar needs SMART reads, so the picker has nothing to drive.</summary>
+    public bool Active { get; set; }
     public bool PerDrive { get; set; }
     public IReadOnlyList<int> Choices { get; set; } = Array.Empty<int>();
     public IReadOnlyList<SmartPollDriveDto> Drives { get; set; } = Array.Empty<SmartPollDriveDto>();

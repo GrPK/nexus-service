@@ -645,3 +645,26 @@ public sealed class OnboardingReplayPendingTests : IClassFixture<NexusAppFactory
         Assert.Contains("\"featuresReplay\":false", await done.Content.ReadAsStringAsync());
     }
 }
+
+public sealed class SmartPollActiveRouteTests : IClassFixture<NexusAppFactory>
+{
+    private readonly NexusAppFactory _factory;
+
+    public SmartPollActiveRouteTests(NexusAppFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Active_is_false_with_monitoring_and_diagnostics_off_and_true_with_either_on()
+    {
+        _factory.ResetSettings();
+        var store = _factory.Services.GetRequiredService<IConfigStore>();
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
+
+        store.Update(s => { s.Features.Monitoring = false; s.Features.Diagnostics = false; s.Features.Cooling = false; });
+        Assert.Contains("\"active\":false", await client.GetStringAsync("/monitoring/smart-poll"));
+
+        store.Update(s => s.Features.Diagnostics = true);
+        Assert.Contains("\"active\":true", await client.GetStringAsync("/monitoring/smart-poll"));
+    }
+}
