@@ -393,11 +393,11 @@ public sealed class AudioMixerSettings
 
     public List<Nexus.Service.Models.Activity.AudioMixerPresetDto> Presets { get; set; } = new();
 
-    /// <summary>Endpoint ids the user pinned, in their order. Kept while a device
+    /// <summary>Endpoint ids in the order the user dragged them. Kept while a device
     /// is unplugged so it returns to its slot when it reappears.</summary>
-    public List<string> PinnedOutputIds { get; set; } = new();
+    public List<string> OutputOrder { get; set; } = new();
 
-    public List<string> PinnedInputIds { get; set; } = new();
+    public List<string> InputOrder { get; set; } = new();
 }
 
 public sealed class SteamSettings

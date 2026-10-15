@@ -418,43 +418,43 @@ public sealed class AudioMixerServiceTests
     };
 
     [Fact]
-    public void PinnedIdsRoundTripInOrderThroughTheDeviceList()
+    public void SavedOrderRoundTripsThroughTheDeviceList()
     {
         var (mixer, _, store) = Build();
 
-        Assert.True(mixer.SetPinned("output", new[] { "out-b", "out-a" }));
-        Assert.True(mixer.SetPinned("input", new[] { "in-a" }));
+        Assert.True(mixer.SetOrder("output", new[] { "out-b", "out-a" }));
+        Assert.True(mixer.SetOrder("input", new[] { "in-a" }));
 
         var list = mixer.ListDevices();
-        Assert.Equal(new[] { "out-b", "out-a" }, list.PinnedOutputIds);
-        Assert.Equal(new[] { "in-a" }, list.PinnedInputIds);
-        Assert.Equal(new[] { "out-b", "out-a" }, store.Load().AudioMixer.PinnedOutputIds);
+        Assert.Equal(new[] { "out-b", "out-a" }, list.OutputOrder);
+        Assert.Equal(new[] { "in-a" }, list.InputOrder);
+        Assert.Equal(new[] { "out-b", "out-a" }, store.Load().AudioMixer.OutputOrder);
     }
 
     [Fact]
-    public void PinsOfUndetectedDevicesAreKeptAndBlanksAndRepeatsDropped()
+    public void OrderKeepsUndetectedIdsAndDropsBlanksAndRepeats()
     {
         var (mixer, _, _) = Build();
 
-        mixer.SetPinned("output", new[] { "gone-1", "", "out-a", "gone-1", "  " });
+        mixer.SetOrder("output", new[] { "gone-1", "", "out-a", "gone-1", "  " });
 
-        Assert.Equal(new[] { "gone-1", "out-a" }, mixer.ListDevices().PinnedOutputIds);
+        Assert.Equal(new[] { "gone-1", "out-a" }, mixer.ListDevices().OutputOrder);
     }
 
     [Fact]
-    public void PinnedDetectedDevicesComeFirstInPinnedOrderAndUndetectedPinsAreHidden()
+    public void SavedDevicesComeFirstInSavedOrderAndUndetectedOnesAreHidden()
     {
         var (mixer, _, _) = Build();
 
-        mixer.SetPinned("output", new[] { "gone", "out-b" });
+        mixer.SetOrder("output", new[] { "gone", "out-b" });
 
         var ids = mixer.ListDevices().Outputs.ConvertAll(d => d.Id);
         Assert.Equal(new[] { "out-b", "out-a" }, ids);
-        Assert.Equal(new[] { "gone", "out-b" }, mixer.ListDevices().PinnedOutputIds);
+        Assert.Equal(new[] { "gone", "out-b" }, mixer.ListDevices().OutputOrder);
     }
 
     [Fact]
-    public void WithNoPinsTheProviderOrderIsUntouched()
+    public void WithNoSavedOrderTheProviderOrderIsUntouched()
     {
         var (mixer, _, _) = Build();
 
@@ -462,14 +462,14 @@ public sealed class AudioMixerServiceTests
     }
 
     [Fact]
-    public void AnUnknownPinDirectionIsRefusedAndChangesNothing()
+    public void AnUnknownOrderDirectionIsRefusedAndChangesNothing()
     {
         var (mixer, _, _) = Build();
-        mixer.SetPinned("output", new[] { "out-a" });
+        mixer.SetOrder("output", new[] { "out-a" });
 
-        Assert.False(mixer.SetPinned("sideways", new[] { "x" }));
+        Assert.False(mixer.SetOrder("sideways", new[] { "x" }));
 
-        Assert.Equal(new[] { "out-a" }, mixer.ListDevices().PinnedOutputIds);
+        Assert.Equal(new[] { "out-a" }, mixer.ListDevices().OutputOrder);
     }
 
     private static (AudioMixerService Mixer, FakeSessions Sessions, InMemoryConfigStore Store) Build(

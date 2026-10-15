@@ -247,13 +247,13 @@ public sealed class AudioMixerService : IDisposable
         return true;
     }
 
-    /// <summary>Most pinned ids kept per direction.</summary>
-    public const int MaxPinned = 64;
+    /// <summary>Most ids kept in a saved order per direction.</summary>
+    public const int MaxOrdered = 64;
 
-    /// <summary>Replaces the pinned list for one direction. Blank and repeated ids
+    /// <summary>Replaces the saved device order for one direction. Blank and repeated ids
     /// are dropped; ids of devices that are not plugged in are kept on purpose.
     /// Returns false for an unknown direction.</summary>
-    public bool SetPinned(string direction, IEnumerable<string>? ids)
+    public bool SetOrder(string direction, IEnumerable<string>? ids)
     {
         var isOutput = string.Equals(direction, "output", StringComparison.OrdinalIgnoreCase);
         if (!isOutput && !string.Equals(direction, "input", StringComparison.OrdinalIgnoreCase)) return false;
@@ -264,36 +264,36 @@ public sealed class AudioMixerService : IDisposable
         {
             if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
             clean.Add(id);
-            if (clean.Count >= MaxPinned) break;
+            if (clean.Count >= MaxOrdered) break;
         }
         _store.Update(s =>
         {
-            if (isOutput) s.AudioMixer.PinnedOutputIds = clean;
-            else s.AudioMixer.PinnedInputIds = clean;
+            if (isOutput) s.AudioMixer.OutputOrder = clean;
+            else s.AudioMixer.InputOrder = clean;
         });
         BumpConfig();
         return true;
     }
 
-    /// <summary>The device list with detected pinned devices first, in pinned
-    /// order, then the rest in the provider's order. The saved pins ride along
-    /// whole so a pin for an unplugged device is not lost on the next write.</summary>
+    /// <summary>The device list with detected devices from the saved order
+    /// first, in that order, then the rest in the provider's order. The saved
+    /// order rides along whole so an unplugged device keeps its slot on the next write.</summary>
     public AudioDeviceList ListDevices()
     {
         var list = _devices.ListDevices();
         var settings = _store.Load().AudioMixer;
-        list.Outputs = PinnedFirst(list.Outputs, settings.PinnedOutputIds);
-        list.Inputs = PinnedFirst(list.Inputs, settings.PinnedInputIds);
-        list.PinnedOutputIds = new List<string>(settings.PinnedOutputIds);
-        list.PinnedInputIds = new List<string>(settings.PinnedInputIds);
+        list.Outputs = SavedOrderFirst(list.Outputs, settings.OutputOrder);
+        list.Inputs = SavedOrderFirst(list.Inputs, settings.InputOrder);
+        list.OutputOrder = new List<string>(settings.OutputOrder);
+        list.InputOrder = new List<string>(settings.InputOrder);
         return list;
     }
 
-    internal static List<AudioDevice> PinnedFirst(List<AudioDevice> devices, List<string> pinned)
+    internal static List<AudioDevice> SavedOrderFirst(List<AudioDevice> devices, List<string> saved)
     {
-        if (pinned.Count == 0) return devices;
+        if (saved.Count == 0) return devices;
         var rank = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (var i = 0; i < pinned.Count; i++) rank.TryAdd(pinned[i], i);
+        for (var i = 0; i < saved.Count; i++) rank.TryAdd(saved[i], i);
         var head = new List<AudioDevice>();
         var tail = new List<AudioDevice>();
         foreach (var d in devices) (rank.ContainsKey(d.Id) ? head : tail).Add(d);
