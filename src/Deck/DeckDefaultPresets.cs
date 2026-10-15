@@ -55,6 +55,10 @@ public static class DeckDefaultPresets
         return (cols, rows, ConfigOf(EssentialsKeys(), cols * rows));
     }
 
+    /// <summary>The seeded Essentials preset if the user still has it, wherever it sits in the list; what a new deck joins first.</summary>
+    public static DeckPreset? FindEssentials(List<DeckPreset> presets) =>
+        presets.Find(p => p.TemplateId == EssentialsId);
+
     private static void AddPreset(NexusSettings settings, string id, string name, List<DeckSlot> keys)
     {
         settings.StreamDeck.Presets.Add(new DeckPreset

@@ -634,7 +634,7 @@ public static class DeckRoutes
     }
 
     /// <summary>
-    /// A new widget joins the first existing preset that has keys (adding a
+    /// A new widget joins the seeded Essentials preset, else the first preset that has keys (adding a
     /// deck is like plugging in a second Stream Deck, not starting a fresh
     /// layout); a host with none gets a fresh preset at the widget's grid
     /// holding the Essentials keys.
@@ -649,10 +649,13 @@ public static class DeckRoutes
                 created = already;
                 return;
             }
-            // A panel caller joins only what PUT would let it activate. An empty
-            // preset is never worth joining: the widget would show no keys.
-            var presetId = s.StreamDeck.Presets
-                .FirstOrDefault(p => DeckConfigNavigation.HasContent(p.Deck) && (isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any()))?.Id;
+            // A panel caller joins only what PUT would let it activate. Essentials
+            // first, then the first preset with keys (an empty one would show none).
+            bool Joinable(DeckPreset p) => isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any();
+            var essentials = DeckDefaultPresets.FindEssentials(s.StreamDeck.Presets);
+            var presetId = essentials is not null && Joinable(essentials)
+                ? essentials.Id
+                : s.StreamDeck.Presets.FirstOrDefault(p => DeckConfigNavigation.HasContent(p.Deck) && Joinable(p))?.Id;
             if (presetId is null)
             {
                 var (presetCols, presetRows, deck) = DeckDefaultPresets.EssentialsFor(
@@ -699,7 +702,8 @@ public static class DeckRoutes
             }
             var model = StreamDeckModels.ByProductId(persisted.ProductId);
             var (cols, rows) = model is null ? (5, 3) : (model.Columns, model.Rows);
-            var presetId = s.StreamDeck.Presets.Count > 0 ? s.StreamDeck.Presets[0].Id : null;
+            var presetId = DeckDefaultPresets.FindEssentials(s.StreamDeck.Presets)?.Id
+                ?? (s.StreamDeck.Presets.Count > 0 ? s.StreamDeck.Presets[0].Id : null);
             if (presetId is null)
             {
                 var preset = new DeckPreset

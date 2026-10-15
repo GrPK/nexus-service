@@ -634,6 +634,50 @@ public sealed class DeckRoutesTests : IClassFixture<DeckRoutesHostFactory>
         }
     }
 
+    [Fact]
+    public async Task GetInstance_UnknownWidgetInstance_JoinsSeededEssentialsOverAnEarlierKeyedPreset()
+    {
+        var (factory, client) = Boot();
+        using (factory)
+        {
+            var store = factory.Services.GetRequiredService<IConfigStore>();
+            store.Update(s =>
+            {
+                s.StreamDeck.Presets.Add(new DeckPreset
+                {
+                    Id = "mine", Name = "Mine", Cols = 5, Rows = 3,
+                    Deck = new DeckConfig { Pages = { new DeckPage { Slots = { new DeckSlot { Label = "Key" } } } } },
+                });
+                DeckDefaultPresets.SeedOnce(s);
+                s.StreamDeck.Instances["widget:old"] = new DeckInstance { Mode = "custom", ActivePresetId = "mine" };
+            });
+
+            var res = await client.GetAsync("/deck/instances/widget:fresh");
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+            Assert.Equal(DeckDefaultPresets.EssentialsId, doc.RootElement.GetProperty("instance").GetProperty("activePresetId").GetString());
+            Assert.Equal("mine", store.Load().StreamDeck.Instances["widget:old"].ActivePresetId);
+        }
+    }
+
+    [Fact]
+    public async Task GetInstance_UnknownWidgetInstance_WithEssentialsDeleted_FallsBackToTheFirstKeyedPreset()
+    {
+        var (factory, client) = Boot();
+        using (factory)
+        {
+            var store = factory.Services.GetRequiredService<IConfigStore>();
+            store.Update(s =>
+            {
+                DeckDefaultPresets.SeedOnce(s);
+                s.StreamDeck.Presets.RemoveAll(p => p.Id == DeckDefaultPresets.EssentialsId);
+            });
+
+            var res = await client.GetAsync("/deck/instances/widget:fresh");
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+            Assert.Equal(DeckDefaultPresets.MediaId, doc.RootElement.GetProperty("instance").GetProperty("activePresetId").GetString());
+        }
+    }
+
     /// <summary>A Decks row can exist with no Instances row (a deck migrated or upserted before this route existed); GET must lazily create one, joining the first existing preset, instead of 404ing.</summary>
     [Fact]
     public async Task GetInstance_StreamdeckWithADecksRowButNoInstanceRow_LazilyJoinsTheFirstPreset()

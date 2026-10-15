@@ -926,7 +926,8 @@ public sealed partial class StreamDeckConnectionWorker : BackgroundService, IDec
             var instanceId = DeckInstanceResolver.PhysicalInstanceId(surface.Serial);
             if (!s.StreamDeck.Instances.ContainsKey(instanceId))
             {
-                var presetId = s.StreamDeck.Presets.Count > 0 ? s.StreamDeck.Presets[0].Id : null;
+                var presetId = DeckDefaultPresets.FindEssentials(s.StreamDeck.Presets)?.Id
+                    ?? (s.StreamDeck.Presets.Count > 0 ? s.StreamDeck.Presets[0].Id : null);
                 if (presetId is null)
                 {
                     var preset = new DeckPreset
