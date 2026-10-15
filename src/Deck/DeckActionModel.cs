@@ -106,7 +106,7 @@ public sealed class DeckSystemAction
     /// <summary>
     /// volumeUp | volumeDown | volumeSet | muteToggle | mediaPlayPause |
     /// mediaNext | mediaPrev | brightnessUp | brightnessDown | brightnessSet |
-    /// openSettings | screenshot | screenRecord.
+    /// openSettings | screenshot | screenRecord | taskManager.
     /// </summary>
     public string Op { get; set; } = "";
 

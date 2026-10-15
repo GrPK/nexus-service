@@ -19,7 +19,7 @@ namespace Nexus.Service.Routes;
 /// </summary>
 public static class DeckRoutes
 {
-    private const int PresetCap = 50;
+    internal const int PresetCap = 50;
 
     public static void MapDeckEndpoints(this WebApplication app)
     {
@@ -634,9 +634,10 @@ public static class DeckRoutes
     }
 
     /// <summary>
-    /// A new widget joins the first existing preset (adding a deck is like
-    /// plugging in a second Stream Deck, not starting a fresh layout); only a
-    /// host with no presets at all gets a fresh empty one at the widget's grid.
+    /// A new widget joins the seeded Essentials preset, else the first preset that has keys (adding a
+    /// deck is like plugging in a second Stream Deck, not starting a fresh
+    /// layout); a host with none gets a fresh preset at the widget's grid
+    /// holding the Essentials keys.
     /// </summary>
     private static DeckInstance CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop, System.Func<string, bool> isListed)
     {
@@ -648,18 +649,24 @@ public static class DeckRoutes
                 created = already;
                 return;
             }
-            // A panel caller joins only what PUT would let it activate.
-            var presetId = s.StreamDeck.Presets
-                .FirstOrDefault(p => isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any())?.Id;
+            // A panel caller joins only what PUT would let it activate. Essentials
+            // first, then the first preset with keys (an empty one would show none).
+            bool Joinable(DeckPreset p) => isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck, isListed).Any();
+            var essentials = DeckDefaultPresets.FindEssentials(s.StreamDeck.Presets);
+            var presetId = essentials is not null && Joinable(essentials)
+                ? essentials.Id
+                : s.StreamDeck.Presets.FirstOrDefault(p => DeckConfigNavigation.HasContent(p.Deck) && Joinable(p))?.Id;
             if (presetId is null)
             {
+                var (presetCols, presetRows, deck) = DeckDefaultPresets.EssentialsFor(
+                    System.Math.Clamp(cols ?? 2, 1, 8), System.Math.Clamp(rows ?? 2, 1, 8));
                 var preset = new DeckPreset
                 {
                     Id = DeckModesMigration.NewPresetId(),
                     Name = DeckModesMigration.UniqueName(s.StreamDeck.Presets, "Deck", "widget"),
-                    Cols = System.Math.Clamp(cols ?? 2, 1, 8),
-                    Rows = System.Math.Clamp(rows ?? 2, 1, 8),
-                    Deck = DeckConfigNavigation.EmptyConfig(),
+                    Cols = presetCols,
+                    Rows = presetRows,
+                    Deck = deck,
                 };
                 s.StreamDeck.Presets.Add(preset);
                 presetId = preset.Id;
@@ -673,9 +680,9 @@ public static class DeckRoutes
     /// <summary>
     /// A physical deck's Instances row is normally upserted by
     /// StreamDeckConnectionWorker.OnSurfaceConnected; this covers a Decks row
-    /// that predates that upsert (or a migration gap) using the same join-
-    /// first-preset-or-seed-fresh rule as <see cref="CreateLazyWidgetInstance"/>,
-    /// sized to the deck's own model grid. Null if the Decks row disappeared
+    /// that predates that upsert (or a migration gap) by joining the
+    /// first preset (a new deck mirrors the existing layout) or seeding a fresh
+    /// empty one, sized to the deck's own model grid. Null if the Decks row disappeared
     /// between the caller's check and this update.
     /// </summary>
     private static DeckInstance? CreateLazyPhysicalInstance(IConfigStore store, string serial)

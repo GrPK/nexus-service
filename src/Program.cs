@@ -523,6 +523,13 @@ if (!testHost)
             .Load().StartupDelaySeconds);
 }
 
+// One-time default Stream Deck presets; a test host starts from an empty store.
+if (!testHost)
+{
+    Nexus.Service.Deck.DeckDefaultPresets.SeedOnce(
+        app.Services.GetRequiredService<Nexus.Service.Persistence.IConfigStore>());
+}
+
 if (!testHost)
 {
     _ = app.Services.GetRequiredService<Nexus.Service.Deck.ListedAppIds>();

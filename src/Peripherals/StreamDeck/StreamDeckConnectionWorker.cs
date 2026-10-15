@@ -921,8 +921,8 @@ public sealed partial class StreamDeckConnectionWorker : BackgroundService, IDec
 
             // A deck seen for the first time since schema v18 has no
             // instance row yet (the migration only hoists pre-v18 decks);
-            // join the first host-wide preset like CreateLazyWidgetInstance
-            // does, or seed a fresh one at this deck's own grid when none exist.
+            // join the first host-wide preset, or seed a fresh one at this
+            // deck's own grid when none exist.
             var instanceId = DeckInstanceResolver.PhysicalInstanceId(surface.Serial);
             if (!s.StreamDeck.Instances.ContainsKey(instanceId))
             {

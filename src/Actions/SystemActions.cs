@@ -266,6 +266,14 @@ public sealed class SystemActions
         }
     }
 
+    private readonly object _macCaptureLock = new();
+    private Process? _macCapture;
+
+    // The bare scheme opens the native snip overlay like Win+Shift+S / Win+Shift+R;
+    // the //capture/ form opens the Snipping Tool app window instead.
+    internal const string ScreenShotUri = "ms-screenclip:";
+    internal const string ScreenRecordUri = "ms-screenclip:?type=recording";
+
     /// <summary>
     /// Opens the OS capture UI for the deck Screen Shot / Screen Record keys.
     /// Windows hands the Snipping Tool capture or record overlay URI to the
@@ -277,7 +285,7 @@ public sealed class SystemActions
     {
         if (OperatingSystem.IsWindows())
         {
-            return await LaunchUrlAsync(record ? "ms-screenclip://capture/video" : "ms-screenclip://capture/image").ConfigureAwait(false);
+            return await LaunchUrlAsync(record ? ScreenRecordUri : ScreenShotUri).ConfigureAwait(false);
         }
         try
         {
@@ -289,10 +297,19 @@ public sealed class SystemActions
                         ? ApiResponse.Ok("opened")
                         : ApiResponse.Fail("failed to open Screenshot");
                 }
-                var psi = new ProcessStartInfo("/usr/sbin/screencapture") { UseShellExecute = false };
-                psi.ArgumentList.Add("-i");
-                psi.ArgumentList.Add(MacScreenshotPath());
-                Process.Start(psi);
+                lock (_macCaptureLock)
+                {
+                    // One interactive capture at a time: repeated presses would stack overlays.
+                    if (_macCapture is { HasExited: false })
+                    {
+                        return ApiResponse.Ok("already open");
+                    }
+                    var psi = new ProcessStartInfo("/usr/sbin/screencapture") { UseShellExecute = false };
+                    psi.ArgumentList.Add("-i");
+                    psi.ArgumentList.Add(MacScreenshotPath());
+                    _macCapture?.Dispose();
+                    _macCapture = Process.Start(psi);
+                }
                 return ApiResponse.Ok("opened");
             }
 #if LINUX

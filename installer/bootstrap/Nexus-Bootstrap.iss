@@ -34,7 +34,8 @@
   #error Channel must be "stable" or "beta"
 #endif
 ; Bump on any change to this script; it is the only version this file has.
-#define StubVersion "1.0.1"
+#define StubVersion "1.0.2"
+#define AntivirusDocsUrl "https://hellonexus.com/docs/troubleshooting/antivirus"
 #define PayloadName "Nexus-Setup.exe"
 ; AppId of ..\Nexus.iss: its uninstall key holds the install location.
 #define PayloadAppId "{8F2E3A4D-9C5B-4E7A-B1F8-3C2A5E9D0F12}"
@@ -117,19 +118,29 @@ begin
     + 'Restoring the file this window downloaded will not help, because each run downloads a new copy.';
 end;
 
-// Interactive runs show the message and may start the offline installer
-// download. Silent runs (any /SILENT or /VERYSILENT) only log it; the caller
-// still fails.
+// Learn more asks again, so the user can still download. Silent runs log only
+// and show no box (also under /SUPPRESSMSGBOXES); the caller still fails.
 procedure ShowAntivirusBlock();
 var
   ErrCode: Integer;
+  Btns: TArrayOfString;
+  Choice: Integer;
 begin
   Log(AntivirusMessage());
   if WizardSilent then
     Exit;
-  if MsgBox(AntivirusMessage() + #13#10#13#10 + 'Download the offline installer now?',
-    mbError, MB_YESNO) = IDYES then
-    ShellExec('open', '{#PayloadUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
+  SetArrayLength(Btns, 3);
+  Btns[0] := 'Download the offline installer';
+  Btns[1] := 'Learn more';
+  Btns[2] := 'Close';
+  repeat
+    Choice := SuppressibleTaskDialogMsgBox('Nexus could not finish installing',
+      AntivirusMessage(), mbError, MB_YESNOCANCEL, Btns, 0, IDCANCEL);
+    if Choice = IDYES then
+      ShellExec('open', '{#PayloadUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode)
+    else if Choice = IDNO then
+      ShellExec('open', '{#AntivirusDocsUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
+  until Choice <> IDNO;
 end;
 
 // The literal text of an Inno message before its first placeholder.
