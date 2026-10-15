@@ -82,8 +82,8 @@ public sealed class IbpPeripheralModel
 
     /// <summary>
     /// Ceiling on lighting frames per second sent to this model; 0 leaves the
-    /// writer's own tick rate in charge. The MEK 4 is capped to test whether
-    /// full-rate feature reports starve its key reports.
+    /// writer's own tick rate in charge. The MEK 4 drops keystrokes while
+    /// Nexus Control streams faster than this.
     /// </summary>
     public int MaxFrameRateHz => Wire == IbpWireFormat.Mek4 ? IbpPeripheralProtocol.Mek4MaxFrameRateHz : 0;
 
@@ -133,7 +133,7 @@ public static class IbpPeripheralProtocol
     public const int Mk9ColorOffset = 8;
 
     public const int Mek4ReportLength = 382;
-    public const int Mek4MaxFrameRateHz = 20;
+    public const int Mek4MaxFrameRateHz = 15;
     public const int Mek4WireSlots = 126;
     public const int Mek4ColorOffset = 4;
 

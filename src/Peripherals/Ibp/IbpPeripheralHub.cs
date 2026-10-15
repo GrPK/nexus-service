@@ -175,9 +175,7 @@ public sealed class IbpPeripheralHub : IDisposable
                 changed = true;
                 ServiceLog.Info($"[ibp] connected {slot.Info.Model.Id} (serial={slot.Info.Serial}, path={slot.Info.Path})");
                 var cap = slot.Info.Model.MaxFrameRateHz;
-                ServiceLog.Info(cap > 0
-                    ? $"[ibp] lighting rate cap on {slot.Info.Model.Id}: {cap} Hz"
-                    : $"[ibp] lighting rate cap on {slot.Info.Model.Id}: none (writer tick rate)");
+                if (cap > 0) ServiceLog.Info($"[ibp] lighting rate cap on {slot.Info.Model.Id}: {cap} Hz");
             }
             if (changed) RebuildSnapshotLocked();
         }
