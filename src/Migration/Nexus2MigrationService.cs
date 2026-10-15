@@ -449,6 +449,15 @@ public sealed class Nexus2MigrationService
                     }
                 });
             }
+            if (y70Record is not null)
+            {
+                // An upgraded Y70 starts without topmost and without evicting other windows from its monitor.
+                _store.Update(s =>
+                {
+                    s.Panel.AlwaysOnTop = false;
+                    s.Panel.ReserveMonitor = false;
+                });
+            }
             PanelTopics.BroadcastPrefs(_hub);
             PanelTopics.BroadcastLighting(_hub);
             PanelTopics.BroadcastCooling(_hub);
