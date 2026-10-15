@@ -51,6 +51,17 @@ internal static class GpuAdapterLuids
     private static long _cacheAtMs;
 #endif
 
+    /// <summary>Drop the cached enumeration so the next call re-reads DXGI (after a driver reset renumbers adapters).</summary>
+    public static void Invalidate()
+    {
+#if WINDOWS
+        lock (CacheLock)
+        {
+            _cache = null;
+        }
+#endif
+    }
+
     public static IReadOnlyList<Adapter> Enumerate()
     {
 #if WINDOWS

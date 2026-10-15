@@ -40,7 +40,7 @@ internal static class GpuRenderSelect
     private static TimeSpan ProbeWait =>
         string.Equals(Backend, "glfw", StringComparison.OrdinalIgnoreCase)
             ? TimeSpan.FromSeconds(45)
-            : TimeSpan.FromSeconds(15);
+            : UsesAngle ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(15);
 
     // A card slower than every budget still has to be remembered, or later boots
     // re-pay the probe for a card that works.
@@ -72,6 +72,13 @@ internal static class GpuRenderSelect
     /// <summary>The engine renders through ANGLE. The OS GpuPreference registry value does not steer ANGLE, so the card class is passed to the context as an adapter LUID instead.</summary>
     private static bool UsesAngle => GpuBackend.IsAngle(Backend);
 
+    private static int _lossRecreates;
+
+    // Written before the last-resort WGL attempt and cleared after it: a boot that finds it
+    // set knows that attempt killed the process and must not repeat it.
+    private const string WglFallbackGuard = "wgl-fallback";
+    private static bool _wglBanned;
+
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<GpuContext, object> LossHooked = new();
 
     /// <summary>Re-create the context through the normal selection when its device is lost. Safe to call more than once per context.</summary>
@@ -83,15 +90,22 @@ internal static class GpuRenderSelect
         }
         gpu.ContextLost += g =>
         {
-            ClearCrashGuardOnStop();
+            if (Interlocked.Increment(ref _lossRecreates) > GpuInitRetry.MaxContextLossRecreates)
+            {
+                GpuContext.Log("[gpu] context lost again; the re-create budget for this session is spent");
+                return;
+            }
             Reselect(g, "the GL context was lost", ref _reprobeTimer);
         };
     }
 
     /// <summary>
-    /// No hardware adapter produced a context: render on ANGLE's WARP software
-    /// rasterizer so shader lighting is not dark. False when the backend is not
-    /// ANGLE, the context cannot start a new attempt, or WARP failed too.
+    /// ANGLE produced no context on any adapter. Last resorts, in order: the
+    /// system OpenGL driver (WGL) once per session, then ANGLE's WARP software
+    /// rasterizer so shader lighting is not dark. Hardware is retried by the
+    /// normal reprobe paths while WARP runs (see <see cref="UpgradeFromWarp"/>).
+    /// False when the backend is not ANGLE, the context cannot start a new
+    /// attempt, or every fallback failed.
     /// </summary>
     public static bool TryWarpFallback(GpuContext gpu, string reason)
     {
@@ -103,11 +117,20 @@ internal static class GpuRenderSelect
         {
             return false;
         }
+        if (!_wglBanned && TryWglFallback(gpu, reason))
+        {
+            return true;
+        }
+        if (gpu.IsDisposed || gpu.InitAbandoned || gpu.Initializing || (gpu.Failed && !gpu.RearmAfterLatch()))
+        {
+            return false;
+        }
         GpuContext.Log($"[gpu] select: {reason}; falling back to ANGLE WARP (CPU rendering)");
         try
         {
             lock (gpu.Lock)
             {
+                gpu.BackendOverride = null;
                 gpu.UseWarp = true;
                 gpu.EnsureInitializedLocked();
             }
@@ -116,7 +139,7 @@ internal static class GpuRenderSelect
         catch (Exception ex) { GpuContext.Log($"[gpu] WARP fallback threw: {ex.Message}"); }
         if (gpu.Available)
         {
-            GpuContext.Log($"[gpu] select: shader lighting running on WARP ('{gpu.Renderer}'); restart to retry hardware");
+            GpuContext.Log($"[gpu] select: shader lighting running on WARP ('{gpu.Renderer}'); hardware is re-probed on the usual schedule");
             return true;
         }
         GpuContext.Log("[gpu] select: WARP did not produce a context either");
@@ -133,6 +156,12 @@ internal static class GpuRenderSelect
         }
 
         var crashed = ConsumeCrashGuard();
+        if (crashed == WglFallbackGuard)
+        {
+            // Not a verdict on a card: the last-resort OpenGL attempt died, so it is skipped from here on.
+            _wglBanned = true;
+            crashed = null;
+        }
         var adapters = UsableAdapters();
         var usable = GpuTestSeam.AdapterCount ?? adapters.Count;
         var env = CurrentEnvironment(adapters);
@@ -174,6 +203,59 @@ internal static class GpuRenderSelect
                 ProbeThenWarm(gpu, sw, usable, plan.FreshStreak ? GpuSelectState.Fresh : state);
                 return;
         }
+    }
+
+    // The system OpenGL driver on the integrated class, tried once after ANGLE found nothing.
+    // A crash during it leaves the guard, so the next boot skips it.
+    private static bool TryWglFallback(GpuContext gpu, string reason)
+    {
+        _wglBanned = true;
+        GpuContext.Log($"[gpu] select: {reason}; trying the system OpenGL driver (WGL) before software rendering");
+        try
+        {
+            lock (gpu.Lock)
+            {
+                gpu.UseWarp = false;
+                gpu.BackendOverride = GpuBackend.Wgl;
+                SetPref(ClassIntegrated);
+                WriteCrashGuard(WglFallbackGuard);
+                gpu.EnsureInitializedLocked();
+            }
+            gpu.WaitForInit(gpu.InitTimeout);
+        }
+        catch (Exception ex) { GpuContext.Log($"[gpu] WGL fallback threw: {ex.Message}"); }
+        ClearCrashGuard();
+        if (gpu.Available)
+        {
+            GpuContext.Log($"[gpu] select: WGL fallback landed on '{gpu.Renderer}'");
+            return true;
+        }
+        GpuContext.Log("[gpu] select: WGL fallback produced no context");
+        gpu.BackendOverride = null;
+        return false;
+    }
+
+    // While WARP renders, a reprobe must find out whether hardware works now without
+    // disturbing the running context: the probe child answers that. Only a card that
+    // passes retires WARP and re-enters the normal selection.
+    private static bool UpgradeFromWarp(GpuContext gpu)
+    {
+        var adapters = UsableAdapters();
+        var ok = ProbeCard(ClassIntegrated) != GpuProbeVerdict.Failed
+            || (adapters.Count > 1 && ProbeCard(ClassDiscrete) != GpuProbeVerdict.Failed);
+        if (!ok)
+        {
+            GpuContext.Log("[gpu] select: hardware still fails its probe; staying on WARP");
+            ScheduleReprobe(gpu, TimeSpan.FromMinutes(30));
+            return false;
+        }
+        if (!gpu.RetireWarp())
+        {
+            GpuContext.Log("[gpu] select: WARP context did not stop; staying on it");
+            return false;
+        }
+        GpuContext.Log("[gpu] select: hardware passes its probe; leaving WARP");
+        return true;
     }
 
     private static System.Collections.Generic.IReadOnlyList<Nexus.Service.Sensors.GpuAdapterLuids.Adapter> UsableAdapters() =>
@@ -310,6 +392,7 @@ internal static class GpuRenderSelect
                 {
                     // ANGLE ignores the registry preference; the class picks the adapter LUID.
                     gpu.UseWarp = false;
+                    gpu.BackendOverride = null;
                     gpu.AdapterClass = cls;
                 }
                 else
@@ -461,7 +544,7 @@ internal static class GpuRenderSelect
 
     private static void RunAdapterWatch(GpuContext gpu, TimeSpan wait, GpuSelectState? latched)
     {
-        if (gpu.IsDisposed || gpu.Available || gpu.InitAbandoned)
+        if (gpu.IsDisposed || (gpu.Available && !gpu.IsWarp) || gpu.InitAbandoned)
         {
             return;
         }
@@ -496,7 +579,7 @@ internal static class GpuRenderSelect
     {
         // Initializing: an attempt is already running and will answer on its
         // own; rearming under it is refused anyway (GpuContext.RearmAfterLatch).
-        if (gpu.Available || gpu.InitAbandoned || gpu.Initializing)
+        if ((gpu.Available && !gpu.IsWarp) || gpu.InitAbandoned || gpu.Initializing)
         {
             return;
         }
@@ -517,6 +600,10 @@ internal static class GpuRenderSelect
         }
         try
         {
+            if (gpu.Available && gpu.IsWarp && !UpgradeFromWarp(gpu))
+            {
+                return;
+            }
             if (!gpu.RearmAfterLatch())
             {
                 GpuContext.Log($"[gpu] select: {why}, but the context cannot be rearmed in this process");
@@ -556,7 +643,7 @@ internal static class GpuRenderSelect
 
     private static void RunReprobe(GpuContext gpu)
     {
-        if (gpu.IsDisposed || gpu.Available || gpu.InitAbandoned)
+        if (gpu.IsDisposed || (gpu.Available && !gpu.IsWarp) || gpu.InitAbandoned)
         {
             return;
         }
