@@ -910,9 +910,38 @@ public sealed class Slv3Hub : IDisposable
             && Slv3Protocol.MacEquals(near.Master, record.MasterMac) && _nowMs() - near.AtMs < NeighborMarkMs);
     }
 
+    // A record no real neighbor dongle writes: an out-of-range pipe, a master whose differing bytes
+    // are one repeated fill byte, or a near bit-flip copy of ours.
+    private bool GarbledRecordLocked(Slv3DeviceRecord record)
+    {
+        if (!PlausiblePipe(record.Channel, record.RxType))
+        {
+            return true;
+        }
+        var bits = 0;
+        int? fill = null;
+        var fillOnly = true;
+        for (var i = 0; i < Slv3Protocol.MacLength && i < record.MasterMac.Length && i < _masterMac.Length; i++)
+        {
+            var diff = record.MasterMac[i] ^ _masterMac[i];
+            bits += System.Numerics.BitOperations.PopCount((uint)diff);
+            if (diff != 0)
+            {
+                fill ??= record.MasterMac[i];
+                fillOnly &= record.MasterMac[i] == fill;
+            }
+        }
+        return bits <= 2 || fillOnly;
+    }
+
     // A chain that keeps returning to the master it was retaken from is held by a live master.
     private void NotePullBackLocked(string key, Slv3DeviceRecord record)
     {
+        if (GarbledRecordLocked(record))
+        {
+            _pullSeen.Remove(key);
+            return;
+        }
         if (!_retaken.TryGetValue(key, out var retaken) || !Slv3Protocol.MacEquals(retaken.Master, record.MasterMac))
         {
             _pullSeen.Remove(key);
@@ -998,7 +1027,7 @@ public sealed class Slv3Hub : IDisposable
                 NotePullBackLocked(key, record);
             }
             if (!zeroMaster && !ours && _retaken.TryGetValue(key, out var live)
-                && Slv3Protocol.MacEquals(live.Master, record.MasterMac))
+                && Slv3Protocol.MacEquals(live.Master, record.MasterMac) && !GarbledRecordLocked(record))
             {
                 continue;
             }

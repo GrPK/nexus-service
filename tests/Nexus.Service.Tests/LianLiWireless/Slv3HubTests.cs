@@ -1149,6 +1149,30 @@ public class Slv3HubTests
         Assert.Equal(0, CountBindFrames(tx));
     }
 
+    [Theory]
+    [InlineData("AABBCCE5E5E5", 229, 229)]
+    [InlineData("AABBCCFFFFFF", 3, 8)]
+    [InlineData("AABBCCDDEEFE", 3, 8)]
+    [InlineData("0102030405FF", 229, 229)]
+    public void Garbled_pull_backs_never_stand_down(string master, int rx, int channel)
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 2 });
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = Convert.FromHexString(master), RxType = (byte)rx, Channel = (byte)channel };
+        net.Fans.Add(fan);
+        Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
+        for (var round = 0; round < 5; round++)
+        {
+            Assert.True(hub.State.Fans[0].BoundToUs, $"round {round}");
+            tx.SentFrames.Clear();
+            fan.MasterMac = Convert.FromHexString(master);
+            fan.RxType = (byte)rx;
+            fan.Channel = (byte)channel;
+            Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
+            Assert.True(CountBindFrames(tx) > 0, $"round {round}");
+        }
+    }
+
     [Fact]
     public void A_stood_down_foreign_master_is_retaken_again_after_the_mark_lapses()
     {
@@ -1188,7 +1212,7 @@ public class Slv3HubTests
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, _, clock) = CreateOwnershipHub(new() { [mac] = 1 });
-        var near = Corrupted(net.MasterMac, 4, 0x80);
+        var near = OtherMasterMac;
         var fan = new SimulatedFan { Mac = FanMac, MasterMac = near, RxType = 3 };
         net.Fans.Add(fan);
         Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
@@ -1223,7 +1247,7 @@ public class Slv3HubTests
     {
         var other = Convert.FromHexString("A1A2A3A4A5A6");
         var (hub, net, tx, _, clock) = CreateOwnershipHub(new() { [Convert.ToHexString(FanMac)] = 1, [Convert.ToHexString(other)] = 2 });
-        var near = Corrupted(net.MasterMac, 4, 0x80);
+        var near = OtherMasterMac;
         var first = new SimulatedFan { Mac = FanMac, MasterMac = near, RxType = 3 };
         var second = new SimulatedFan { Mac = other, MasterMac = near, RxType = 4 };
         net.Fans.Add(first);
