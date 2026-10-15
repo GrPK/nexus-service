@@ -1182,8 +1182,9 @@ public class Slv3HubTests
         var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 1 });
         var neighbor = Convert.FromHexString(master);
         var fan = new SimulatedFan { Mac = FanMac, MasterMac = neighbor, RxType = 3 };
-        net.Fans.Add(fan);
         net.Fans.Add(new SimulatedFan { Mac = Convert.FromHexString("A1A2A3A4A5A6"), MasterMac = neighbor, RxType = 3 });
+        Ticks(hub, Established);
+        net.Fans.Add(fan);
         Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
         Assert.True(hub.State.Fans[0].BoundToUs);
         tx.SentFrames.Clear();
@@ -1191,6 +1192,20 @@ public class Slv3HubTests
         PullBack(hub, fan, neighbor, Slv3Hub.RebindConfirmPolls + 5);
 
         Assert.Equal(0, BindFramesFor(tx, FanMac));
+    }
+
+    [Fact]
+    public void A_young_chain_with_the_same_near_copy_garble_does_not_corroborate_a_neighbor()
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 1 });
+        var garble = Convert.FromHexString("AABBCCDDEEFE");
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = garble, RxType = 3, IgnoresBind = true });
+        net.Fans.Add(new SimulatedFan { Mac = Convert.FromHexString("A1A2A3A4A5A6"), MasterMac = garble, RxType = 3 });
+
+        Ticks(hub, Slv3Hub.RebindConfirmPolls + 1);
+
+        Assert.True(BindFramesFor(tx, FanMac) > 0);
     }
 
     [Fact]

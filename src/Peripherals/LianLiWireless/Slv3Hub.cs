@@ -914,7 +914,7 @@ public sealed class Slv3Hub : IDisposable
 
     // A record a real neighbor dongle does not write: an out-of-range pipe, or a master whose differing
     // bytes are one repeated fill byte. A near copy of ours (one byte or two bits off) is garbled unless
-    // an unowned chain reports the same master, which makes it a live neighbor's.
+    // an established unowned chain reports the same master, which makes it a live neighbor's.
     private bool GarbledRecordLocked(Slv3DeviceRecord record)
     {
         if (!PlausiblePipe(record.Channel, record.RxType))
@@ -952,7 +952,9 @@ public sealed class Slv3Hub : IDisposable
         {
             if (!Slv3Protocol.MacEquals(other.Mac, record.Mac)
                 && Slv3Protocol.MacEquals(other.MasterMac, record.MasterMac)
-                && !_owned.ContainsKey(Convert.ToHexString(other.Mac)))
+                && !Slv3Protocol.MacEquals(other.MasterMac, _masterMac)
+                && !_owned.ContainsKey(Convert.ToHexString(other.Mac))
+                && EstablishedLocked(Convert.ToHexString(other.Mac)))
             {
                 return true;
             }
