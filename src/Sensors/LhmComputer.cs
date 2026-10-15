@@ -49,6 +49,7 @@ public sealed class LhmComputer : IDisposable
     private readonly DeviceControlGate _gate;
     private readonly FeatureGates _gates;
     private readonly Nexus.Service.Sockets.MultiplexHub? _hub;
+    private readonly SmartActiveFlip _smartActive;
     private readonly HashSet<string> _smartSeeded = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool?> _rotational = new(StringComparer.Ordinal);
 
@@ -67,6 +68,7 @@ public sealed class LhmComputer : IDisposable
     public LhmComputer(IConfigStore config, DeviceControlGate gate, FeatureGates? gates = null, Nexus.Service.Sockets.MultiplexHub? hub = null)
     {
         _hub = hub;
+        _smartActive = new SmartActiveFlip(() => { if (_hub is not null) Nexus.Service.Sockets.PanelTopics.BroadcastSmartPoll(_hub); });
         _gates = gates ?? FeatureGates.AllEnabled;
         _config = config;
         _gate = gate;
@@ -226,6 +228,7 @@ public sealed class LhmComputer : IDisposable
         var settings = _config.Load();
         var monitoring = settings.Monitoring;
         var smartDemand = SmartPollDemand.Capture(_gates, settings, SmartLiveConsumers.Any(_hub));
+        _smartActive.Observe(smartDemand.IsActive(StorageIdentifiers()));
 
         lock (_updateLock)
         {
@@ -277,6 +280,17 @@ public sealed class LhmComputer : IDisposable
             _updateErrorLoggedAt[key] = now;
             ServiceLog.Warn($"[lhm] update failed for {hw.Name}: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    // Drives the walk enumerates; read outside _updateLock, like the rest of the demand inputs.
+    private List<string> StorageIdentifiers()
+    {
+        var ids = new List<string>();
+        foreach (var hw in _computer.Hardware)
+        {
+            if (hw.HardwareType == HardwareType.Storage) ids.Add(hw.Identifier.ToString());
+        }
+        return ids;
     }
 
     private uint SmartCyclesFor(IHardware hw, MonitoringSettings monitoring, SmartPollDemand demand, SensorRefresh refresh)

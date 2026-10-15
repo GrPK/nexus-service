@@ -6,6 +6,7 @@ using Xunit;
 
 namespace Nexus.Service.Tests.Sensors;
 
+[Collection("SmartLiveConsumers")]
 public class SmartPollDemandTests
 {
     private static (InMemoryConfigStore Store, FeatureGates Gates) Build()
@@ -146,5 +147,33 @@ public class SmartPollDemandTests
 
         Assert.True(SmartLiveConsumers.Any(null));
         SmartLiveConsumers.Forget();
+    }
+
+    [Fact]
+    public void TheFlipCallbackFiresOncePerChange_AndNotOnTheBaselineOrARepeat()
+    {
+        var flips = 0;
+        var flip = new SmartActiveFlip(() => flips++);
+
+        flip.Observe(false);
+        flip.Observe(false);
+        Assert.Equal(0, flips);
+
+        flip.Observe(true);
+        flip.Observe(true);
+        Assert.Equal(1, flips);
+
+        flip.Observe(false);
+        Assert.Equal(2, flips);
+    }
+
+    [Fact]
+    public void TheSmartPollTopicIsNotALiveConsumerTopic()
+    {
+        var hub = new Nexus.Service.Sockets.MultiplexHub();
+        SmartLiveConsumers.Forget();
+
+        Assert.False(SmartLiveConsumers.Any(hub));
+        Assert.Equal("smart-poll", Nexus.Service.Sockets.PanelTopics.SmartPoll);
     }
 }

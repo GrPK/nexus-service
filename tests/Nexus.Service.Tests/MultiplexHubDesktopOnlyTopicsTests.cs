@@ -12,6 +12,7 @@ namespace Nexus.Service.Tests;
 /// to approve a NEW device. A phone-session socket (LAN, relay, or direct) must
 /// never receive it; a desktop socket must.
 /// </summary>
+[Collection("SmartLiveConsumers")]
 public sealed class MultiplexHubDesktopOnlyTopicsTests
 {
     [Fact]

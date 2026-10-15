@@ -13,6 +13,8 @@ namespace Nexus.Service.Sockets;
 public static class PanelTopics
 {
     public const string Prefs = "prefs";
+    /// <summary>Revision ping when GET /monitoring/smart-poll's <c>active</c> flips; subscribers refetch it.</summary>
+    public const string SmartPoll = "smart-poll";
     public const string Lighting = "lighting";
     public const string Cooling = "cooling";
     public const string Volume = "volume";
@@ -112,6 +114,15 @@ public static class PanelTopics
         var frame = new Models.Update.UpdateStatusChangedFrame { Revision = Now() };
         var env = WsEnvelope.Build(Update, frame, AppJsonContext.Default.UpdateStatusChangedFrame);
         _ = hub.BroadcastTopicAsync(Update, env);
+    }
+
+    public static void BroadcastSmartPoll(MultiplexHub hub)
+    {
+        if (!hub.TopicHasSubscribers(SmartPoll))
+            return;
+        var frame = new PrefsChangedFrame { Revision = Now() };
+        var env = WsEnvelope.Build(SmartPoll, frame, AppJsonContext.Default.PrefsChangedFrame);
+        _ = hub.BroadcastTopicAsync(SmartPoll, env);
     }
 
     public static void BroadcastPrefs(MultiplexHub hub)

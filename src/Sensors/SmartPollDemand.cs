@@ -74,9 +74,13 @@ internal sealed class SmartPollDemand
 internal static class SmartLiveConsumers
 {
     // The composite monitoring frame and the storage frame are the topics whose broadcast reads SMART sensors.
+    // The smart-poll ping topic is deliberately absent: the Settings page's own subscription must not keep the reads alive.
     private static readonly string[] Topics = { "monitoring", "storage" };
 
-    // Poll-style readers (Deck tiles, overlays, MCP) leave no subscription, so a read keeps the demand alive for a while.
+    // Poll-style readers leave no subscription, so a read keeps the demand alive for a while. The window
+    // must outlast the slowest of them: the Deck monitoring tiles tick once a second (StreamDeckConnectionWorker.TickMs),
+    // the dials every quarter second (FeedbackMs) and the Tryx heartbeat once a second. MCP and the diagnostics
+    // refresh are one-shot calls whose own walk follows the note.
     private const long ReaderWindowMs = 15_000;
     private static long _lastReadMs = long.MinValue / 2;
 
@@ -89,5 +93,24 @@ internal static class SmartLiveConsumers
     {
         if (Environment.TickCount64 - Volatile.Read(ref _lastReadMs) < ReaderWindowMs) return true;
         return hub is not null && Topics.Any(hub.TopicHasSubscribers);
+    }
+}
+
+/// <summary>Remembers the last computed <c>active</c> and raises a callback only when it flips; the first observation sets the baseline.</summary>
+internal sealed class SmartActiveFlip
+{
+    private readonly Action _onFlip;
+    private int _state = -1;
+
+    public SmartActiveFlip(Action onFlip) => _onFlip = onFlip;
+
+    public void Observe(bool active)
+    {
+        var next = active ? 1 : 0;
+        var previous = Interlocked.Exchange(ref _state, next);
+        if (previous != -1 && previous != next)
+        {
+            _onFlip();
+        }
     }
 }

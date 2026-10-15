@@ -73,6 +73,8 @@ public static class DiagnosticsHealthRoutes
         {
             if (IsRefresh(refresh))
             {
+                // Before the refresh, so the forced walk reads drives that nothing else needs.
+                Nexus.Service.Sensors.SmartLiveConsumers.NoteRead();
                 smart.ForceRefresh();
             }
             return smart.Snapshot();
