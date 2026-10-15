@@ -7,11 +7,18 @@ namespace Nexus.Service.Lighting.Bench;
 /// little dedicated memory, the same cut the sensor stack uses; dedicated is the one with the most.</summary>
 internal static class BenchAdapterPick
 {
+    private const uint MicrosoftVendorId = 0x1414;
+
     public static GpuAdapterLuids.Adapter? Pick(IReadOnlyList<GpuAdapterLuids.Adapter> adapters, string kind)
     {
         GpuAdapterLuids.Adapter? best = null;
         foreach (var a in adapters)
         {
+            // Basic Render Driver and indirect display adapters have no GL ICD.
+            if (a.VendorId == MicrosoftVendorId)
+            {
+                continue;
+            }
             var dedicated = a.DedicatedVramMb >= GpuAdapterLuids.DedicatedVramMinMb;
             if (kind == "integrated" && !dedicated)
             {

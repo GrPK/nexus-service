@@ -56,7 +56,7 @@ internal static partial class LightingBench
                 Host = Environment.MachineName,
                 Cores = Environment.ProcessorCount,
                 User = Environment.UserName,
-                SessionId = Environment.ProcessId == 0 ? 0 : CurrentSessionId(),
+                SessionId = CurrentSessionId(),
             },
         };
         var adapters = GpuAdapterLuids.Enumerate();
@@ -115,6 +115,7 @@ internal static partial class LightingBench
     {
         var combo = new BenchComboResult { Backend = backend, Adapter = adapter };
         string? luid = null;
+        string? adapterName = null;
         int? wglPref = null;
         if (adapter == "warp")
         {
@@ -135,6 +136,7 @@ internal static partial class LightingBench
                 return combo;
             }
             luid = pick.Value.Luid;
+            adapterName = pick.Value.Description;
             combo.AdapterLuid = luid;
             wglPref = adapter == "integrated" ? 1 : 2;
         }
@@ -150,6 +152,11 @@ internal static partial class LightingBench
             childArgs.Add("--luid");
             childArgs.Add(luid);
         }
+        if (backend == "angle" && adapterName is not null)
+        {
+            childArgs.Add("--adapter-name");
+            childArgs.Add(adapterName);
+        }
         if (o.Effects is not null)
         {
             childArgs.Add("--effects");
@@ -160,12 +167,25 @@ internal static partial class LightingBench
         var effectCount = o.Effects?.Length ?? ShaderLibrary.AllEffectKeys.Count;
         var budget = TimeSpan.FromSeconds(120 + effectCount * (o.Seconds + 12));
 
+        if (backend == "wgl" && s_restoreFailed)
+        {
+            combo.Status = "failed";
+            combo.Detail = "an earlier GPU preference restore failed; wgl combos are stopped until it is undone (see lighting-bench-restore.json)";
+            return combo;
+        }
+
         PrefSnapshot? snapshot = null;
         try
         {
             if (backend == "wgl" && wglPref is int pref)
             {
-                snapshot = SetPreference(exe, pref, logs);
+                snapshot = SetPreference(exe, pref, logs, out var refusal);
+                if (snapshot is null)
+                {
+                    combo.Status = "failed";
+                    combo.Detail = refusal;
+                    return combo;
+                }
             }
             return Spawn(exe, childArgs, childOut, budget, combo);
         }
@@ -222,7 +242,15 @@ internal static partial class LightingBench
         try
         {
             using var p = Process.Start(psi) ?? throw new InvalidOperationException("child did not start");
-            Nexus.Service.Lifecycle.ChildProcessJob.Assign(p);
+            try
+            {
+                Nexus.Service.Lifecycle.ChildProcessJob.Assign(p);
+            }
+            catch
+            {
+                p.Kill(entireProcessTree: true);
+                throw;
+            }
             p.OutputDataReceived += OnLine;
             p.ErrorDataReceived += OnLine;
             p.BeginOutputReadLine();
@@ -231,8 +259,9 @@ internal static partial class LightingBench
             {
                 timedOut = true;
                 p.Kill(entireProcessTree: true);
-                p.WaitForExit();
             }
+            // The timed wait returns before the redirected streams are drained.
+            p.WaitForExit();
             exitCode = p.ExitCode;
         }
         catch (Exception ex)
@@ -283,12 +312,37 @@ internal static partial class LightingBench
         public string ValueName = "";
         public bool HadValue;
         public string? Previous;
+        public string Written = "";
     }
+
+    private static readonly object s_prefLock = new();
+    private static PrefSnapshot? s_active;
+    private static string s_activeLogs = "";
+    private static bool s_restoreFailed;
+    private static bool s_hooked;
 
     private static bool RunningAsSystem()
     {
         using var id = WindowsIdentity.GetCurrent();
         return id.IsSystem;
+    }
+
+    /// <summary>The system hive value belongs to the live service while it runs.</summary>
+    private static bool ServiceIsRunning()
+    {
+        try
+        {
+            if (System.Threading.Mutex.TryOpenExisting("Global\\NexusServiceMutex", out var m))
+            {
+                m.Dispose();
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+        return false;
     }
 
     private static RegistryKey? OpenPrefKey(bool system) =>
@@ -298,19 +352,58 @@ internal static partial class LightingBench
 
     private static string JournalPath(string logs) => Path.Combine(logs, "lighting-bench-restore.json");
 
-    /// <summary>Points WGL at the integrated (1) or high-performance (2) class for this exe. Null
-    /// when the value could not be written, in which case the run continues on the default.</summary>
-    private static PrefSnapshot? SetPreference(string exe, int pref, string logs)
+    private static void HookExitRestore()
     {
+        if (s_hooked)
+        {
+            return;
+        }
+        s_hooked = true;
+        Console.CancelKeyPress += (_, _) => RestoreActive();
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => RestoreActive();
+    }
+
+    private static void RestoreActive()
+    {
+        PrefSnapshot? snap;
+        lock (s_prefLock)
+        {
+            snap = s_active;
+        }
+        if (snap is not null)
+        {
+            RestorePreference(snap, s_activeLogs);
+        }
+    }
+
+    /// <summary>Points WGL at the integrated (1) or high-performance (2) class for this exe. Null,
+    /// with the reason, when it is not safe or not possible to write it.</summary>
+    private static PrefSnapshot? SetPreference(string exe, int pref, string logs, out string? refusal)
+    {
+        refusal = null;
         try
         {
+            if (File.Exists(JournalPath(logs)))
+            {
+                refusal = "an unrestored GPU preference journal exists; refusing to overwrite it";
+                s_restoreFailed = true;
+                return null;
+            }
             var system = RunningAsSystem();
+            if (system && ServiceIsRunning())
+            {
+                refusal = "the SYSTEM GPU preference is the running service's; stop the service or run as a user";
+                Say(refusal);
+                return null;
+            }
             using var key = OpenPrefKey(system);
             if (key is null)
             {
+                refusal = "could not open the GPU preference key";
                 return null;
             }
-            var snap = new PrefSnapshot { System = system, ValueName = exe };
+            var written = $"GpuPreference={pref};";
+            var snap = new PrefSnapshot { System = system, ValueName = exe, Written = written };
             snap.Previous = key.GetValue(exe) as string;
             snap.HadValue = snap.Previous is not null;
             var journal = new BenchRestoreJournal
@@ -319,36 +412,60 @@ internal static partial class LightingBench
                 ValueName = snap.ValueName,
                 HadValue = snap.HadValue,
                 Previous = snap.Previous,
+                Written = written,
             };
             File.WriteAllText(JournalPath(logs), JsonSerializer.Serialize(journal, BenchJsonContext.Default.BenchRestoreJournal));
-            key.SetValue(exe, $"GpuPreference={pref};", RegistryValueKind.String);
+            lock (s_prefLock)
+            {
+                s_active = snap;
+                s_activeLogs = logs;
+            }
+            HookExitRestore();
+            key.SetValue(exe, written, RegistryValueKind.String);
             return snap;
         }
         catch (Exception ex)
         {
-            Say($"could not set the GPU preference: {ex.Message}");
+            refusal = $"could not set the GPU preference: {ex.Message}";
+            Say(refusal);
             return null;
         }
     }
 
     private static void RestorePreference(PrefSnapshot snap, string logs)
     {
+        lock (s_prefLock)
+        {
+            if (!ReferenceEquals(s_active, snap))
+            {
+                return;
+            }
+            s_active = null;
+        }
         try
         {
-            ApplyRestore(snap.System, snap.ValueName, snap.HadValue, snap.Previous);
+            ApplyRestore(snap.System, snap.ValueName, snap.HadValue, snap.Previous, snap.Written);
             File.Delete(JournalPath(logs));
         }
         catch (Exception ex)
         {
+            s_restoreFailed = true;
             Say($"could not restore the GPU preference: {ex.Message}");
         }
     }
 
-    private static void ApplyRestore(bool system, string valueName, bool hadValue, string? previous)
+    /// <summary>Restores only while the registry still holds what the bench wrote, so a value changed
+    /// meanwhile by the user or the service is left alone.</summary>
+    private static void ApplyRestore(bool system, string valueName, bool hadValue, string? previous, string written)
     {
         using var key = OpenPrefKey(system);
         if (key is null)
         {
+            return;
+        }
+        if (!string.Equals(key.GetValue(valueName) as string, written, StringComparison.Ordinal))
+        {
+            Say("the GPU preference changed since the bench wrote it; leaving it as is");
             return;
         }
         if (hadValue && previous is not null)
@@ -374,7 +491,7 @@ internal static partial class LightingBench
             var j = JsonSerializer.Deserialize(File.ReadAllText(path), BenchJsonContext.Default.BenchRestoreJournal);
             if (j is not null)
             {
-                ApplyRestore(j.System, j.ValueName, j.HadValue, j.Previous);
+                ApplyRestore(j.System, j.ValueName, j.HadValue, j.Previous, j.Written);
                 Say("restored the GPU preference left by an interrupted bench run");
             }
             File.Delete(path);

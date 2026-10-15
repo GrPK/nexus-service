@@ -263,6 +263,26 @@ public class LightingBenchAdapterPickTests
     }
 
     [Fact]
+    public void Microsoft_adapters_are_never_picked()
+    {
+        var list = new List<GpuAdapterLuids.Adapter>
+        {
+            new("0:9", "Microsoft Basic Render Driver", 0x1414, 0),
+            new("0:8", "Indirect Display", 0x1414, 16384),
+        };
+        Assert.Null(BenchAdapterPick.Pick(list, "integrated"));
+        Assert.Null(BenchAdapterPick.Pick(list, "dedicated"));
+    }
+
+    [Fact]
+    public void Child_adapter_name_parses()
+    {
+        var args = new[] { "--lighting-bench-child", "c.json", "--backend", "angle", "--adapter-name", "Intel(R) UHD Graphics" };
+        Assert.Null(BenchOptions.TryParse(args, child: true, out var o));
+        Assert.Equal("Intel(R) UHD Graphics", o.AdapterDescription);
+    }
+
+    [Fact]
     public void Missing_class_yields_null()
     {
         var list = new List<GpuAdapterLuids.Adapter> { A("0:2", 8192) };

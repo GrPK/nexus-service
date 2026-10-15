@@ -14,8 +14,8 @@ namespace Nexus.Service.Lighting.Bench;
 
 internal static partial class LightingBench
 {
-    private const int TargetHz = 30;
-    private const int PeriodMs = 33;
+    private const int TargetHz = BenchCadence.Hz;
+    private const int PeriodMs = BenchCadence.PeriodMs;
     private const int LookAheadFrames = 30;
     private const int ReadbackProbeReps = 20;
     private static readonly long[] FingerprintTicksMs = { 1000, 5000 };
@@ -200,6 +200,14 @@ internal static partial class LightingBench
         {
             result.Status = "mismatch";
             result.Detail = $"requested {o.Backend} but the context reports '{result.GlRenderer}' / '{result.GlVersion}'";
+            return;
+        }
+
+        if (o.AdapterDescription is not null
+            && (result.GlRenderer ?? "").IndexOf(o.AdapterDescription, StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            result.Status = "mismatch";
+            result.Detail = $"requested adapter '{o.AdapterDescription}' but the context reports '{result.GlRenderer}'";
             return;
         }
 

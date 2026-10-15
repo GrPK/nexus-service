@@ -115,7 +115,7 @@ public sealed class BenchRun
     public string StartedUtc { get; set; } = "";
     public string ServiceVersion { get; set; } = "";
     public int Seconds { get; set; }
-    public int TargetHz { get; set; } = 30;
+    public int TargetHz { get; set; } = BenchCadence.Hz;
     public BenchMachine Machine { get; set; } = new();
     public List<BenchComboResult> Results { get; set; } = new();
     public List<BenchComparison> Comparisons { get; set; } = new();
@@ -128,6 +128,16 @@ public sealed class BenchRestoreJournal
     public string ValueName { get; set; } = "";
     public bool HadValue { get; set; }
     public string? Previous { get; set; }
+
+    /// <summary>What the bench wrote; the restore only applies while the registry still holds it.</summary>
+    public string Written { get; set; } = "";
+}
+
+/// <summary>The one frame cadence every bench stage uses.</summary>
+internal static class BenchCadence
+{
+    public const int Hz = 30;
+    public const int PeriodMs = 1000 / Hz;
 }
 
 [JsonSourceGenerationOptions(
@@ -155,6 +165,7 @@ internal sealed class BenchOptions
     public string Backend { get; set; } = "";
     public string Adapter { get; set; } = "auto";
     public string? Luid { get; set; }
+    public string? AdapterDescription { get; set; }
 
     /// <summary>Parses args whose first element is the mode flag. Returns an error text or null.</summary>
     public static string? TryParse(string[] args, bool child, out BenchOptions options)
@@ -189,6 +200,9 @@ internal sealed class BenchOptions
                     break;
                 case "--luid" when child:
                     options.Luid = val;
+                    break;
+                case "--adapter-name" when child:
+                    options.AdapterDescription = val;
                     break;
                 case "--effects":
                     options.Effects = Split(val);
