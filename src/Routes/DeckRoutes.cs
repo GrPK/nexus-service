@@ -19,7 +19,7 @@ namespace Nexus.Service.Routes;
 /// </summary>
 public static class DeckRoutes
 {
-    private const int PresetCap = 50;
+    internal const int PresetCap = 50;
 
     public static void MapDeckEndpoints(this WebApplication app)
     {
@@ -680,9 +680,9 @@ public static class DeckRoutes
     /// <summary>
     /// A physical deck's Instances row is normally upserted by
     /// StreamDeckConnectionWorker.OnSurfaceConnected; this covers a Decks row
-    /// that predates that upsert (or a migration gap) using the same join-
-    /// first-preset-or-seed-fresh rule as <see cref="CreateLazyWidgetInstance"/>,
-    /// sized to the deck's own model grid. Null if the Decks row disappeared
+    /// that predates that upsert (or a migration gap) by joining the
+    /// first preset (a new deck mirrors the existing layout) or seeding a fresh
+    /// empty one, sized to the deck's own model grid. Null if the Decks row disappeared
     /// between the caller's check and this update.
     /// </summary>
     private static DeckInstance? CreateLazyPhysicalInstance(IConfigStore store, string serial)
@@ -702,8 +702,7 @@ public static class DeckRoutes
             }
             var model = StreamDeckModels.ByProductId(persisted.ProductId);
             var (cols, rows) = model is null ? (5, 3) : (model.Columns, model.Rows);
-            var presetId = DeckDefaultPresets.FindEssentials(s.StreamDeck.Presets)?.Id
-                ?? (s.StreamDeck.Presets.Count > 0 ? s.StreamDeck.Presets[0].Id : null);
+            var presetId = s.StreamDeck.Presets.Count > 0 ? s.StreamDeck.Presets[0].Id : null;
             if (presetId is null)
             {
                 var preset = new DeckPreset

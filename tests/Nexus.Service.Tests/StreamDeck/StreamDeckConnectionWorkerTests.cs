@@ -210,7 +210,7 @@ public class StreamDeckConnectionWorkerTests
     }
 
     [Fact]
-    public void Tick_ConnectingANewDeck_JoinsSeededEssentialsEvenWhenItIsNotFirst()
+    public void Tick_ConnectingANewDeck_StillJoinsTheFirstPresetWhenEssentialsExists()
     {
         var f = NewFixtures(devicePresent: true);
         AddMiniDevice(f.Hid, "path-1", "SERIAL-1");
@@ -223,8 +223,7 @@ public class StreamDeckConnectionWorkerTests
 
         worker.Tick();
 
-        Assert.Equal(Nexus.Service.Deck.DeckDefaultPresets.EssentialsId,
-            f.Store.Load().StreamDeck.Instances[DeckInstanceResolver.PhysicalInstanceId("SERIAL-1")].ActivePresetId);
+        Assert.Equal("p1", f.Store.Load().StreamDeck.Instances[DeckInstanceResolver.PhysicalInstanceId("SERIAL-1")].ActivePresetId);
     }
 
     /// <summary>With no presets at all yet, connecting a new deck seeds a fresh empty one at the deck's own model grid instead of leaving the instance row missing.</summary>

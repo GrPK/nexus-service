@@ -273,6 +273,9 @@ public sealed class SystemActions
     /// opens the Screenshot toolbar for a recording; Linux tries the common
     /// capture tools for a still and has no recorder to open.
     /// </summary>
+    private readonly object _macCaptureLock = new();
+    private Process? _macCapture;
+
     public async Task<ApiResponse> OpenScreenCaptureAsync(bool record)
     {
         if (OperatingSystem.IsWindows())
@@ -289,10 +292,18 @@ public sealed class SystemActions
                         ? ApiResponse.Ok("opened")
                         : ApiResponse.Fail("failed to open Screenshot");
                 }
-                var psi = new ProcessStartInfo("/usr/sbin/screencapture") { UseShellExecute = false };
-                psi.ArgumentList.Add("-i");
-                psi.ArgumentList.Add(MacScreenshotPath());
-                Process.Start(psi);
+                lock (_macCaptureLock)
+                {
+                    // One interactive capture at a time: repeated presses would stack overlays.
+                    if (_macCapture is { HasExited: false })
+                    {
+                        return ApiResponse.Ok("already open");
+                    }
+                    var psi = new ProcessStartInfo("/usr/sbin/screencapture") { UseShellExecute = false };
+                    psi.ArgumentList.Add("-i");
+                    psi.ArgumentList.Add(MacScreenshotPath());
+                    _macCapture = Process.Start(psi);
+                }
                 return ApiResponse.Ok("opened");
             }
 #if LINUX

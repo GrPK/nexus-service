@@ -109,6 +109,22 @@ public sealed class DeckDefaultPresetsTests : IDisposable
         Assert.Null(essentials.Deck.Pages[0].Slots[0].Action);
     }
 
+    [Fact]
+    public void SeedOnce_StopsAtThePresetCapButStillSetsTheFlag()
+    {
+        var settings = new NexusSettings();
+        for (var i = 0; i < Nexus.Service.Routes.DeckRoutes.PresetCap - 1; i++)
+        {
+            settings.StreamDeck.Presets.Add(new DeckPreset { Id = $"p{i}", Name = $"P{i}", Cols = 2, Rows = 2 });
+        }
+
+        DeckDefaultPresets.SeedOnce(settings);
+
+        Assert.Equal(Nexus.Service.Routes.DeckRoutes.PresetCap, settings.StreamDeck.Presets.Count);
+        Assert.Equal(DeckDefaultPresets.EssentialsId, settings.StreamDeck.Presets[^1].Id);
+        Assert.True(settings.DeckDefaultPresetsSeeded);
+    }
+
     [Theory]
     [InlineData(4, 1)]
     [InlineData(2, 2)]

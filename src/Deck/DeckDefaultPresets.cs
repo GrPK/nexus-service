@@ -5,9 +5,9 @@ namespace Nexus.Service.Deck;
 
 /// <summary>
 /// The built-in starter keys: the Essentials set a new deck widget starts with,
-/// and the three presets seeded into every install's preset list once.
-/// Every set has exactly four keys, the smallest deck (4x1), and is authored
-/// as a 2x2 so it reads in order as a strip and as a square.
+/// and the presets seeded into every install's preset list once. Every set
+/// has as many keys as the smallest deck and is authored square, so it reads
+/// in order as a strip and as a square.
 /// </summary>
 public static class DeckDefaultPresets
 {
@@ -28,9 +28,9 @@ public static class DeckDefaultPresets
     }
 
     /// <summary>
-    /// Adds the three default presets to the list when the install never had
-    /// them seeded, then sets the flag; true when it changed anything. The
-    /// flag is what keeps a preset the user deleted or edited from coming back.
+    /// Adds the default presets that fit under the preset cap when the install
+    /// never had them seeded, then sets the flag; true when it changed anything.
+    /// The flag is what keeps a preset the user deleted or edited from coming back.
     /// </summary>
     public static bool SeedOnce(NexusSettings settings)
     {
@@ -45,14 +45,15 @@ public static class DeckDefaultPresets
         return true;
     }
 
-    /// <summary>The Essentials keys first, remaining slots empty, on a cols x rows grid; a grid under four keys falls back to 2x2 so no key is dropped.</summary>
+    /// <summary>The Essentials keys first, remaining slots empty, on a cols x rows grid; a grid smaller than the key set falls back to the seed grid so no key is dropped.</summary>
     public static (int Cols, int Rows, DeckConfig Deck) EssentialsFor(int cols, int rows)
     {
-        if (cols * rows < 4)
+        var keys = EssentialsKeys();
+        if (cols * rows < keys.Count)
         {
             (cols, rows) = (SeedCols, SeedRows);
         }
-        return (cols, rows, ConfigOf(EssentialsKeys(), cols * rows));
+        return (cols, rows, ConfigOf(keys, cols * rows));
     }
 
     /// <summary>The seeded Essentials preset if the user still has it, wherever it sits in the list; what a new deck joins first.</summary>
@@ -61,6 +62,10 @@ public static class DeckDefaultPresets
 
     private static void AddPreset(NexusSettings settings, string id, string name, List<DeckSlot> keys)
     {
+        if (settings.StreamDeck.Presets.Count >= Nexus.Service.Routes.DeckRoutes.PresetCap)
+        {
+            return;
+        }
         settings.StreamDeck.Presets.Add(new DeckPreset
         {
             Id = id,
