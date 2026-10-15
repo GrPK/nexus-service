@@ -106,7 +106,7 @@ public static class DeckIconDefaults
                     "brightnessSet" => "Sun",
                     "openSettings" => "Settings",
                     "screenshot" => "Camera",
-                    "screenRecord" => "Monitor",
+                    "screenRecord" => "Video",
                     "taskManager" => "Activity",
                     _ => "Sliders",
                 };

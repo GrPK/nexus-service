@@ -276,11 +276,16 @@ public sealed class SystemActions
     /// opens the Screenshot toolbar for a recording; Linux tries the common
     /// capture tools for a still and has no recorder to open.
     /// </summary>
+    // The bare scheme opens the native snip overlay like Win+Shift+S / Win+Shift+R;
+    // the //capture/ form opens the Snipping Tool app window instead.
+    internal const string ScreenShotUri = "ms-screenclip:";
+    internal const string ScreenRecordUri = "ms-screenclip:?type=recording";
+
     public async Task<ApiResponse> OpenScreenCaptureAsync(bool record)
     {
         if (OperatingSystem.IsWindows())
         {
-            return await LaunchUrlAsync(record ? "ms-screenclip://capture/video" : "ms-screenclip://capture/image").ConfigureAwait(false);
+            return await LaunchUrlAsync(record ? ScreenRecordUri : ScreenShotUri).ConfigureAwait(false);
         }
         try
         {

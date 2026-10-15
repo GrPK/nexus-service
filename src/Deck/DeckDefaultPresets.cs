@@ -41,7 +41,7 @@ public static class DeckDefaultPresets
         settings.DeckDefaultPresetsSeeded = true;
         AddPreset(settings, EssentialsId, "Essentials", EssentialsKeys());
         AddPreset(settings, MediaId, "Media", [SystemKey("mediaPrev"), SystemKey("mediaPlayPause"), SystemKey("mediaNext"), SystemKey("muteToggle")]);
-        AddPreset(settings, SystemId, "System", [PowerKey("lock"), PowerKey("sleep"), SystemKey("screenRecord", "Disc"), SystemKey("openSettings")]);
+        AddPreset(settings, SystemId, "System", [PowerKey("lock"), PowerKey("sleep"), SystemKey("screenRecord"), SystemKey("openSettings")]);
         return true;
     }
 

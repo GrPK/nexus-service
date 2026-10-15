@@ -191,7 +191,7 @@ public sealed class DeckDialConfigTests
 
     [Theory]
     [InlineData("screenshot", "Camera")]
-    [InlineData("screenRecord", "Monitor")]
+    [InlineData("screenRecord", "Video")]
     [InlineData("taskManager", "Activity")]
     public void HostOps_RoundTripAndGetOwnIcons(string op, string icon)
     {
