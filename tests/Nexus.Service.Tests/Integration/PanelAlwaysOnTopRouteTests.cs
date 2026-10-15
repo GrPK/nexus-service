@@ -53,7 +53,7 @@ public sealed class PanelAlwaysOnTopRouteTests : IClassFixture<NexusAppFactory>
         Assert.False(await ReadBool(await client.GetAsync("/preferences"), "panel", "alwaysOnTop"));
         Assert.False(await ReadBool(await client.GetAsync("/overlay/state"), "panelAlwaysOnTop"));
 
-        await PostPanel(client, true);
+        Assert.Equal(HttpStatusCode.OK, (await PostPanel(client, true)).StatusCode);
         Assert.True(await ReadBool(await client.GetAsync("/overlay/state"), "panelAlwaysOnTop"));
     }
 }
