@@ -1066,7 +1066,7 @@ public class Slv3HubTests
     }
 
     [Fact]
-    public void The_garbled_record_from_the_iamgarffi_bundle_is_retaken_through_a_fallback_pipe()
+    public void A_fill_garbled_record_with_an_out_of_range_pipe_is_retaken_through_a_fallback_pipe()
     {
         var mac = Convert.ToHexString(FanMac);
         var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 2 });
@@ -1171,6 +1171,64 @@ public class Slv3HubTests
             Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
             Assert.True(CountBindFrames(tx) > 0, $"round {round}");
         }
+    }
+
+    [Theory]
+    [InlineData("AABBCCDDEEFE")]
+    [InlineData("AABBCCDD0BFF")]
+    public void A_near_copy_master_shared_by_an_unowned_chain_is_a_real_neighbor_and_stands_down(string master)
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, _) = CreateOwnershipHub(new() { [mac] = 1 });
+        var neighbor = Convert.FromHexString(master);
+        var fan = new SimulatedFan { Mac = FanMac, MasterMac = neighbor, RxType = 3 };
+        net.Fans.Add(fan);
+        net.Fans.Add(new SimulatedFan { Mac = Convert.FromHexString("A1A2A3A4A5A6"), MasterMac = neighbor, RxType = 3 });
+        Ticks(hub, Slv3Hub.RebindConfirmPolls + 3);
+        Assert.True(hub.State.Fans[0].BoundToUs);
+        tx.SentFrames.Clear();
+
+        PullBack(hub, fan, neighbor, Slv3Hub.RebindConfirmPolls + 5);
+
+        Assert.Equal(0, BindFramesFor(tx, FanMac));
+    }
+
+    [Fact]
+    public void A_neighbor_that_pulls_back_before_the_retake_confirms_is_stood_down_from()
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, clock) = CreateOwnershipHub(new() { [mac] = 2 });
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = OtherMasterMac, RxType = 2, IgnoresBind = true });
+        for (var attempt = 0; attempt < Slv3Hub.RebindConfirmPolls; attempt++)
+        {
+            Ticks(hub, Slv3Hub.RebindConfirmPolls);
+            Ticks(hub, PendingOpTickBudget + 2);
+            clock.AdvanceMs(Slv3Hub.AutoRebindMaxIntervalMs + 1);
+        }
+        tx.SentFrames.Clear();
+
+        Ticks(hub, 3 * Slv3Hub.RebindConfirmPolls);
+
+        Assert.Equal(0, CountBindFrames(tx));
+    }
+
+    [Fact]
+    public void Unconfirmed_retakes_of_a_garbled_master_never_stand_down()
+    {
+        var mac = Convert.ToHexString(FanMac);
+        var (hub, net, tx, _, clock) = CreateOwnershipHub(new() { [mac] = 2 });
+        net.Fans.Add(new SimulatedFan { Mac = FanMac, MasterMac = Convert.FromHexString("AABBCCE5E5E5"), RxType = 229, Channel = 229, IgnoresBind = true });
+        for (var attempt = 0; attempt < 2 * Slv3Hub.RebindConfirmPolls; attempt++)
+        {
+            Ticks(hub, Slv3Hub.RebindConfirmPolls);
+            Ticks(hub, PendingOpTickBudget + 2);
+            clock.AdvanceMs(Slv3Hub.AutoRebindMaxIntervalMs + 1);
+        }
+        tx.SentFrames.Clear();
+
+        Ticks(hub, Slv3Hub.RebindConfirmPolls);
+
+        Assert.True(CountBindFrames(tx) > 0);
     }
 
     [Fact]

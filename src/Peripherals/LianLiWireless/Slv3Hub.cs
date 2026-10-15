@@ -126,6 +126,8 @@ public sealed class Slv3Hub : IDisposable
     private readonly Dictionary<string, RebindSighting> _pullSeen = new(StringComparer.Ordinal);
     // The pipe a chain last reported while bound to us; a garbled record's own pipe is not trusted.
     private readonly Dictionary<string, (byte Channel, byte Rx)> _goodPipe = new(StringComparer.Ordinal);
+    // Retakes that expired unconfirmed with the chain still on the same foreign master: a puller faster than the confirm.
+    private readonly Dictionary<string, (byte[] Master, int Count)> _failedRetakes = new(StringComparer.Ordinal);
 
     private ISlv3Transport? _tx;
     private ISlv3Transport? _rx;
@@ -910,8 +912,9 @@ public sealed class Slv3Hub : IDisposable
             && Slv3Protocol.MacEquals(near.Master, record.MasterMac) && _nowMs() - near.AtMs < NeighborMarkMs);
     }
 
-    // A record no real neighbor dongle writes: an out-of-range pipe, a master whose differing bytes
-    // are one repeated fill byte, or a near bit-flip copy of ours.
+    // A record a real neighbor dongle does not write: an out-of-range pipe, or a master whose differing
+    // bytes are one repeated fill byte. A near copy of ours (one byte or two bits off) is garbled unless
+    // an unowned chain reports the same master, which makes it a live neighbor's.
     private bool GarbledRecordLocked(Slv3DeviceRecord record)
     {
         if (!PlausiblePipe(record.Channel, record.RxType))
@@ -919,19 +922,54 @@ public sealed class Slv3Hub : IDisposable
             return true;
         }
         var bits = 0;
-        int? fill = null;
+        var diffBytes = 0;
         var fillOnly = true;
+        byte fill = 0;
         for (var i = 0; i < Slv3Protocol.MacLength && i < record.MasterMac.Length && i < _masterMac.Length; i++)
         {
             var diff = record.MasterMac[i] ^ _masterMac[i];
             bits += System.Numerics.BitOperations.PopCount((uint)diff);
-            if (diff != 0)
+            if (diff == 0)
             {
-                fill ??= record.MasterMac[i];
-                fillOnly &= record.MasterMac[i] == fill;
+                continue;
+            }
+            if (diffBytes++ == 0)
+            {
+                fill = record.MasterMac[i];
+            }
+            fillOnly &= record.MasterMac[i] == fill;
+        }
+        if (diffBytes >= 2 && fillOnly)
+        {
+            return true;
+        }
+        return (diffBytes == 1 || bits <= 2) && !SharedWithUnownedChainLocked(record);
+    }
+
+    private bool SharedWithUnownedChainLocked(Slv3DeviceRecord record)
+    {
+        foreach (var other in _lastFanRecords)
+        {
+            if (!Slv3Protocol.MacEquals(other.Mac, record.Mac)
+                && Slv3Protocol.MacEquals(other.MasterMac, record.MasterMac)
+                && !_owned.ContainsKey(Convert.ToHexString(other.Mac)))
+            {
+                return true;
             }
         }
-        return bits <= 2 || fillOnly;
+        return false;
+    }
+
+    private void MarkNeighborLocked(string key, byte[] master, string why)
+    {
+        _retaken.Remove(key);
+        _pullSeen.Remove(key);
+        _failedRetakes.Remove(key);
+        _neighborMaster[key] = new Retaken(master, _nowMs());
+        _pending.Remove(key);
+        _rebind.Remove(key);
+        _rebindSeen.Remove(key);
+        ServiceLog.Info($"[lianli-wireless] chain {key} {why} {Convert.ToHexString(master)}, treating it as a neighbor and standing down");
     }
 
     // A chain that keeps returning to the master it was retaken from is held by a live master.
@@ -961,13 +999,7 @@ public sealed class Slv3Hub : IDisposable
         {
             return;
         }
-        _retaken.Remove(key);
-        _pullSeen.Remove(key);
-        _neighborMaster[key] = new Retaken(retaken.Master, _nowMs());
-        _pending.Remove(key);
-        _rebind.Remove(key);
-        _rebindSeen.Remove(key);
-        ServiceLog.Info($"[lianli-wireless] chain {key} pulled back to {Convert.ToHexString(retaken.Master)} after retake, treating it as a neighbor and standing down");
+        MarkNeighborLocked(key, retaken.Master, "pulled back after retake to");
     }
 
     private void ExpireNeighborStateLocked(long now)
@@ -1021,6 +1053,7 @@ public sealed class Slv3Hub : IDisposable
             {
                 _neighborMaster.Remove(key);
                 _pullSeen.Remove(key);
+                _failedRetakes.Remove(key);
             }
             else if (!zeroMaster && !ours)
             {
@@ -1193,30 +1226,13 @@ public sealed class Slv3Hub : IDisposable
     // until the device list echoes the result.
     private void SyncControlLocked()
     {
-        List<string>? abandoned = null;
         foreach (var (key, op) in _pending)
         {
             if (TryFindRecordLocked(op.Mac, out var record))
             {
-                // An automatic bind stops the moment the device shows a foreign master.
-                if (op.Auto && !op.Unbind && !Slv3Protocol.MacIsZero(record.MasterMac)
-                    && !Slv3Protocol.MacEquals(record.MasterMac, _masterMac) && !RetakeForeignLocked(key, record))
-                {
-                    (abandoned ??= new List<string>()).Add(key);
-                    continue;
-                }
                 SendBindFrameLocked(record, op.TargetSlot, op.Unbind);
             }
         }
-        if (abandoned is not null)
-        {
-            foreach (var key in abandoned)
-            {
-                _pending.Remove(key);
-                ServiceLog.Info($"[lianli-wireless] auto-rebind {key} dropped, device is bound to another master");
-            }
-        }
-
         List<string>? done = null;
         List<(string Key, Slv3PendingCommand Cmd)>? ticked = null;
         foreach (var (key, cmd) in _pendingCommands)
@@ -1576,6 +1592,7 @@ public sealed class Slv3Hub : IDisposable
                 if (done)
                 {
                     ServiceLog.Info($"[lianli-wireless] {(op.Unbind ? "unbind" : "bind")} for {key} confirmed ({DescribeBinding(record, _masterMac)})");
+                    _failedRetakes.Remove(key);
                     if (_retakeFrom.Remove(key, out var from) && !op.Unbind)
                     {
                         _retaken[key] = new Retaken(from, _nowMs());
@@ -1627,6 +1644,7 @@ public sealed class Slv3Hub : IDisposable
                 if (_pending.TryGetValue(key, out var droppedOp) && droppedOp.Auto)
                 {
                     ServiceLog.Warn($"[lianli-wireless] auto-rebind {key} did not converge in {PendingOpTickBudget} polls, retrying after backoff");
+                    NoteFailedRetakeLocked(key, droppedOp);
                 }
                 else
                 {
@@ -1635,6 +1653,24 @@ public sealed class Slv3Hub : IDisposable
                 _pending.Remove(key);
             }
         }
+    }
+
+    private void NoteFailedRetakeLocked(string key, Slv3PendingOp op)
+    {
+        if (op.Unbind || !_retakeFrom.TryGetValue(key, out var from) || !TryFindRecordLocked(op.Mac, out var record)
+            || !Slv3Protocol.MacEquals(record.MasterMac, from) || GarbledRecordLocked(record))
+        {
+            _failedRetakes.Remove(key);
+            return;
+        }
+        var count = (_failedRetakes.TryGetValue(key, out var prior) && Slv3Protocol.MacEquals(prior.Master, from) ? prior.Count : 0) + 1;
+        if (count < RebindConfirmPolls)
+        {
+            _failedRetakes[key] = (from, count);
+            return;
+        }
+        _retakeFrom.Remove(key);
+        MarkNeighborLocked(key, from, "kept its master through unconfirmed retakes,");
     }
 
     private void NoteConfigChangedLocked()
@@ -1822,6 +1858,8 @@ public sealed class Slv3Hub : IDisposable
             {
                 ServiceLog.Info($"[lianli-wireless] chain {key} dropped ({ChainExpiryMs / 1000}s unseen)");
                 _knownChains.Remove(key);
+                _goodPipe.Remove(key);
+                _failedRetakes.Remove(key);
                 _rebind.Remove(key);
                 _rebindSeen.Remove(key);
                 _bindingLogs.Remove(key);
@@ -2157,8 +2195,7 @@ public sealed class Slv3Hub : IDisposable
         {
             return good;
         }
-        return (_channel, _owned.TryGetValue(key, out var slot) && slot >= Slv3Protocol.MinSlot && slot <= Slv3Protocol.MaxSlot
-            ? (byte)slot : record.RxType);
+        return (_channel, _owned.TryGetValue(key, out var slot) ? (byte)slot : (byte)0);
     }
 
     private bool SendSequencedCommandLocked(Slv3DeviceRecord record, byte rfCmd, byte cmdSeq, byte arg = 0)
@@ -2265,6 +2302,8 @@ public sealed class Slv3Hub : IDisposable
             }
             var key = Convert.ToHexString(mac);
             _userUnbound.Add(key);
+            _goodPipe.Remove(key);
+            _failedRetakes.Remove(key);
             _rebind.Remove(key);
             _rebindSeen.Remove(key);
             if (_owned.Remove(key))
