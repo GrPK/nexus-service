@@ -168,4 +168,16 @@ public sealed class GetSensorsToolTests
 
         Assert.Null(HistoryIdOf(root, "smart/nvme/0/temperature/0"));
     }
+
+    [Fact]
+    public async Task Storage_reads_prepare_the_provider_and_other_devices_do_not()
+    {
+        var sensors = new McpTestHarness.StubSensorProvider();
+
+        await RunAsync(sensors, "cpu");
+        Assert.Equal(0, sensors.BeforeSmartReadCalls);
+
+        await RunAsync(sensors, "storage");
+        Assert.Equal(1, sensors.BeforeSmartReadCalls);
+    }
 }

@@ -26,6 +26,8 @@ public class SensorSnapshotResolverTests
         public List<HardwareComponent> Psus { get; init; } = new();
         public List<HardwareComponent> EmbeddedControllers { get; init; } = new();
         public int ExtrasCalls { get; private set; }
+        public int BeforeSmartReadCalls { get; private set; }
+        public void BeforeSmartRead() => BeforeSmartReadCalls++;
         public bool? LastIncludeSmart { get; private set; }
 
         public string GetCpuModel() => "TestCPU";
@@ -495,6 +497,18 @@ public class SensorSnapshotResolverTests
     }
 
     // ── SMART ──
+
+    [Fact]
+    public void GetCategorySensors_smart_asks_the_provider_to_prepare_a_read_but_storage_does_not()
+    {
+        var sensors = new StubSensors();
+
+        SensorSnapshotResolver.GetCategorySensors(sensors, "storage");
+        Assert.Equal(0, sensors.BeforeSmartReadCalls);
+
+        SensorSnapshotResolver.GetCategorySensors(sensors, "smart");
+        Assert.Equal(1, sensors.BeforeSmartReadCalls);
+    }
 
     [Fact]
     public void GetCategorySensors_smart_returns_only_the_smart_prefixed_components()

@@ -42,6 +42,7 @@ public sealed class LhmComputer : IDisposable
     private readonly Computer _computer;
     private readonly Task _openTask;
     private readonly object _updateLock = new();
+    private readonly object _readerLock = new();
     private long _lastUpdateTicks;
     private const long UpdateErrorLogIntervalMs = 60_000;
     private readonly Dictionary<string, long> _updateErrorLoggedAt = new(StringComparer.Ordinal);
@@ -282,19 +283,19 @@ public sealed class LhmComputer : IDisposable
         }
     }
 
-    /// <summary>
-    /// A SMART reader calls this before reading drive values. When its read finds drive reads had stopped, it walks
-    /// itself, waiting for any walk in flight, so it never sees values from before they stopped. Drives nothing needs
-    /// or the user set to never are untouched; the seed was dropped, so each needed drive reads once.
-    /// </summary>
+    /// <summary>Called by a SMART reader before it reads drive values; walks first when drive reads had stopped.</summary>
     public void BeforeSmartRead()
     {
-        var wasClosed = SmartLiveConsumers.NoteRead();
-        if (!wasClosed || !_openTask.IsCompletedSuccessfully) return;
-        var demand = SmartPollDemand.Capture(_gates, _config.Load(), SmartLiveConsumers.Subscribed(_hub));
-        if (SmartPollDemand.ReaderMustWalk(wasClosed, demand, StorageIdentifiers()))
+        // Serialized so a second reader waits for the first reader's walk; never taken while holding _updateLock.
+        lock (_readerLock)
         {
-            Update(SensorRefresh.Force);
+            var wasClosed = SmartLiveConsumers.NoteRead();
+            if (!wasClosed || !_openTask.IsCompletedSuccessfully) return;
+            var demand = SmartPollDemand.Capture(_gates, _config.Load(), SmartLiveConsumers.Subscribed(_hub));
+            if (SmartPollDemand.ReaderMustWalk(wasClosed, demand, StorageIdentifiers()))
+            {
+                Update(SensorRefresh.Force);
+            }
         }
     }
 

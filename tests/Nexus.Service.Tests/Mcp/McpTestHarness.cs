@@ -55,6 +55,8 @@ internal static class McpTestHarness
         public List<HardwareSensor> Memory { get; set; } = new();
         public List<HardwareSensor> Motherboard { get; set; } = new();
         public Dictionary<string, StorageComponent> Storage { get; set; } = new();
+        public int BeforeSmartReadCalls { get; private set; }
+        public void BeforeSmartRead() => BeforeSmartReadCalls++;
 
         public string GetCpuModel() => "Test CPU";
         public IReadOnlyList<HardwareSensor> GetCpuSensors() => Cpu;

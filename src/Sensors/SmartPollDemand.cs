@@ -92,9 +92,14 @@ internal static class SmartLiveConsumers
     public static bool NoteRead()
     {
         var now = Environment.TickCount64;
-        var wasCold = now - Volatile.Read(ref _lastReadMs) >= ReaderWindowMs;
-        Volatile.Write(ref _lastReadMs, now);
-        return wasCold;
+        var seen = Volatile.Read(ref _lastReadMs);
+        while (true)
+        {
+            var wasCold = now - seen >= ReaderWindowMs;
+            var actual = Interlocked.CompareExchange(ref _lastReadMs, now, seen);
+            if (actual == seen) return wasCold;
+            seen = actual;
+        }
     }
 
     internal static void Forget() => Volatile.Write(ref _lastReadMs, long.MinValue / 2);
