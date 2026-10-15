@@ -20,6 +20,9 @@ namespace Nexus.Service.Sensors;
 /// </summary>
 internal static class GpuAdapterLuids
 {
+    /// <summary>Video memory at or above this marks a dedicated adapter.</summary>
+    internal const long DedicatedVramMinMb = 1024;
+
     /// <param name="UmdVersion">The user-mode driver version DXGI reports, 0
     /// when the adapter has none; a driver update changes it.</param>
     public readonly record struct Adapter(
@@ -170,7 +173,7 @@ internal static class GpuAdapterLuids
         {
             if (g.AdapterLuid.Length > 0) continue;
             if (PickAdapter(adapters, used, kernelLuids,
-                    x => VendorMatches(g.Vendor, x.VendorId) && (x.DedicatedVramMb >= 1024) == !g.Integrated) is { } a)
+                    x => VendorMatches(g.Vendor, x.VendorId) && (x.DedicatedVramMb >= DedicatedVramMinMb) == !g.Integrated) is { } a)
             { g.AdapterLuid = a.Luid; used.Add(a.Luid); }
         }
     }
