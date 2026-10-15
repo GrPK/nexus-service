@@ -36,8 +36,9 @@ public sealed class FeatureGates
     {
     }
 
-    public bool Lighting => _store?.Load().Features.Lighting ?? true;
-    public bool Cooling => _store?.Load().Features.Cooling ?? true;
+    /// <summary>Lighting and Cooling read off until the features onboarding step completes, so nothing is taken over before the user decides.</summary>
+    public bool Lighting => _store?.Load() is not { } s || (s.Features.Lighting && s.FeaturesOnboardingCompleted);
+    public bool Cooling => _store?.Load() is not { } s || (s.Features.Cooling && s.FeaturesOnboardingCompleted);
     public bool Monitoring => _store?.Load().Features.Monitoring ?? true;
     public bool Diagnostics => _store?.Load().Features.Diagnostics ?? true;
 }

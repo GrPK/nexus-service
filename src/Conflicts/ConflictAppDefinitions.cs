@@ -55,6 +55,12 @@ public sealed class ConflictAppDefinition
     /// <summary>One of "lighting", "cooling", "peripherals", "monitoring" - drives the UI hint.</summary>
     public string Category { get; init; } = "";
 
+    /// <summary>A second pillar category ("lighting" or "cooling") the app also controls, when <see cref="Category"/> names only one. Empty for single-purpose apps.</summary>
+    public string AlsoCategory { get; init; } = "";
+
+    /// <summary>The app also owns a display or LCD Nexus drives, so it competes whatever the Lighting and Cooling pillars say.</summary>
+    public bool DrivesDisplay { get; init; }
+
     /// <summary>Process names to match against <c>Process.GetProcesses().ProcessName</c>.</summary>
     public string[] ProcessNames { get; init; } = Array.Empty<string>();
 
@@ -118,6 +124,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "NZXT" },
             DisplayName = "NZXT CAM",
             Category = "lighting",
+            DrivesDisplay = true,
             ProcessNames = new[] { "NZXT CAM", "CAM", "NZXT CAM Beta", "NZXT CAM Service", "NZXTCAM" },
             // Stopped alongside the processes on End task. CAMService is NZXT's
             // own; Windows' unrelated "camsvc" (svchost -k osprivacy) must never
@@ -139,6 +146,7 @@ public static class ConflictAppCatalog
             Id = "nzxt-kraken",
             DisplayName = "NZXT Kraken",
             Category = "cooling",
+            DrivesDisplay = true,
             ProcessNames = new[] { "NZXT Kraken" },
         },
 
@@ -194,6 +202,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "ASUS" },
             DisplayName = "ASUS Armoury Crate",
             Category = "lighting",
+            AlsoCategory = "cooling",
             ProcessNames = new[] { "ArmouryCrate", "ArmouryCrate.Service", "ArmouryCrate.UserSessionHelper", "ArmourySocketServer", "Armoury Crate" },
         },
         new()
@@ -260,6 +269,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "MSI" },
             DisplayName = "MSI Center",
             Category = "lighting",
+            AlsoCategory = "cooling",
             ProcessNames = new[] { "MSI.CentralServer", "MSI Center" },
         },
         new()
@@ -318,6 +328,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Gigabyte" },
             DisplayName = "GIGABYTE Control Center",
             Category = "lighting",
+            AlsoCategory = "cooling",
             ProcessNames = new[] { "GCC" },
         },
         new()
@@ -343,6 +354,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Corsair" },
             DisplayName = "Corsair iCUE",
             Category = "lighting",
+            DrivesDisplay = true,
             ProcessNames = new[]
             {
                 "iCUE", "iCUE Launcher", "iCUELauncher", "iCUEDevicePluginHost",
@@ -421,6 +433,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Lian Li" },
             DisplayName = "Lian Li L-Connect",
             Category = "lighting",
+            DrivesDisplay = true,
             ProcessNames = new[] { "L-Connect 3", "L-Connect", "LConnect3", "LConnect" },
             // Watcher first so it cannot restart the main service.
             WindowsServiceNames = new[] { "LConnectServiceWatcher", "LConnectService" },
@@ -434,6 +447,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Asiahorse" },
             DisplayName = "AsiaHorse UMBRA",
             Category = "lighting",
+            AlsoCategory = "cooling",
             ProcessNames = new[] { "Sync_light" },
         },
 
@@ -446,6 +460,7 @@ public static class ConflictAppCatalog
             DefaultWhitelisted = true,
             DisplayName = "Tryx Kanali",
             Category = "cooling",
+            DrivesDisplay = true,
             ProcessNames = new[] { "Kanali" },
         },
 
@@ -458,6 +473,7 @@ public static class ConflictAppCatalog
             DefaultWhitelisted = true,
             DisplayName = "ZMatrices",
             Category = "cooling",
+            DrivesDisplay = true,
             ProcessNames = new[] { "ZMatrices", "zmUsbSendJpg" },
         },
 
@@ -642,6 +658,21 @@ public static class ConflictAppCatalog
             ProcessNames = new[] { "ArgbFanMaster" },
         },
     };
+
+    /// <summary>
+    /// False when every pillar the app controls is off, so the conflict system
+    /// ignores it. Apps outside lighting and cooling (peripherals, monitoring),
+    /// display apps and <see cref="ConflictAppDefinition.AlwaysEnded"/> apps
+    /// always compete.
+    /// </summary>
+    public static bool Competes(ConflictAppDefinition def, bool lightingOn, bool coolingOn)
+    {
+        if (def.AlwaysEnded || def.DrivesDisplay) return true;
+        var lighting = def.Category == "lighting" || def.AlsoCategory == "lighting";
+        var cooling = def.Category == "cooling" || def.AlsoCategory == "cooling";
+        if (!lighting && !cooling) return true;
+        return (lighting && lightingOn) || (cooling && coolingOn);
+    }
 
     /// <summary>Ids of every <see cref="ConflictAppDefinition.DefaultWhitelisted"/> app: the whitelist a fresh install starts with.</summary>
     public static List<string> DefaultWhitelistedIds()

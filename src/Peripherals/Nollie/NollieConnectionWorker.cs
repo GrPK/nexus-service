@@ -37,6 +37,7 @@ public sealed class NollieConnectionWorker : BackgroundService
     private readonly DeviceControlGate _gate;
     private readonly IConfigStore _store;
     private readonly HardwarePresence _presence;
+    private readonly Nexus.Service.Lifecycle.FeatureGates _gates;
     private readonly Func<long> _clock;
     private readonly HashSet<(int, int)> _warnedUnmatched = new();
     private long? _lastReconcileAt;
@@ -44,8 +45,9 @@ public sealed class NollieConnectionWorker : BackgroundService
     /// <summary>The Nollie devnodes present at the last reconcile that left every board attached; null forces the next poll to reconcile.</summary>
     private string? _settledBus;
 
-    public NollieConnectionWorker(IHidEnumerator hid, NollieHub hub, NollieLightingDeviceProvider lighting, DeviceControlGate gate, IConfigStore store, HardwarePresence presence, Func<long>? clock = null)
+    public NollieConnectionWorker(IHidEnumerator hid, NollieHub hub, NollieLightingDeviceProvider lighting, DeviceControlGate gate, IConfigStore store, HardwarePresence presence, Func<long>? clock = null, Nexus.Service.Lifecycle.FeatureGates? gates = null)
     {
+        _gates = gates ?? Nexus.Service.Lifecycle.FeatureGates.AllEnabled;
         _hid = hid;
         _hub = hub;
         _lighting = lighting;
@@ -263,7 +265,7 @@ public sealed class NollieConnectionWorker : BackgroundService
         _hub.Attach(controller);
         DropBundledChannelState(controller);
         SeedPorts(controller);
-        NollieStandalone.Apply(controller, _store.Load());
+        if (_gates.Lighting) NollieStandalone.Apply(controller, _store.Load());
         ServiceLog.Info($"[nollie] attached {spec.Name} ({spec.Channels}ch, max {spec.MaxLedsPerChannel} LEDs/ch) sn={(string.IsNullOrEmpty(controller.Serial) ? "-" : controller.Serial)} id={controller.DeviceId}");
     }
 

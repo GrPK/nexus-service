@@ -36,14 +36,16 @@ public sealed class Np50HeartbeatWorker : BackgroundService
     private readonly HardwarePresence _presence;
     private readonly MultiplexHub _wsHub;
     private readonly DeviceControlGate _gate;
+    private readonly Nexus.Service.Lifecycle.FeatureGates _gates;
     private readonly Np50LightingDeviceProvider? _lighting;
     private string _lastBroadcastFwVersion = "";
     private bool _lastConnected;
     private byte _lastWarningSummary;
     private long _lastModeAssertMs;
 
-    public Np50HeartbeatWorker(Np50Hub hub, HardwarePresence presence, MultiplexHub wsHub, DeviceControlGate gate, Np50LightingDeviceProvider? lighting = null)
+    public Np50HeartbeatWorker(Np50Hub hub, HardwarePresence presence, MultiplexHub wsHub, DeviceControlGate gate, Np50LightingDeviceProvider? lighting = null, Nexus.Service.Lifecycle.FeatureGates? gates = null)
     {
+        _gates = gates ?? Nexus.Service.Lifecycle.FeatureGates.AllEnabled;
         _hub = hub;
         _presence = presence;
         _wsHub = wsHub;
@@ -121,7 +123,7 @@ public sealed class Np50HeartbeatWorker : BackgroundService
         // 15-byte SetCoolingMode command parses on the same UART thread the LED
         // stream rides). This still covers the firmware-2.0.3.1 "needs the
         // command twice" path. Matches HYTE's shipping nexus-control-service.
-        if (_hub.DesiredCoolingMode is byte desired)
+        if (_gates.Cooling && _hub.DesiredCoolingMode is byte desired)
         {
             var current = _hub.State.HubInfo.CoolingMode switch
             {

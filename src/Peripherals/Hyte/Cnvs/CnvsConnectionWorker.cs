@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Nexus.Service.Devices;
 using Nexus.Service.Devices.Detection;
+using Nexus.Service.Lifecycle;
 using Nexus.Service.Lighting;
 using Nexus.Service.Persistence;
 using Nexus.Service.Platform;
@@ -40,10 +41,12 @@ public sealed class CnvsConnectionWorker : BackgroundService
     private readonly IConfigStore _store;
     private readonly HardwarePresence _presence;
     private readonly DeviceControlGate _gate;
+    private readonly FeatureGates _gates;
     private bool _firstTick = true;
 
-    public CnvsConnectionWorker(CnvsHub hub, IConfigStore store, HardwarePresence presence, DeviceControlGate gate, CnvsLightingDeviceProvider? lighting = null)
+    public CnvsConnectionWorker(CnvsHub hub, IConfigStore store, HardwarePresence presence, DeviceControlGate gate, CnvsLightingDeviceProvider? lighting = null, FeatureGates? gates = null)
     {
+        _gates = gates ?? FeatureGates.AllEnabled;
         _hub = hub;
         _store = store;
         _presence = presence;
@@ -78,6 +81,13 @@ public sealed class CnvsConnectionWorker : BackgroundService
         // Nexus Control gate takes priority over the first-tick race-and-hold:
         // a device toggled off must never be claimed, even transiently.
         if (!_gate.IsEnabled("cnvs"))
+        {
+            if (_hub.IsConnected) _hub.Disconnect();
+            return;
+        }
+
+        // The hub is a lighting device: with Lighting off the port is neither claimed nor written.
+        if (!_gates.Lighting)
         {
             if (_hub.IsConnected) _hub.Disconnect();
             return;

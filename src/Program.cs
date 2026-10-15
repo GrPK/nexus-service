@@ -951,7 +951,18 @@ static void FastServiceShutdown(WebApplication app)
             try { sp.GetService<IConfigStore>()?.FlushNow(); } catch { }
             try { sp.GetService<ProfileManager>()?.SaveActiveProfile(); } catch { }
         }),
-        Task.Run(() => { try { sp.GetService<IFanControlProvider>()?.ReleaseAll(); } catch { } }),
+        Task.Run(() =>
+        {
+            try
+            {
+                // Cooling off (or undecided) forbids any fan write, shutdown included.
+                if (sp.GetService<Nexus.Service.Lifecycle.FeatureGates>()?.Cooling ?? true)
+                {
+                    sp.GetService<IFanControlProvider>()?.ReleaseAll();
+                }
+            }
+            catch { }
+        }),
         lightsOff,
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.StreamDeck.StreamDeckConnectionWorker>()?.ResetConnectedSurfacesForShutdown(); } catch { } }),
         Task.Run(() => { try { sp.GetService<Nexus.Service.Peripherals.Nollie.NollieConnectionWorker>()?.ReleaseAllForShutdown(); } catch { } }),

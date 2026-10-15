@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Nexus.Service.Lifecycle;
 using Nexus.Service.Lighting.Rgb;
 using Nexus.Service.Models.Conflicts;
 using Nexus.Service.Platform;
@@ -48,6 +49,7 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
 
     private readonly MultiplexHub _hub;
     private readonly OpenRgbProcessManager? _openRgb;
+    private readonly FeatureGates _gates;
 
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
@@ -95,10 +97,11 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     private readonly object _scanLock = new();
     private long _lastScanTicks = long.MinValue / 2;
 
-    public ConflictWatcher(MultiplexHub hub, OpenRgbProcessManager? openRgb = null)
+    public ConflictWatcher(MultiplexHub hub, OpenRgbProcessManager? openRgb = null, FeatureGates? gates = null)
     {
         _hub = hub;
         _openRgb = openRgb;
+        _gates = gates ?? FeatureGates.AllEnabled;
         _hub.RegisterSnapshotProvider(Topic, GetCachedSnapshotEnvelope);
     }
 
@@ -285,8 +288,12 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         var bundledOpenRgbPath = _openRgb?.ExePath;
         var result = new List<DetectedConflict>();
 
+        var lightingOn = _gates.Lighting;
+        var coolingOn = _gates.Cooling;
         foreach (var def in ConflictAppCatalog.All)
         {
+            if (!ConflictAppCatalog.Competes(def, lightingOn, coolingOn))
+                continue;
             DetectedConflict? best = null;
             foreach (var procName in def.ProcessNames)
             {

@@ -66,7 +66,8 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Conflicts.ConflictWatcher>(sp =>
             new Nexus.Service.Conflicts.ConflictWatcher(
                 sp.GetRequiredService<MultiplexHub>(),
-                sp.GetService<Nexus.Service.Lighting.Rgb.OpenRgbProcessManager>()));
+                sp.GetService<Nexus.Service.Lighting.Rgb.OpenRgbProcessManager>(),
+                sp.GetRequiredService<Nexus.Service.Lifecycle.FeatureGates>()));
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Conflicts.ConflictWatcher>());
         services.AddSingleton<Nexus.Service.Conflicts.IConflictDetector>(
             sp => sp.GetRequiredService<Nexus.Service.Conflicts.ConflictWatcher>());

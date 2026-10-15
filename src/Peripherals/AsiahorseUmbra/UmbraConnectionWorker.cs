@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Nexus.Service.Cooling;
 using Nexus.Service.Devices;
 using Nexus.Service.Devices.Detection;
+using Nexus.Service.Lifecycle;
 using Nexus.Service.Lighting;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Persistence;
@@ -30,11 +31,16 @@ public sealed class UmbraConnectionWorker : BackgroundService
     private readonly DeviceControlGate _gate;
     private readonly HardwarePresence _presence;
     private readonly IConfigStore _store;
+    private readonly FeatureGates _gates;
+    // Set once a pillar was on during this connection, so HandBack only releases what Nexus may have touched.
+    private bool _lightingTouched;
+    private bool _coolingTouched;
     // Released on a control change for this handler so a release stops the stream at once, not on the next poll.
     private readonly SemaphoreSlim _gateChanged = new(0);
 
-    public UmbraConnectionWorker(IHidEnumerator hid, UmbraHub hub, AsiahorseUmbraLightingDeviceProvider lighting, AsiahorseUmbraCoolingProvider cooling, DeviceControlGate gate, HardwarePresence presence, IConfigStore store)
+    public UmbraConnectionWorker(IHidEnumerator hid, UmbraHub hub, AsiahorseUmbraLightingDeviceProvider lighting, AsiahorseUmbraCoolingProvider cooling, DeviceControlGate gate, HardwarePresence presence, IConfigStore store, FeatureGates? gates = null)
     {
+        _gates = gates ?? FeatureGates.AllEnabled;
         _hid = hid;
         _hub = hub;
         _lighting = lighting;
@@ -79,7 +85,8 @@ public sealed class UmbraConnectionWorker : BackgroundService
                     {
                         started = true;
                         ServiceLog.Info("[asiahorse-umbra] connected");
-                        _cooling.OnConnected();
+                        _lightingTouched = false;
+                        _coolingTouched = false;
                         _lighting.OnHubStateUpdated();
                         reachable = await PollAsync(stoppingToken).ConfigureAwait(false);
                     }
@@ -127,6 +134,7 @@ public sealed class UmbraConnectionWorker : BackgroundService
     private async Task<bool> PollAsync(CancellationToken ct)
     {
         var failures = 0;
+        var coolingApplied = false;
         while (_gateChanged.CurrentCount > 0)
         {
             _gateChanged.Wait(0);
@@ -136,7 +144,22 @@ public sealed class UmbraConnectionWorker : BackgroundService
             if (_hub.PollInfo())
             {
                 failures = 0;
-                _cooling.ReassertControl();
+                if (_gates.Lighting) _lightingTouched = true;
+                // Cooling off: no fan mode or duty writes. A later switch-on applies the persisted fan mode on the next poll.
+                if (!_gates.Cooling)
+                {
+                    coolingApplied = false;
+                }
+                else if (!coolingApplied)
+                {
+                    _coolingTouched = true;
+                    coolingApplied = true;
+                    _cooling.OnConnected();
+                }
+                else
+                {
+                    _cooling.ReassertControl();
+                }
             }
             else
             {
@@ -170,9 +193,13 @@ public sealed class UmbraConnectionWorker : BackgroundService
                     FanSyncMb = ls.FanSyncMb,
                 }
                 : ls;
-            var frames = new List<byte[]>(UmbraLightingPlan.Build(plan, _hub.Snapshot.Ports, MasterBrightness.Effective(settings.Lighting)));
+            var frames = new List<byte[]>();
+            if (_lightingTouched || _gates.Lighting)
+            {
+                frames.AddRange(UmbraLightingPlan.Build(plan, _hub.Snapshot.Ports, MasterBrightness.Effective(settings.Lighting)));
+            }
             // Fans stop following the software duty and go back to the PWM input header.
-            if (!ls.FanSyncMb)
+            if (!ls.FanSyncMb && (_coolingTouched || _gates.Cooling))
             {
                 frames.Add(UmbraProtocol.EncodeFanSync(true));
             }

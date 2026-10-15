@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Nexus.Service.Devices;
 using Nexus.Service.Devices.Detection;
+using Nexus.Service.Lifecycle;
 using Nexus.Service.Platform;
 
 namespace Nexus.Service.Peripherals.Hyte.MiniHub;
@@ -21,13 +22,15 @@ public sealed class MiniHubHeartbeatWorker : BackgroundService
     private readonly MiniHubHub _hub;
     private readonly HardwarePresence _presence;
     private readonly DeviceControlGate _gate;
+    private readonly FeatureGates _gates;
     private bool _rgbModeAsserted;
     private bool _fanModeAsserted;
     private int _tickCount;
     private const int TraceEveryNTicks = 15; // every ~30 s with the 2 s timer
 
-    public MiniHubHeartbeatWorker(MiniHubHub hub, HardwarePresence presence, DeviceControlGate gate)
+    public MiniHubHeartbeatWorker(MiniHubHub hub, HardwarePresence presence, DeviceControlGate gate, FeatureGates? gates = null)
     {
+        _gates = gates ?? FeatureGates.AllEnabled;
         _hub = hub;
         _presence = presence;
         _gate = gate;
@@ -69,12 +72,21 @@ public sealed class MiniHubHeartbeatWorker : BackgroundService
         {
             _hub.PollFirmwareVersion();
         }
-        if (!_rgbModeAsserted)
+        // A pillar that is off keeps its mode unasserted, so a later switch-on asserts it on the next tick.
+        if (!_gates.Lighting)
+        {
+            _rgbModeAsserted = false;
+        }
+        else if (!_rgbModeAsserted)
         {
             if (_hub.SetRgbControlMode(MiniHubProtocol.RgbModeSoftware))
                 _rgbModeAsserted = true;
         }
-        if (!_fanModeAsserted)
+        if (!_gates.Cooling)
+        {
+            _fanModeAsserted = false;
+        }
+        else if (!_fanModeAsserted)
         {
             // Respect a user-pinned mode: if the user picked Motherboard (BIOS)
             // via PUT /devices/minihub/cooling-mode, re-asserting Software here

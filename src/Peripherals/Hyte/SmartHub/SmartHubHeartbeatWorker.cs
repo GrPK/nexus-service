@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Nexus.Service.Cooling;
 using Nexus.Service.Devices;
 using Nexus.Service.Devices.Detection;
+using Nexus.Service.Lifecycle;
 using Nexus.Service.Persistence;
 using Nexus.Service.Platform;
 
@@ -43,13 +44,15 @@ public sealed class SmartHubHeartbeatWorker : BackgroundService
     private readonly IConfigStore _config;
     private readonly SmartHubCoolingProvider _cooling;
     private readonly DeviceControlGate _gate;
+    private readonly FeatureGates _gates;
     private bool _animationEnabledAsserted;
     private bool _initialDutyAsserted;
     private int _tickCount;
     private const int TraceEveryNTicks = 15; // every ~30 s with the 2 s timer
 
-    public SmartHubHeartbeatWorker(SmartHubHub hub, HardwarePresence presence, IConfigStore config, SmartHubCoolingProvider cooling, DeviceControlGate gate)
+    public SmartHubHeartbeatWorker(SmartHubHub hub, HardwarePresence presence, IConfigStore config, SmartHubCoolingProvider cooling, DeviceControlGate gate, FeatureGates? gates = null)
     {
+        _gates = gates ?? FeatureGates.AllEnabled;
         _hub = hub;
         _presence = presence;
         _config = config;
@@ -97,7 +100,7 @@ public sealed class SmartHubHeartbeatWorker : BackgroundService
         // write is a flash erase + program on the hub whatever the byte, so a
         // hub only ever takes it once. Older nexus builds left this OFF, which
         // is why a hub that has seen one of them never falls back on its own.
-        if (!_animationEnabledAsserted && _hub.ReadFirmwareAnimation(out var animationOn))
+        if (!_animationEnabledAsserted && _gates.Lighting && _hub.ReadFirmwareAnimation(out var animationOn))
         {
             if (animationOn)
             {
@@ -110,7 +113,12 @@ public sealed class SmartHubHeartbeatWorker : BackgroundService
             }
         }
 
-        if (!_initialDutyAsserted)
+        // Cooling off: no duty writes, so the hub's 5 s watchdog expires and
+        // it runs its own flash-default duty. Re-armed so a later switch-on
+        // restores the saved speeds.
+        if (!_gates.Cooling)
+            _initialDutyAsserted = false;
+        else if (!_initialDutyAsserted)
             _initialDutyAsserted = ApplyInitialDuty();
         else
             ReassertDuty();

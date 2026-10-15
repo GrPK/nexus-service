@@ -18,7 +18,8 @@ namespace Nexus.Service.Conflicts;
 /// <see cref="SweepAllowed"/>).
 ///
 /// Windows' own Dynamic Lighting rides along under the same switch: it is the
-/// one conflict that cannot be ended, only turned off.
+/// one conflict that cannot be ended, only turned off, and only while the
+/// Lighting pillar is on.
 ///
 /// Driven off the watcher's detected set rather than walking the whole
 /// catalog: the watcher already filters out our own bundled OpenRGB child by
@@ -58,6 +59,7 @@ public sealed class ConflictStartupShutdown : IHostedService
     private readonly Action<ConflictAppDefinition> _kill;
     private readonly Func<ConflictAppDefinition, bool> _stillRunning;
     private readonly Func<long> _clockMs;
+    private readonly Nexus.Service.Lifecycle.FeatureGates _gates;
     private readonly CancellationTokenSource _stopping = new();
 
     // id:pid pairs already ended (or tried) and still detected, so a kill that
@@ -72,8 +74,9 @@ public sealed class ConflictStartupShutdown : IHostedService
     private volatile bool _sweepWindow;
     private int _watching;
 
-    public ConflictStartupShutdown(IConfigStore store, IConflictDetector watcher, ILogger<ConflictStartupShutdown> log)
-        : this(store, watcher, log, def => ConflictKiller.Kill(def), ConflictKiller.AnyProcessRunning)
+    public ConflictStartupShutdown(
+        IConfigStore store, IConflictDetector watcher, ILogger<ConflictStartupShutdown> log, Nexus.Service.Lifecycle.FeatureGates? gates = null)
+        : this(store, watcher, log, def => ConflictKiller.Kill(def), ConflictKiller.AnyProcessRunning, null, gates)
     {
     }
 
@@ -83,8 +86,10 @@ public sealed class ConflictStartupShutdown : IHostedService
         ILogger<ConflictStartupShutdown> log,
         Action<ConflictAppDefinition> kill,
         Func<ConflictAppDefinition, bool> stillRunning,
-        Func<long>? clockMs = null)
+        Func<long>? clockMs = null,
+        Nexus.Service.Lifecycle.FeatureGates? gates = null)
     {
+        _gates = gates ?? Nexus.Service.Lifecycle.FeatureGates.AllEnabled;
         _store = store;
         _watcher = watcher;
         _log = log;
@@ -136,7 +141,7 @@ public sealed class ConflictStartupShutdown : IHostedService
             try
             {
                 var sweep = _sweepWindow && SweepAllowed(_store.Load());
-                if (sweep) TurnOffWindowsDynamicLighting();
+                if (sweep && _gates.Lighting) TurnOffWindowsDynamicLighting();
                 EndRunningApps(sweep);
             }
             catch (Exception ex) { _log.LogWarning(ex, "Startup conflict shutdown swept nothing; enumeration failed."); }

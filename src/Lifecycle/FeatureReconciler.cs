@@ -88,13 +88,16 @@ public sealed class FeatureReconciler
         }
     }
 
+    /// <summary>The effective flags, matching <see cref="FeatureGates"/>: Lighting and Cooling read off until the features onboarding step completes.</summary>
     private FeaturesSettings SnapshotFeatures()
     {
-        var f = _store.Load().Features;
+        var settings = _store.Load();
+        var f = settings.Features;
+        var decided = settings.FeaturesOnboardingCompleted;
         return new FeaturesSettings
         {
-            Lighting = f.Lighting,
-            Cooling = f.Cooling,
+            Lighting = f.Lighting && decided,
+            Cooling = f.Cooling && decided,
             Monitoring = f.Monitoring,
             Diagnostics = f.Diagnostics,
         };

@@ -61,9 +61,10 @@ internal static partial class OnboardingRoutes
             return Results.Ok(Status(store));
         }).LocalhostOnly();
 
-        app.MapPost("/onboarding/features-complete", (IConfigStore store) =>
+        app.MapPost("/onboarding/features-complete", (IConfigStore store, Nexus.Service.Lifecycle.FeatureReconciler reconciler) =>
         {
-            store.Update(s => s.FeaturesOnboardingCompleted = true);
+            // Through the reconciler: the chosen pillars switch on here, so the transition side effects must run.
+            reconciler.ApplyPatch(s => s.FeaturesOnboardingCompleted = true);
             return Results.Ok(Status(store));
         }).LocalhostOnly();
 
