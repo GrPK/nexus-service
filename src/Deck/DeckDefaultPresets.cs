@@ -56,7 +56,7 @@ public static class DeckDefaultPresets
         return (cols, rows, ConfigOf(keys, cols * rows));
     }
 
-    /// <summary>The seeded Essentials preset if the user still has it, wherever it sits in the list; what a new deck joins first.</summary>
+    /// <summary>The seeded Essentials preset if the user still has it, wherever it sits in the list; what a new deck widget joins first.</summary>
     public static DeckPreset? FindEssentials(List<DeckPreset> presets) =>
         presets.Find(p => p.TemplateId == EssentialsId);
 

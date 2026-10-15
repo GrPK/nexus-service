@@ -266,6 +266,9 @@ public sealed class SystemActions
         }
     }
 
+    private readonly object _macCaptureLock = new();
+    private Process? _macCapture;
+
     /// <summary>
     /// Opens the OS capture UI for the deck Screen Shot / Screen Record keys.
     /// Windows hands the Snipping Tool capture or record overlay URI to the
@@ -273,9 +276,6 @@ public sealed class SystemActions
     /// opens the Screenshot toolbar for a recording; Linux tries the common
     /// capture tools for a still and has no recorder to open.
     /// </summary>
-    private readonly object _macCaptureLock = new();
-    private Process? _macCapture;
-
     public async Task<ApiResponse> OpenScreenCaptureAsync(bool record)
     {
         if (OperatingSystem.IsWindows())
@@ -302,6 +302,7 @@ public sealed class SystemActions
                     var psi = new ProcessStartInfo("/usr/sbin/screencapture") { UseShellExecute = false };
                     psi.ArgumentList.Add("-i");
                     psi.ArgumentList.Add(MacScreenshotPath());
+                    _macCapture?.Dispose();
                     _macCapture = Process.Start(psi);
                 }
                 return ApiResponse.Ok("opened");
