@@ -6,7 +6,7 @@ using Nexus.Service.Lighting.Engine.Effects;
 
 namespace Nexus.Service.Lighting.Engine;
 
-public sealed class LightingEngine : IDisposable
+public sealed partial class LightingEngine : IDisposable
 {
     private readonly CanvasBuffer _canvas;
     private readonly CanvasBuffer _aheadCanvas;
