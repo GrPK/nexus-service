@@ -70,6 +70,23 @@ public sealed class MultiplexHubDesktopOnlyTopicsTests
     }
 
     [Fact]
+    public async Task A_smart_poll_ping_subscriber_is_not_a_live_smart_consumer()
+    {
+        Nexus.Service.Sensors.SmartLiveConsumers.Forget();
+        var hub = new MultiplexHub();
+        using var cts = new CancellationTokenSource();
+        var settings = new ScriptedWebSocket("{\"sub\":[\"" + PanelTopics.SmartPoll + "\"]}");
+
+        var loop = hub.HandleClientAsync(settings, "sess-settings", MultiplexHub.ClientTransport.Lan, cts.Token);
+        await WaitUntilAsync(() => hub.TopicHasSubscribers(PanelTopics.SmartPoll), TimeSpan.FromSeconds(5), "the subscription never registered");
+
+        Assert.False(Nexus.Service.Sensors.SmartLiveConsumers.Any(hub));
+
+        settings.Unblock();
+        await loop;
+    }
+
+    [Fact]
     public async Task Desktop_socket_can_subscribe_to_the_pair_request_topic()
     {
         var hub = new MultiplexHub();

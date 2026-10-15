@@ -168,12 +168,15 @@ public class SmartPollDemandTests
     }
 
     [Fact]
-    public void TheSmartPollTopicIsNotALiveConsumerTopic()
+    public void AColdNoteRead_IsReportedOnce_AndAWarmOneIsNot()
     {
-        var hub = new Nexus.Service.Sockets.MultiplexHub();
         SmartLiveConsumers.Forget();
 
-        Assert.False(SmartLiveConsumers.Any(hub));
-        Assert.Equal("smart-poll", Nexus.Service.Sockets.PanelTopics.SmartPoll);
+        Assert.True(SmartLiveConsumers.NoteRead());
+        Assert.True(SmartLiveConsumers.TakeColdStart());
+        Assert.False(SmartLiveConsumers.TakeColdStart());
+        Assert.False(SmartLiveConsumers.NoteRead());
+        Assert.False(SmartLiveConsumers.TakeColdStart());
+        SmartLiveConsumers.Forget();
     }
 }

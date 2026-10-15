@@ -646,6 +646,7 @@ public sealed class OnboardingReplayPendingTests : IClassFixture<NexusAppFactory
     }
 }
 
+[Collection("SmartLiveConsumers")]
 public sealed class SmartPollActiveRouteTests : IClassFixture<NexusAppFactory>
 {
     private readonly NexusAppFactory _factory;
@@ -662,6 +663,8 @@ public sealed class SmartPollActiveRouteTests : IClassFixture<NexusAppFactory>
             "Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
 
         store.Update(s => { s.Features.Monitoring = false; s.Features.Diagnostics = false; s.Features.Cooling = false; });
+        Nexus.Service.Sensors.SmartLiveConsumers.Forget();
+        Assert.Contains("\"active\":false", await client.GetStringAsync("/monitoring/smart-poll"));
         store.Update(s => s.Features.Diagnostics = true);
         Assert.Contains("\"active\":true", await client.GetStringAsync("/monitoring/smart-poll"));
     }

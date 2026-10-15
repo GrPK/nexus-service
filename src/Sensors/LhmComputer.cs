@@ -219,6 +219,9 @@ public sealed class LhmComputer : IDisposable
     {
         if (!_openTask.IsCompletedSuccessfully) return;
 
+        // First poll-style read after reads had stopped: the cached drive values are from before that, so walk now.
+        if (refresh == SensorRefresh.Normal && SmartLiveConsumers.TakeColdStart()) refresh = SensorRefresh.Force;
+
         var floorMs = refresh == SensorRefresh.Fast ? FastFloorMs : NormalFloorMs;
         if (refresh != SensorRefresh.Force && Environment.TickCount64 - Interlocked.Read(ref _lastUpdateTicks) < floorMs)
         {

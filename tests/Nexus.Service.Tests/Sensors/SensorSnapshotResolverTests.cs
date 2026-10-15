@@ -9,6 +9,7 @@ using Xunit;
 
 namespace Nexus.Service.Tests.Sensors;
 
+[Collection("SmartLiveConsumers")]
 public class SensorSnapshotResolverTests
 {
     private sealed class StubSensors : ISensorProvider

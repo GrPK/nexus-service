@@ -77,17 +77,30 @@ internal static class SmartLiveConsumers
     // The smart-poll ping topic is deliberately absent: the Settings page's own subscription must not keep the reads alive.
     private static readonly string[] Topics = { "monitoring", "storage" };
 
-    // Poll-style readers leave no subscription, so a read keeps the demand alive for a while. The window
-    // must outlast the slowest of them: the Deck monitoring tiles tick once a second (StreamDeckConnectionWorker.TickMs),
-    // the dials every quarter second (FeedbackMs) and the Tryx heartbeat once a second. MCP and the diagnostics
-    // refresh are one-shot calls whose own walk follows the note.
+    // Poll-style readers (Deck tiles and dials, MCP, the diagnostics refresh) leave no subscription; the window outlasts their poll cadence.
+    private static int _cold;
     private const long ReaderWindowMs = 15_000;
     private static long _lastReadMs = long.MinValue / 2;
 
     /// <summary>Called by poll-style readers of SMART sensors.</summary>
-    public static void NoteRead() => Volatile.Write(ref _lastReadMs, Environment.TickCount64);
+    /// <summary>Returns true when the window was closed, i.e. drive values may be from before reads stopped.</summary>
+    public static bool NoteRead()
+    {
+        var now = Environment.TickCount64;
+        var wasCold = now - Volatile.Read(ref _lastReadMs) >= ReaderWindowMs;
+        Volatile.Write(ref _lastReadMs, now);
+        if (wasCold) Volatile.Write(ref _cold, 1);
+        return wasCold;
+    }
 
-    internal static void Forget() => Volatile.Write(ref _lastReadMs, long.MinValue / 2);
+    /// <summary>True once after a cold <see cref="NoteRead"/>; the sensor walk then bypasses its rate floor so the first read is fresh.</summary>
+    public static bool TakeColdStart() => Interlocked.Exchange(ref _cold, 0) == 1;
+
+    internal static void Forget()
+    {
+        Volatile.Write(ref _lastReadMs, long.MinValue / 2);
+        Volatile.Write(ref _cold, 0);
+    }
 
     public static bool Any(Nexus.Service.Sockets.MultiplexHub? hub)
     {

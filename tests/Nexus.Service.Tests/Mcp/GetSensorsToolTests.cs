@@ -15,6 +15,7 @@ namespace Nexus.Service.Tests.Mcp;
 /// HistoryIdMappingTests for the mapping's own per-family coverage), and stay
 /// null for every sensor with no history-tracked equivalent.
 /// </summary>
+[Collection("SmartLiveConsumers")]
 public sealed class GetSensorsToolTests
 {
     private static async Task<JsonElement> RunAsync(McpTestHarness.StubSensorProvider sensors, string device, string? drive = null)
