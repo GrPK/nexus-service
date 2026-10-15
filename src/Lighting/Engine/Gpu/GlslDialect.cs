@@ -44,7 +44,7 @@ internal static class GlslDialect
         @"\b(?:int|uint|ivec[234]|uvec[234]|for|while|switch|case|layout|const\s+int)\b|%|<<|>>",
         RegexOptions.CultureInvariant);
 
-    private static readonly Regex IntLiteral = new(@"(?<![\w.])\d+(?![\w.])", RegexOptions.CultureInvariant);
+    private static readonly Regex IntLiteral = new(@"(?<![\w.])(?<![\d.][eE][+-])\d+(?![\w.])", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// A conservative rewrite of integer literals to floats (<c>pow(x, 2)</c>,
@@ -87,21 +87,31 @@ internal static class GlslDialect
     }
 
     private static readonly Regex EsUnsupported = new(
-        @"\b(?:sampler1D\w*|sampler2DRect\w*|sampler2DMS\w*|texture1D\w*|texture2D|gl_FragColor|gl_FragData|double|dvec[234]|dmat\w+|fma|bitCount|bitfieldExtract|bitfieldInsert|bitfieldReverse|findLSB|findMSB|noise[1-4]|gl_ClipDistance|imageLoad|imageStore|subroutine)\b|#\s*extension\b",
+        @"\b(?:sampler1D\w*|sampler2DRect\w*|sampler2DMS\w*|texture1D\w*|texture2D|gl_FragColor|gl_FragData|double|dvec[234]|dmat\w+|bitCount|bitfieldExtract|bitfieldInsert|bitfieldReverse|findLSB|findMSB|noise[1-4]|gl_ClipDistance|imageLoad|imageStore|subroutine)\b|#\s*extension\b",
         RegexOptions.CultureInvariant);
 
-    /// <summary>The first desktop-only construct in a user-authored source that an ES 3.00 context cannot compile, or null. Checked wherever user effects are validated so every platform refuses what Windows cannot run.</summary>
+    private static readonly Regex BlockComment = new(@"/\*.*?\*/", RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex FmaCall = new(@"\bfma\s*\(", RegexOptions.CultureInvariant);
+    private static readonly Regex FmaDefinition = new(
+        @"\b(?:float|vec[234]|int|uint|bool|void)\s+fma\s*\(", RegexOptions.CultureInvariant);
+
+    /// <summary>The first desktop-only construct in a user-authored source that an ES 3.00 context cannot compile, or null. Checked wherever user effects are validated so every platform refuses what Windows cannot run. Comments are ignored, and a source that defines its own fma() is fine.</summary>
     public static string? EsIncompatibility(string source)
     {
         var sb = new System.Text.StringBuilder(source.Length);
-        foreach (var line in source.Split('\n'))
+        foreach (var line in BlockComment.Replace(source, " ").Split('\n'))
         {
             var c = line.IndexOf("//", StringComparison.Ordinal);
             sb.Append(c >= 0 ? line[..c] : line).Append('\n');
         }
-        var m = EsUnsupported.Match(sb.ToString());
-        return m.Success
-            ? $"'{m.Value}' is not available in OpenGL ES 3.00, which the lighting renderer uses on Windows"
+        var code = sb.ToString();
+        var m = EsUnsupported.Match(code);
+        if (m.Success)
+        {
+            return $"'{m.Value}' is not available in OpenGL ES 3.00, which the lighting renderer uses on Windows";
+        }
+        return FmaCall.IsMatch(code) && !FmaDefinition.IsMatch(code)
+            ? "'fma' is not available in OpenGL ES 3.00, which the lighting renderer uses on Windows"
             : null;
     }
 }

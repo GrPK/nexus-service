@@ -110,4 +110,34 @@ public class GlslDialectTests
     {
         Assert.Null(GlslDialect.EsIncompatibility("#version 330 core\n" + body + "\n"));
     }
+
+    [Theory]
+    [InlineData("float e = 1e-3;")]
+    [InlineData("float e = 2.5E+4 * 1.0e-2;")]
+    public void Exponents_are_not_rewritten(string line)
+    {
+        Assert.Equal(line, GlslDialect.FixIntLiteralsForEs(line));
+    }
+
+    [Fact]
+    public void Literal_after_a_minus_that_follows_an_identifier_is_still_widened()
+    {
+        Assert.Equal("float a = size - 2.0;", GlslDialect.FixIntLiteralsForEs("float a = size - 2;"));
+    }
+
+    [Theory]
+    [InlineData("/* texture2D(t, uv) and gl_FragColor */ float v = 1.0;")]
+    [InlineData("/* multi\nline fma(a, b, c)\n*/ float v = 1.0;")]
+    [InlineData("float fma(float a, float b, float c) { return a * b + c; }\nfloat v = fma(1.0, 2.0, 3.0);")]
+    [InlineData("vec3 fma(vec3 a, vec3 b, vec3 c) { return a * b + c; }")]
+    public void Comments_and_a_user_defined_fma_are_accepted(string body)
+    {
+        Assert.Null(GlslDialect.EsIncompatibility("#version 330 core\n" + body + "\n"));
+    }
+
+    [Fact]
+    public void Calling_the_builtin_fma_is_refused()
+    {
+        Assert.NotNull(GlslDialect.EsIncompatibility("#version 330 core\nfloat v = fma(1.0, 2.0, 3.0);\n"));
+    }
 }
