@@ -27,6 +27,32 @@ public class LightingDevicesCatalogTests
         Assert.Equal("0x0300", hyteKeeb.ProductId);
     }
 
+    [Theory]
+    // PIDs the extractor must resolve from sibling headers, not the detector file.
+    [InlineData("Corsair K70 RGB PRO", "0x1B1C", "0x1BC4")]
+    [InlineData("Corsair K70 Core RGB", "0x1B1C", "0x1BFD")]
+    public void Catalog_OpenRgbRowsKeepPidsDefinedInHeaders(string name, string vid, string pid)
+    {
+        var device = LightingDevicesCatalog.All.SingleOrDefault(
+            d => d.Source == "openrgb" && d.Vendor + " " + d.Model == name);
+
+        Assert.NotNull(device);
+        Assert.Equal(vid, device!.VendorId);
+        Assert.Equal(pid, device.ProductId);
+    }
+
+    [Fact]
+    public void Catalog_OpenRgbRowsMostlyCarryUsbIds()
+    {
+        // Only i2c/SMBus, generic and dynamic detectors (plus a few wildcard HID
+        // registrations) have no USB PID. A regression in the extractor's macro
+        // resolution shows up as hundreds of extra keyless rows.
+        var openRgb = LightingDevicesCatalog.All.Where(d => d.Source == "openrgb").ToList();
+        var withPid = openRgb.Count(d => d.ProductId != "-");
+
+        Assert.True(withPid > 1000, $"expected >1000 OpenRGB rows with a USB PID, got {withPid} of {openRgb.Count}");
+    }
+
     [Fact]
     public void Catalog_AssignsSensibleCategories()
     {

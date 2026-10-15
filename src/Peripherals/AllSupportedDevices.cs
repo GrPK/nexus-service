@@ -57,6 +57,12 @@ public static class AllSupportedDevices
             }
             if (byVidPid.TryGetValue(key, out var existing))
             {
+                // Distinct OpenRGB products can share one USB id; only fold into a native row.
+                if (existing.Source == "openrgb" && d.Source == "openrgb")
+                {
+                    result.Add(Clone(d));
+                    continue;
+                }
                 foreach (var cap in d.Capabilities)
                 {
                     if (!existing.Capabilities.Contains(cap))
