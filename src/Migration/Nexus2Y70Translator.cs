@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text.Json;
+using Nexus.Service.Deck;
 using Nexus.Service.Models.Panel;
 using Nexus.Service.Panel;
 
@@ -29,7 +32,7 @@ internal static class Nexus2Y70Translator
         ["lighting"] = "lighting",
     };
 
-    public static Nexus2Y70LayoutResult TranslateLayout(JsonElement y70)
+    public static Nexus2Y70LayoutResult TranslateLayout(JsonElement y70, Func<string, bool>? fileExists = null)
     {
         var result = new Nexus2Y70LayoutResult();
         var pagesEl = Nexus2Json.GetArray(y70, "pages");
@@ -74,6 +77,19 @@ internal static class Nexus2Y70Translator
             }
         }
 
+        // The dock goes in after every other widget so none of them moves for it.
+        if (TranslateDock(y70, fileExists ?? File.Exists) is { } dock)
+        {
+            var deck = new PanelWidgetDto { Id = Guid.NewGuid().ToString(), Type = "deck", Size = DockSize };
+            // Bottom row of page 1; when a widget holds it the strip follows the normal first-free-cell scan.
+            if (Y70LayoutPlacement.TryPlaceAt(pages, deck, DockSize, 0, Y70LayoutPlacement.GridRows - 1)
+                || Y70LayoutPlacement.Append(pages, deck, DockSize))
+            {
+                dock.WidgetId = deck.Id;
+                result.Dock = dock;
+            }
+        }
+
         if (pages.Count > 0)
         {
             result.Layout = new PanelLayoutDto
@@ -84,6 +100,154 @@ internal static class Nexus2Y70Translator
             };
         }
         return result;
+    }
+
+    private const string DockSize = "4x1";
+    private const int DockKeysPerRow = 4;
+
+    /// <summary>Nexus 2's Y70 dock as deck key pages (4 keys each). Null when the dock is hidden, empty, or
+    /// holds nothing that maps to a Nexus 3 key action: an all-empty deck would carry nothing over.</summary>
+    internal static Nexus2DockDeck? TranslateDock(JsonElement y70, Func<string, bool> fileExists)
+    {
+        if (Nexus2Json.GetBool(y70, "hideDock", false) || Nexus2Json.GetArray(y70, "dock") is not { } dockEl)
+        {
+            return null;
+        }
+        var items = dockEl.EnumerateArray()
+            .Select((item, index) => (item, index))
+            .OrderBy(t => Nexus2Json.GetDouble(t.item, "positionHorizontal") ?? Nexus2Json.GetDouble(t.item, "position") ?? t.index)
+            .ThenBy(t => t.index)
+            .Select(t => t.item)
+            .ToList();
+        var slots = items.Select(item => DockItemToSlot(item, fileExists)).ToList();
+        var mapped = slots.Count(s => s.Action is not null);
+        if (mapped == 0)
+        {
+            return null;
+        }
+        // One authored page of 4 columns: a dock past four keys makes the preset larger than the 4x1 widget, so
+        // DeckConfigNavigation.FitToGrid pages it and adds the next/prev keys that reach the later keys.
+        var rows = (slots.Count + DockKeysPerRow - 1) / DockKeysPerRow;
+        while (slots.Count < rows * DockKeysPerRow)
+        {
+            slots.Add(new DeckSlot());
+        }
+        var config = new DeckConfig { Pages = { new DeckPage { Slots = slots } } };
+        return new Nexus2DockDeck { Config = config, Rows = rows, Items = items.Count, MappedItems = mapped };
+    }
+
+    /// <summary>One dock item as a deck key: a macros item whose macro has a Nexus 3 key action keeps it (and its title);
+    /// every other item (a dock widget, a keystroke recording that is not one key press, a missing audio clip) is an empty key.</summary>
+    private static DeckSlot DockItemToSlot(JsonElement item, Func<string, bool> fileExists)
+    {
+        var action = Nexus2Json.GetString(item, "type") == "macros" && Nexus2Json.GetObject(item, "macro") is { } macro
+            ? DockMacroToAction(macro, fileExists)
+            : null;
+        if (action is null)
+        {
+            return new DeckSlot();
+        }
+        var title = Nexus2Json.GetObject(item, "title") is { } t ? Nexus2Json.GetString(t, "value") : null;
+        return new DeckSlot { Action = action, Label = string.IsNullOrWhiteSpace(title) ? null : title };
+    }
+
+    /// <summary>A Windows path on a local drive ("C:\\..."); judged by text so it reads the same on any host.</summary>
+    private static bool IsDriveLetterPath(string path) =>
+        path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] is '\\' or '/';
+
+    private static DeckAction? DockMacroToAction(JsonElement macro, Func<string, bool> fileExists)
+    {
+        switch (Nexus2Json.GetString(macro, "type"))
+        {
+            case "shortcut":
+                // launchApp resolves a Start-menu id (a Store app's AUMID has a '!'); an exe path has no entry
+                // there, so it opens as a file.
+                if (Nexus2Json.GetString(macro, "targetId") is not { Length: > 0 } target)
+                {
+                    return null;
+                }
+                return IsDriveLetterPath(target) && !target.Contains('!')
+                    ? new DeckAction { Type = "openFile", Path = target }
+                    : new DeckAction { Type = "launchApp", AppId = target };
+            case "website":
+                return Nexus2Json.GetString(macro, "url")?.Trim() is { Length: > 0 } url && (url.Contains("://") || !url.Contains(':'))
+                    ? new DeckAction { Type = "openUrl", Url = url.Contains("://") ? url : "https://" + url }
+                    : null;
+            case "audio":
+                return Nexus2Json.GetString(macro, "clipPath") is { Length: > 0 } clip && fileExists(clip)
+                    ? new DeckAction
+                    {
+                        Type = "playAudio",
+                        Path = clip,
+                        Volume = Nexus2Json.GetDouble(macro, "volume") is { } v ? (int)Math.Clamp(Math.Round(v), 0, 100) : null,
+                    }
+                    : null;
+            case "recording":
+                return RecordingToHotkey(macro) is { } keys ? new DeckAction { Type = "hotkey", Keys = keys } : null;
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>A recording of one key press (down then up, modifiers held) as a deck hotkey combo; anything longer has no key equivalent.</summary>
+    private static string? RecordingToHotkey(JsonElement macro)
+    {
+        if (Nexus2Json.GetArray(macro, "strokes") is not { } strokes || strokes.GetArrayLength() != 2)
+        {
+            return null;
+        }
+        var down = strokes[0];
+        var up = strokes[1];
+        var code = Nexus2Json.GetString(down, "key");
+        if (code is null || Nexus2Json.GetString(down, "type") != "keydown"
+            || Nexus2Json.GetString(up, "type") != "keyup" || Nexus2Json.GetString(up, "key") != code
+            || HotkeyToken(code) is not { } token)
+        {
+            return null;
+        }
+        var parts = new List<string>();
+        if (Nexus2Json.GetBool(down, "ctrl", false)) { parts.Add("ctrl"); }
+        if (Nexus2Json.GetBool(down, "shift", false)) { parts.Add("shift"); }
+        if (Nexus2Json.GetBool(down, "alt", false)) { parts.Add("alt"); }
+        if (Nexus2Json.GetBool(down, "meta", false)) { parts.Add("meta"); }
+        parts.Add(token);
+        return string.Join('+', parts);
+    }
+
+    /// <summary>A KeyboardEvent.code as the token DeckActionExecutor.ParseHotkey reads; null for codes without one.</summary>
+    private static string? HotkeyToken(string code)
+    {
+        if (code.Length == 4 && code.StartsWith("Key", StringComparison.Ordinal) && code[3] is >= 'A' and <= 'Z')
+        {
+            return char.ToLowerInvariant(code[3]).ToString();
+        }
+        if (code.Length == 6 && code.StartsWith("Digit", StringComparison.Ordinal) && code[5] is >= '0' and <= '9')
+        {
+            return code[5].ToString();
+        }
+        if (code.Length is 2 or 3 && code[0] == 'F' && int.TryParse(code.AsSpan(1), out var fn) && fn is >= 1 and <= 24)
+        {
+            return "f" + fn;
+        }
+        return code switch
+        {
+            "Space" => "space",
+            "Enter" => "enter",
+            "Tab" => "tab",
+            "Escape" => "escape",
+            "Backspace" => "backspace",
+            "Delete" => "delete",
+            "Insert" => "insert",
+            "Home" => "home",
+            "End" => "end",
+            "PageUp" => "pageup",
+            "PageDown" => "pagedown",
+            "ArrowUp" => "up",
+            "ArrowDown" => "down",
+            "ArrowLeft" => "left",
+            "ArrowRight" => "right",
+            _ => null,
+        };
     }
 
     // Nexus 2's isValidVideo / isValidImage: a bg with one of these is a file, anything else is CSS.

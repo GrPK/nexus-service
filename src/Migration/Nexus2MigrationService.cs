@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
+using Nexus.Service.Deck;
 using Nexus.Service.Gallery;
 using Nexus.Service.Media;
 using Nexus.Service.Models.Gallery;
@@ -798,9 +799,38 @@ public sealed class Nexus2MigrationService
             return new Nexus2ApplyResultDto { Id = id, Status = "needsConfirm", Detail = "layout-customized" };
         }
 
+        // The deck's preset and instance are stored before the layout names the widget, so the panel that mounts
+        // it never finds a missing instance and seeds a default one.
+        if (translated.Dock is { } dock)
+        {
+            StoreDockDeck(dock);
+        }
+
         return _panels.Patch(y70Record.Id, new PanelDevicePatch { Layout = translated.Layout }) is not null
             ? Applied(id)
             : Fail(id, "patch-failed");
+    }
+
+    /// <summary>Name of the deck preset holding the imported Nexus 2 dock; a re-import rewrites it rather than adding another.</summary>
+    internal const string DockPresetName = "Nexus 2 dock";
+
+    private void StoreDockDeck(Nexus2DockDeck dock)
+    {
+        _store.Update(s =>
+        {
+            var presets = s.StreamDeck.Presets;
+            var preset = presets.Find(p => string.Equals(p.Name, DockPresetName, StringComparison.Ordinal));
+            if (preset is null)
+            {
+                preset = new DeckPreset { Id = DeckModesMigration.NewPresetId(), Name = DockPresetName };
+                presets.Add(preset);
+            }
+            preset.Cols = 4;
+            preset.Rows = dock.Rows;
+            preset.Deck = dock.Config;
+            s.StreamDeck.Instances[DeckInstanceResolver.WidgetInstanceId(dock.WidgetId)] =
+                new DeckInstance { Mode = "custom", ActivePresetId = preset.Id };
+        });
     }
 
     private Nexus2ApplyResultDto ApplyQ60Face(JsonElement? q60Software, PanelDeviceRecord? q60Record, bool replaceCustomizedLayout)

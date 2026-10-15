@@ -56,6 +56,36 @@ internal static class Y70LayoutPlacement
         return true;
     }
 
+    /// <summary>Places <paramref name="widget"/> on the first page at the exact cell when its rect is inside the grid and clear of every widget there; false leaves the pages untouched.</summary>
+    public static bool TryPlaceAt(List<PanelPageDto> pages, PanelWidgetDto widget, string size, int col, int row)
+    {
+        var (colSpan, rowSpan) = SpanForSize(size);
+        if (col < 0 || row < 0 || col + colSpan > GridCols || row + rowSpan > GridRows)
+        {
+            return false;
+        }
+        var target = (col, row, colSpan, rowSpan);
+        if (pages.Count > 0)
+        {
+            foreach (var w in pages[0].Widgets)
+            {
+                var (ecs, ers) = SpanForSize(w.Size);
+                if (RectsOverlap((w.Col, w.Row, ecs > GridCols ? GridCols : ecs, ers), target))
+                {
+                    return false;
+                }
+            }
+        }
+        widget.Col = col;
+        widget.Row = row;
+        if (pages.Count == 0)
+        {
+            pages.Add(new PanelPageDto { Id = System.Guid.NewGuid().ToString() });
+        }
+        pages[0].Widgets.Add(widget);
+        return true;
+    }
+
     private static (int Col, int Row)? FirstFreeRect(List<PanelWidgetDto> existing, int colSpan, int rowSpan)
     {
         var cs = colSpan > GridCols ? GridCols : colSpan;
