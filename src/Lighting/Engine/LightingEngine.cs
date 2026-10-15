@@ -1131,8 +1131,8 @@ public sealed class LightingEngine : IDisposable
             {
                 return false;
             }
-            // A pinned device shows its own source, which a loop rendered from the active effect would miss.
-            if (Pins?.IsPinned(d.Id) == true && deviceIds.Contains(d.Id))
+            // Only a pin that is a pure function of time can be rendered ahead; mirror and media follow live input.
+            if (deviceIds.Contains(d.Id) && !PinRendersAhead(d.Id))
             {
                 return false;
             }
@@ -1145,12 +1145,35 @@ public sealed class LightingEngine : IDisposable
         return true;
     }
 
+    private bool PinRendersAhead(string id)
+    {
+        if (Pins is null || !Pins.TryGet(id, out var pin))
+        {
+            return true;
+        }
+        return pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Static
+            || (pin.Kind == Nexus.Service.Persistence.DevicePinKinds.Animate
+                && !string.IsNullOrEmpty(pin.Effect)
+                && !Gpu.ShaderLibrary.IsAudioEffect(pin.Effect));
+    }
+
+    // Order-independent digest of the pin set and every pinned look, so a pin edit or a look change restarts the settle window.
+    private int PinAheadSig()
+    {
+        var acc = Pins?.Version ?? 0;
+        foreach (var (key, r) in _pinRenders)
+        {
+            unchecked { acc += HashCode.Combine(key, r.Tag, r.Failed); }
+        }
+        return acc;
+    }
+
     private void TrackAheadParams(IEffect effect)
     {
         if (effect is not Gpu.ShaderEffect shader) return;
         var sig = HashCode.Combine(
             HashCode.Combine(shader.Speed, shader.Intensity, shader.Hue, shader.Colorize, shader.Saturation, shader.Contrast, shader.AudioBoost),
-            shader.ExtraParams, FullFrameSampling, shader);
+            shader.ExtraParams, FullFrameSampling, shader, PinAheadSig());
         if (sig == _aheadParamsSig) return;
         _aheadParamsSig = sig;
         Volatile.Write(ref _aheadParamsChangedMs, Environment.TickCount64);
@@ -1197,8 +1220,14 @@ public sealed class LightingEngine : IDisposable
             {
                 var shadow = req.NewShadowFrames();
                 effect.RenderFrame(_aheadCanvas, req.TickMs[req.NextFrame]);
+                if (!RenderAheadPins(effect, shadow, req.TickMs[req.NextFrame]))
+                {
+                    _aheadActive = null;
+                    req.Done.Set();
+                    continue;
+                }
                 _sampleCanvas = _aheadCanvas;
-                SampleDevicesFromCanvas(shadow, honorPins: false);
+                SampleDevicesFromCanvas(shadow, pinned: _aheadPinned, pinFullFrame: _aheadPinFullFrame);
                 ApplyLedColorLocks(shadow);
                 foreach (var d in shadow)
                 {
@@ -1226,12 +1255,72 @@ public sealed class LightingEngine : IDisposable
         }
     }
 
-    private void SampleDevicesFromCanvas(DeviceFrame[] devices, bool honorPins = true)
+    private readonly Dictionary<string, CanvasBuffer?> _aheadPinned = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _aheadPinFullFrame = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CanvasBuffer> _aheadPinCanvases = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _aheadPinRendered = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Renders each animate-pinned source the chain uses at <paramref name="tickMs"/> onto its own scratch
+    /// canvas and records which canvas each shadow device samples, as <see cref="RenderPins"/> does live.
+    /// False when a pinned source is not a live, audio-free shader, so the request is dropped. Engine thread.
+    /// </summary>
+    private bool RenderAheadPins(IEffect active, DeviceFrame[] shadow, long tickMs)
+    {
+        _aheadPinned.Clear();
+        _aheadPinFullFrame.Clear();
+        _aheadPinRendered.Clear();
+        var tracker = Pins;
+        if (tracker is null || !tracker.Any)
+        {
+            return true;
+        }
+        var pins = tracker.Snapshot();
+        foreach (var dev in shadow)
+        {
+            if (!pins.TryGetValue(dev.Id, out var pin)
+                || pin.Kind != Nexus.Service.Persistence.DevicePinKinds.Animate
+                || string.IsNullOrEmpty(pin.Effect))
+            {
+                continue;
+            }
+            var key = pin.Effect;
+            var sweep = Gpu.ShaderLibrary.IsSweepEffect(key);
+            if (string.Equals(active.Name, key, StringComparison.Ordinal))
+            {
+                _aheadPinned[dev.Id] = null;
+                if (sweep) _aheadPinFullFrame.Add(dev.Id);
+                continue;
+            }
+            if (!_pinRenders.TryGetValue(key, out var render) || render.Failed || !render.Rendered
+                || render.Effect is not Gpu.ShaderEffect { ReadsAudio: false } fx)
+            {
+                return false;
+            }
+            if (!_aheadPinCanvases.TryGetValue(key, out var canvas))
+            {
+                canvas = new CanvasBuffer(_canvas.Width, _canvas.Height);
+                _aheadPinCanvases[key] = canvas;
+            }
+            if (_aheadPinRendered.Add(key))
+            {
+                fx.RenderFrame(canvas, tickMs);
+            }
+            _aheadPinned[dev.Id] = canvas;
+            if (sweep) _aheadPinFullFrame.Add(dev.Id);
+        }
+        return true;
+    }
+
+    private void SampleDevicesFromCanvas(
+        DeviceFrame[] devices, bool honorPins = true,
+        Dictionary<string, CanvasBuffer?>? pinned = null, HashSet<string>? pinFullFrame = null)
     {
         var baseCanvas = _sampleCanvas;
         try
         {
-            SampleDevicesCore(devices, baseCanvas, honorPins && _pinnedDevices.Count > 0);
+            var pinMap = pinned ?? _pinnedDevices;
+            SampleDevicesCore(devices, baseCanvas, honorPins && pinMap.Count > 0, pinMap, pinFullFrame ?? _pinFullFrame);
         }
         finally
         {
@@ -1239,7 +1328,9 @@ public sealed class LightingEngine : IDisposable
         }
     }
 
-    private void SampleDevicesCore(DeviceFrame[] devices, CanvasBuffer baseCanvas, bool honorPins)
+    private void SampleDevicesCore(
+        DeviceFrame[] devices, CanvasBuffer baseCanvas, bool honorPins,
+        Dictionary<string, CanvasBuffer?> pinMap, HashSet<string> pinFullFrame)
     {
         var cw = _sampleCanvas.Width;
         var ch = _sampleCanvas.Height;
@@ -1257,7 +1348,7 @@ public sealed class LightingEngine : IDisposable
             // An animate or mirror pinned device samples its source's canvas, the main
             // one when it is pinned to what is running globally.
             CanvasBuffer? pinCanvas = null;
-            var onPinCanvas = honorPins && _pinnedDevices.TryGetValue(dev.Id, out pinCanvas) && pinCanvas is not null;
+            var onPinCanvas = honorPins && pinMap.TryGetValue(dev.Id, out pinCanvas) && pinCanvas is not null;
             _sampleCanvas = onPinCanvas ? pinCanvas! : baseCanvas;
             // Preview LED count from the editor's unsaved draft; clamped to the
             // physical buffer size because SetLed bounds-guards on LedCount.
@@ -1292,8 +1383,8 @@ public sealed class LightingEngine : IDisposable
             // A device on its own pin canvas follows that source alone: the
             // global sweep flag describes the main canvas, not this one.
             var fullFrame = onPinCanvas
-                ? _pinFullFrame.Contains(dev.Id)
-                : FullFrameSampling || (honorPins && _pinFullFrame.Contains(dev.Id));
+                ? pinFullFrame.Contains(dev.Id)
+                : FullFrameSampling || (honorPins && pinFullFrame.Contains(dev.Id));
             // A full-frame device's cell is a slice of the whole canvas, so it
             // takes the plain cell mean instead of the spot. See SampleLedBox.
             var rectX = fullFrame ? 0f : dev.X;
