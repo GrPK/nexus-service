@@ -38,7 +38,20 @@ public sealed class KrakenHandler : IDeviceHandler
             KrakenProtocol.ProductIds.Contains(d.ProductId));
     }
 
-    public bool DrivesDisplay => _hub.IsConnected && _hub.Model.HasLcd;
+    /// <summary>Decided from the USB product id, so it holds before the handshake and across a reconnect; the connected model answers only for an id the table does not know.</summary>
+    public bool DrivesDisplay(IReadOnlyList<UsbDeviceEntry> detectedDevices)
+    {
+        var known = false;
+        foreach (var d in detectedDevices)
+        {
+            if (d.VendorId != KrakenProtocol.VendorId) continue;
+            var model = KrakenModel.All.FirstOrDefault(m => m.ProductId == d.ProductId);
+            if (model is null) continue;
+            known = true;
+            if (model.HasLcd) return true;
+        }
+        return !known && _hub.IsConnected && _hub.Model.HasLcd;
+    }
 
     public string GetFirmwareVersion() => _hub.IsConnected ? _hub.Snapshot.FirmwareVersion : "";
 

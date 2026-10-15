@@ -56,12 +56,13 @@ public sealed class ConflictLaunchNotifier : BackgroundService
             return;
         }
 
-        // A pillar change reveals or hides apps that were running all along: re-seed rather than announce them as launches.
-        var running = _detector.GetConflicts(out var epoch);
+        // A filter change reveals apps that were running all along: seed those into the baseline rather than announce them,
+        // and leave every other app's launch to be announced as usual.
+        var running = _detector.GetConflicts(out var epoch, out var revealed);
         if (epoch != _filterEpoch)
         {
             _filterEpoch = epoch;
-            _tracker.Reset();
+            _tracker.Seed(revealed);
         }
 
         // Inside the kill window the startup shutdown ends the app and says so in its own notice.
@@ -92,6 +93,13 @@ internal sealed class ConflictLaunchTracker
 
     /// <summary>Drops the baseline; the next scan re-seeds it without reporting launches.</summary>
     public void Reset() => _present = null;
+
+    /// <summary>Marks apps as already present, so their first appearance in a scan is not a launch. No effect before the baseline is seeded.</summary>
+    public void Seed(IEnumerable<string> ids)
+    {
+        if (_present is null) return;
+        foreach (var id in ids) _present.Add(id);
+    }
 
     /// <summary>A <paramref name="silent"/> launch is tracked as present but neither returned nor counted against the cooldown, so the app's next launch is still announced.</summary>
     public List<DetectedConflict> Observe(IReadOnlyList<DetectedConflict> running, long nowMs, Func<DetectedConflict, bool>? silent = null)

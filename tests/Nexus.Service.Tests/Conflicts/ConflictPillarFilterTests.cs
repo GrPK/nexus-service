@@ -25,8 +25,6 @@ public class ConflictPillarFilterTests
     [InlineData("armoury-crate", true, false, true)]
     [InlineData("armoury-crate", false, true, true)]
     [InlineData("armoury-crate", false, false, false)]
-    [InlineData("asiahorse-umbra", false, true, true)]
-    [InlineData("asiahorse-umbra", false, false, false)]
     public void DualApp_IsIgnoredOnlyWhenBothPillarsAreOff(string id, bool lighting, bool cooling, bool competes)
     {
         Assert.Equal(competes, ConflictAppCatalog.Competes(App(id), lighting, cooling));
@@ -53,18 +51,45 @@ public class ConflictPillarFilterTests
     }
 
     [Theory]
-    [InlineData("icue", true, false, true)]
-    [InlineData("icue", false, true, true)]
-    [InlineData("lian-li-l-connect", true, false, true)]
-    [InlineData("lian-li-l-connect", false, true, true)]
-    [InlineData("nzxt-cam", false, true, true)]
-    [InlineData("nzxt-kraken", true, false, true)]
+    [InlineData("icue", "corsair")]
+    [InlineData("lian-li-l-connect", "lianli")]
+    [InlineData("lian-li-l-connect", "lianli-wireless")]
+    [InlineData("nzxt-cam", "nzxt-kraken")]
+    [InlineData("asiahorse-umbra", "asiahorse-umbra")]
+    public void ASecondaryPillarWithHandlers_CompetesOnlyWhileOneOfThemIsInUse(string id, string handler)
+    {
+        Assert.True(ConflictAppCatalog.Competes(App(id), true, false));
+        Assert.False(ConflictAppCatalog.Competes(App(id), false, true, null, h => false));
+        Assert.True(ConflictAppCatalog.Competes(App(id), false, true, null, h => h == handler));
+        Assert.False(ConflictAppCatalog.Competes(App(id), false, false, null, h => true));
+    }
+
+    [Fact]
+    public void NzxtKrakenLighting_CompetesWithCoolingOnlyWhileTheKrakenIsInUse()
+    {
+        Assert.True(ConflictAppCatalog.Competes(App("nzxt-kraken"), false, true));
+        Assert.False(ConflictAppCatalog.Competes(App("nzxt-kraken"), true, false, null, h => false));
+        Assert.True(ConflictAppCatalog.Competes(App("nzxt-kraken"), true, false, null, h => h == "nzxt-kraken"));
+    }
+
+    [Fact]
+    public void LConnectDisplayHandlers_IncludeTheWirelessLcdScreens()
+    {
+        Assert.Contains("lianli-wireless", App("lian-li-l-connect").DisplayHandlers);
+    }
+
+    [Theory]
+    [InlineData("armoury-crate", false, true, true)]
+    [InlineData("msi-center", false, true, true)]
+    [InlineData("msi-gaming-center", true, false, true)]
+    [InlineData("evga-aio", true, false, true)]
     [InlineData("thermaltake-rgb-plus", false, true, true)]
     [InlineData("cooler-master-plus", false, true, true)]
-    [InlineData("evga-aio", true, false, true)]
+    [InlineData("armoury-crate", false, false, false)]
+    [InlineData("evga-aio", false, false, false)]
     [InlineData("icue", false, false, false)]
     [InlineData("lian-li-l-connect", false, false, false)]
-    public void VendorAppsThatNexusDrivesOnBothPillars_CompeteOnEither(string id, bool lighting, bool cooling, bool competes)
+    public void PillarLevelDualApps_CompeteOnEitherPillar(string id, bool lighting, bool cooling, bool competes)
     {
         Assert.Equal(competes, ConflictAppCatalog.Competes(App(id), lighting, cooling));
     }

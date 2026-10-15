@@ -87,6 +87,58 @@ public class ConflictWatcherPillarTests
     }
 }
 
+public class ConflictHandlerFilterTests
+{
+    [Fact]
+    public void IcueWithLightingOff_IsListedOnlyWhileACorsairLinkHandlerIsInUse()
+    {
+        var inUse = false;
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Features.Lighting = false);
+        var processes = new Dictionary<string, List<(int Pid, string? Path)>>(System.StringComparer.OrdinalIgnoreCase)
+        {
+            ["iCUE"] = new() { (100, null) },
+        };
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes, h => inUse && h == "corsair")
+        {
+            DisplayCacheMs = 0,
+        };
+
+        Assert.Empty(watcher.GetConflicts());
+
+        inUse = true;
+
+        Assert.Single(watcher.GetConflicts());
+    }
+
+    [Fact]
+    public void ARevealedAppIsReportedAsAlreadyRunning_ButARealLaunchIsNot()
+    {
+        var inUse = false;
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Features.Lighting = false);
+        var processes = new Dictionary<string, List<(int Pid, string? Path)>>(System.StringComparer.OrdinalIgnoreCase)
+        {
+            ["iCUE"] = new() { (100, null) },
+        };
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes, h => inUse && h == "corsair")
+        {
+            DisplayCacheMs = 0,
+        };
+        watcher.GetConflicts();
+        watcher.PillarsChanged();
+
+        inUse = true;
+        processes["FanControl"] = new() { (200, null) };
+        watcher.PillarsChanged();
+        var list = watcher.GetConflicts(out _, out var revealed);
+
+        Assert.Contains("icue", revealed);
+        Assert.DoesNotContain("fan-control", revealed);
+        Assert.Equal(2, list.Count);
+    }
+}
+
 public class ConflictDisplayEpochTests
 {
     private static Dictionary<string, List<(int Pid, string? Path)>> Cam() =>

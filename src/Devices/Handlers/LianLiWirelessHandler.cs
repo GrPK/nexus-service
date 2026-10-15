@@ -12,10 +12,12 @@ namespace Nexus.Service.Devices.Handlers;
 public sealed class LianLiWirelessHandler : IDeviceHandler
 {
     private readonly Slv3Hub _hub;
+    private readonly Nexus.Service.Peripherals.LianLiWireless.Slv3LcdHub? _lcd;
 
-    public LianLiWirelessHandler(Slv3Hub hub)
+    public LianLiWirelessHandler(Slv3Hub hub, Nexus.Service.Peripherals.LianLiWireless.Slv3LcdHub? lcd = null)
     {
         _hub = hub;
+        _lcd = lcd;
         Identifiers = new[]
         {
             new UsbId(Slv3Protocol.TxVendorId, Slv3Protocol.TxProductId),
@@ -39,6 +41,9 @@ public sealed class LianLiWirelessHandler : IDeviceHandler
         return detectedDevices.Any(d =>
             Identifiers.Any(id => id.VendorId == d.VendorId && id.ProductId == d.ProductId));
     }
+
+    /// <summary>True only while a bound LCD fan is attached; a fan hub without screens drives no display.</summary>
+    public bool DrivesDisplay(IReadOnlyList<UsbDeviceEntry> detectedDevices) => _lcd is { Screens.Count: > 0 };
 
     public string GetFirmwareVersion() =>
         _hub.State.TxFirmwareVersion > 0 ? _hub.State.TxFirmwareVersion.ToString() : "";

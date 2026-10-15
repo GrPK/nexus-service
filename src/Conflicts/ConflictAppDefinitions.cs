@@ -55,6 +55,9 @@ public sealed class ConflictAppDefinition
     /// <summary>One of "lighting", "cooling", "peripherals", "monitoring" - drives the UI hint.</summary>
     public string Category { get; init; } = "";
 
+    /// <summary>Handler ids that carry <see cref="AlsoCategory"/> for this app. When non-empty, the app competes on that secondary pillar only while Nexus Control is on for one of them and its device is present; empty means the overlap is pillar-level (motherboard fans, generic RGB).</summary>
+    public string[] AlsoHandlers { get; init; } = Array.Empty<string>();
+
     /// <summary>A second pillar category ("lighting" or "cooling") the app also controls, when <see cref="Category"/> names only one. Empty for single-purpose apps.</summary>
     public string AlsoCategory { get; init; } = "";
 
@@ -125,6 +128,7 @@ public static class ConflictAppCatalog
             DisplayName = "NZXT CAM",
             Category = "lighting",
             AlsoCategory = "cooling",
+            AlsoHandlers = new[] { "nzxt-kraken" },
             DisplayHandlers = new[] { "nzxt-kraken" },
             ProcessNames = new[] { "NZXT CAM", "CAM", "NZXT CAM Beta", "NZXT CAM Service", "NZXTCAM" },
             // Stopped alongside the processes on End task. CAMService is NZXT's
@@ -148,6 +152,7 @@ public static class ConflictAppCatalog
             DisplayName = "NZXT Kraken",
             Category = "cooling",
             AlsoCategory = "lighting",
+            AlsoHandlers = new[] { "nzxt-kraken" },
             DisplayHandlers = new[] { "nzxt-kraken" },
             ProcessNames = new[] { "NZXT Kraken" },
         },
@@ -358,6 +363,7 @@ public static class ConflictAppCatalog
             DisplayName = "Corsair iCUE",
             Category = "lighting",
             AlsoCategory = "cooling",
+            AlsoHandlers = new[] { "corsair" },
             DisplayHandlers = new[] { "corsair-xc7-lcd", "corsair-capellix-lcd", "corsair-link-lcd" },
             ProcessNames = new[]
             {
@@ -438,7 +444,8 @@ public static class ConflictAppCatalog
             DisplayName = "Lian Li L-Connect",
             Category = "lighting",
             AlsoCategory = "cooling",
-            DisplayHandlers = new[] { "lianli-hydroshift-lcd", "lianli-galahad2-lcd", "lianli-screen88", "lianli-hydroshift2", "lianli-hydroshift2-curve", "lianli-tl-lcd" },
+            AlsoHandlers = new[] { "lianli", "lianli2", "lianli3", "lianli4", "lianli-tl", "lianli-wireless", "lianli-aio", "lianli-hydroshift2", "lianli-hydroshift2-curve" },
+            DisplayHandlers = new[] { "lianli-hydroshift-lcd", "lianli-galahad2-lcd", "lianli-screen88", "lianli-hydroshift2", "lianli-hydroshift2-curve", "lianli-tl-lcd", "lianli-wireless" },
             ProcessNames = new[] { "L-Connect 3", "L-Connect", "LConnect3", "LConnect" },
             // Watcher first so it cannot restart the main service.
             WindowsServiceNames = new[] { "LConnectServiceWatcher", "LConnectService" },
@@ -453,6 +460,7 @@ public static class ConflictAppCatalog
             DisplayName = "AsiaHorse UMBRA",
             Category = "lighting",
             AlsoCategory = "cooling",
+            AlsoHandlers = new[] { "asiahorse-umbra" },
             ProcessNames = new[] { "Sync_light" },
         },
 
@@ -674,13 +682,20 @@ public static class ConflictAppCatalog
     /// lighting and cooling (peripherals, monitoring) and
     /// <see cref="ConflictAppDefinition.AlwaysEnded"/> apps always compete.
     /// </summary>
-    public static bool Competes(ConflictAppDefinition def, bool lightingOn, bool coolingOn, Func<string, bool>? displayInUse = null)
+    public static bool Competes(
+        ConflictAppDefinition def, bool lightingOn, bool coolingOn, Func<string, bool>? displayInUse = null, Func<string, bool>? handlerInUse = null)
     {
         if (def.AlwaysEnded) return true;
-        var lighting = def.Category == "lighting" || def.AlsoCategory == "lighting";
-        var cooling = def.Category == "cooling" || def.AlsoCategory == "cooling";
-        if (!lighting && !cooling) return true;
-        if ((lighting && lightingOn) || (cooling && coolingOn)) return true;
+        var primaryPillar = def.Category is "lighting" or "cooling";
+        var alsoPillar = def.AlsoCategory is "lighting" or "cooling";
+        if (!primaryPillar && !alsoPillar) return true;
+        bool On(string category) => category == "lighting" ? lightingOn : category == "cooling" && coolingOn;
+        if (primaryPillar && On(def.Category)) return true;
+        if (alsoPillar && On(def.AlsoCategory)
+            && (def.AlsoHandlers.Length == 0 || (handlerInUse is not null && Array.Exists(def.AlsoHandlers, h => handlerInUse(h)))))
+        {
+            return true;
+        }
         return displayInUse is not null && Array.Exists(def.DisplayHandlers, h => displayInUse(h));
     }
 

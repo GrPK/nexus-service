@@ -97,6 +97,13 @@ public class ConflictLaunchNotifierTickTests
         public bool DetectionReady => true;
         public int Epoch;
         public int FilterEpoch => Epoch;
+        public string[] Revealed = Array.Empty<string>();
+        public IReadOnlyList<DetectedConflict> GetConflicts(out int epoch, out IReadOnlyCollection<string> revealed)
+        {
+            epoch = Epoch;
+            revealed = Revealed;
+            return GetConflicts();
+        }
     }
 
     private sealed class MemoryConfigStore : IConfigStore
@@ -137,12 +144,30 @@ public class ConflictLaunchNotifierTickTests
 
         notifier.Tick(0);
         detector.Epoch = 1;
+        detector.Revealed = new[] { "gcc" };
         detector.Conflicts = new[] { App("gcc") };
         notifier.Tick(6_000);
         Assert.Empty(launched);
 
         detector.Conflicts = new[] { App("gcc"), App("signalrgb") };
         notifier.Tick(12_000);
+        Assert.Equal(new[] { "signalrgb" }, launched);
+    }
+
+    [Fact]
+    public void ARealLaunchOnTheTickOfAFilterChangeIsStillAnnounced()
+    {
+        var detector = new FakeDetector();
+        var notifier = new ConflictLaunchNotifier(detector, new MemoryConfigStore());
+        var launched = new List<string>();
+        notifier.AppLaunched += a => launched.Add(a.Id);
+
+        notifier.Tick(0);
+        detector.Epoch = 1;
+        detector.Revealed = new[] { "gcc" };
+        detector.Conflicts = new[] { App("gcc"), App("signalrgb") };
+        notifier.Tick(6_000);
+
         Assert.Equal(new[] { "signalrgb" }, launched);
     }
 

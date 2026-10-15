@@ -36,8 +36,8 @@ public interface IDeviceHandler
     /// sidebar omits its row instead of linking to an empty placeholder.</summary>
     bool HasPage => true;
 
-    /// <summary>True when the connected device has a display this handler drives. A handler that fronts a display-only device keeps the default; one that also covers display-less models overrides it.</summary>
-    bool DrivesDisplay => true;
+    /// <summary>True when the present device has a display this handler drives. A handler that fronts a display-only device keeps the default; one that also covers display-less models overrides it.</summary>
+    bool DrivesDisplay(IReadOnlyList<UsbDeviceEntry> detectedDevices) => true;
 
     /// <summary>Current firmware version, or empty string if unavailable.</summary>
     string GetFirmwareVersion();

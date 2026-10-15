@@ -38,6 +38,13 @@ public interface IConflictDetector
         return GetConflicts();
     }
 
+    /// <summary>As the one-argument overload, plus the ids the last filter change revealed among apps that were already running; empty for a detector with no filter.</summary>
+    IReadOnlyList<DetectedConflict> GetConflicts(out int epoch, out IReadOnlyCollection<string> revealed)
+    {
+        revealed = Array.Empty<string>();
+        return GetConflicts(out epoch);
+    }
+
     /// <summary>False until the first process scan completes, so callers do not treat "not yet scanned" as "no apps running".</summary>
     bool DetectionReady { get; }
 }
@@ -61,6 +68,7 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     private readonly OpenRgbProcessManager? _openRgb;
     private readonly FeatureGates _gates;
     private readonly Func<string, bool>? _displayInUse;
+    private readonly Func<string, bool>? _handlerInUse;
     private readonly Func<Dictionary<string, List<(int Pid, string? Path)>>>? _processIndex;
 
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
@@ -111,8 +119,8 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     private readonly object _scanLock = new();
     private long _lastScanTicks = long.MinValue / 2;
 
-    public ConflictWatcher(MultiplexHub hub, OpenRgbProcessManager? openRgb = null, FeatureGates? gates = null, Func<string, bool>? displayInUse = null)
-        : this(hub, openRgb, gates, displayInUse, null)
+    public ConflictWatcher(MultiplexHub hub, OpenRgbProcessManager? openRgb = null, FeatureGates? gates = null, Func<string, bool>? displayInUse = null, Func<string, bool>? handlerInUse = null)
+        : this(hub, openRgb, gates, displayInUse, null, handlerInUse)
     {
     }
 
@@ -121,8 +129,10 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         OpenRgbProcessManager? openRgb,
         FeatureGates? gates,
         Func<string, bool>? displayInUse,
-        Func<Dictionary<string, List<(int Pid, string? Path)>>>? processIndex)
+        Func<Dictionary<string, List<(int Pid, string? Path)>>>? processIndex,
+        Func<string, bool>? handlerInUse = null)
     {
+        _handlerInUse = handlerInUse;
         _hub = hub;
         _openRgb = openRgb;
         _gates = gates ?? FeatureGates.AllEnabled;
@@ -155,13 +165,28 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         return Filtered(out epoch);
     }
 
-    /// <summary>How long a display-in-use answer is reused; each one can cost a USB enumeration. Tests set 0.</summary>
+    /// <summary>The filtered list, its epoch, and the already-running apps that the last filter change revealed, read together.</summary>
+    public IReadOnlyList<DetectedConflict> GetConflicts(out int epoch, out IReadOnlyCollection<string> revealed)
+    {
+        EnsureFresh();
+        lock (_filterLock)
+        {
+            var list = Filtered(out epoch);
+            revealed = _revealed;
+            return list;
+        }
+    }
+
     /// <summary>Frames published to the conflicts topic so far; tests watch it.</summary>
     internal int PublishCount { get; private set; }
 
+    /// <summary>How long a handler-in-use answer is reused, since each can cost a USB enumeration. Tests set 0.</summary>
     internal long DisplayCacheMs { get; set; } = 2000;
 
     private static readonly string[] DisplayHandlerIds = ConflictAppCatalog.All.SelectMany(a => a.DisplayHandlers).Distinct().ToArray();
+    private static readonly string[] AlsoHandlerIds = ConflictAppCatalog.All.SelectMany(a => a.AlsoHandlers).Distinct().ToArray();
+    private HashSet<string> _seenIds = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyCollection<string> _revealed = Array.Empty<string>();
     private readonly object _filterLock = new();
     private string _filterKey = "";
     private Dictionary<string, bool> _displayCache = new();
@@ -174,7 +199,11 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         var snapshot = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         foreach (var id in DisplayHandlerIds)
         {
-            snapshot[id] = _displayInUse?.Invoke(id) == true;
+            snapshot["d:" + id] = _displayInUse?.Invoke(id) == true;
+        }
+        foreach (var id in AlsoHandlerIds)
+        {
+            snapshot["h:" + id] = _handlerInUse?.Invoke(id) == true;
         }
         _displayCache = snapshot;
         _displayCacheAt = now;
@@ -194,23 +223,32 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
             var key = display is null
                 ? "on"
                 : $"{(lighting ? 1 : 0)}{(cooling ? 1 : 0)}:" + string.Join(',', display.Where(kv => kv.Value).Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal));
-            if (key != _filterKey)
+            var changed = key != _filterKey;
+            if (changed)
             {
                 _filterKey = key;
                 _filterEpoch++;
             }
             epoch = _filterEpoch;
             var all = _all;
-            if (all.Count == 0) return all;
             var kept = new List<DetectedConflict>(all.Count);
             foreach (var d in all)
             {
                 if (FindById(d.Id) is { } def
-                    && ConflictAppCatalog.Competes(def, lighting, cooling, h => display is not null && display.TryGetValue(h, out var inUse) && inUse))
+                    && ConflictAppCatalog.Competes(
+                        def, lighting, cooling,
+                        h => display is not null && display.TryGetValue("d:" + h, out var inUse) && inUse,
+                        h => display is not null && display.TryGetValue("h:" + h, out var inUse) && inUse))
                 {
                     kept.Add(d);
                 }
             }
+            if (changed)
+            {
+                // Apps already seen running at the previous read, so a consumer does not take them for launches.
+                _revealed = kept.Where(k => _seenIds.Contains(k.Id)).Select(k => k.Id).ToArray();
+            }
+            _seenIds = new HashSet<string>(all.Select(a => a.Id), StringComparer.OrdinalIgnoreCase);
             return kept;
         }
     }

@@ -245,7 +245,11 @@ public sealed class UmbraConnectionWorker : BackgroundService
         }
         try
         {
-            _hub.SendFrames(HandBackFrames(lighting, cooling));
+            // A failed write leaves the flags set, so the next connect tries again.
+            if (!_hub.SendFrames(HandBackFrames(lighting, cooling)))
+            {
+                return;
+            }
             if (lighting) _lightingTouched = false;
             if (cooling) _coolingTouched = false;
         }

@@ -93,6 +93,37 @@ public class UmbraConnectionWorkerTests
     }
 
     [Fact]
+    public void A_failed_stale_pillar_write_keeps_the_flags_so_the_next_connect_tries_again()
+    {
+        var worker = GatedWorker(new Nexus.Service.Lifecycle.FeatureGates(_store));
+        SetTouched(worker, lighting: false, cooling: true);
+        _store.Update(s => s.Features.Cooling = false);
+        Connect();
+        _fake.FailWrites = true;
+
+        worker.HandBackStalePillars();
+        _fake.FailWrites = false;
+        worker.HandBackStalePillars();
+
+        Assert.Equal(new byte[] { 0x08 }, Cmds(_fake.Writes));
+    }
+
+    [Fact]
+    public void A_normal_hand_back_clears_the_flags_so_the_next_reconnect_writes_nothing()
+    {
+        var worker = GatedWorker(new Nexus.Service.Lifecycle.FeatureGates(_store));
+        SetTouched(worker, lighting: false, cooling: true);
+        _store.Update(s => s.Features.Cooling = false);
+        Connect();
+        worker.HandBack();
+
+        Connect();
+        worker.HandBackStalePillars();
+
+        Assert.Empty(_fake.Writes);
+    }
+
+    [Fact]
     public void Nothing_is_handed_back_on_reconnect_for_a_pillar_that_is_still_on_or_was_never_driven()
     {
         var worker = GatedWorker(new Nexus.Service.Lifecycle.FeatureGates(_store));

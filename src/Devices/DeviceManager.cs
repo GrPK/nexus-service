@@ -63,11 +63,18 @@ public sealed class DeviceManager
     }
 
     /// <summary>True when the handler exists, Nexus Control is on for it, and a connected device has a display it drives.</summary>
-    public bool IsDisplayInUse(string handlerId)
+    public bool IsDisplayInUse(string handlerId) => InUse(handlerId, displayOnly: true);
+
+    /// <summary>True when the handler exists, Nexus Control is on for it, and one of its devices is present.</summary>
+    public bool IsHandlerInUse(string handlerId) => InUse(handlerId, displayOnly: false);
+
+    private bool InUse(string handlerId, bool displayOnly)
     {
         if (!_gate.IsEnabled(handlerId)) return false;
         var handler = AllHandlers.FirstOrDefault(h => string.Equals(h.Id, handlerId, System.StringComparison.OrdinalIgnoreCase));
-        return handler is not null && handler.IsConnected(_enumerator.Enumerate()) && handler.DrivesDisplay;
+        if (handler is null) return false;
+        var present = _enumerator.Enumerate();
+        return handler.IsConnected(present) && (!displayOnly || handler.DrivesDisplay(present));
     }
 
     /// <summary>

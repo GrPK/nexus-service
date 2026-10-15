@@ -569,6 +569,23 @@ public class JsonConfigStoreMigrationTests : IDisposable
     }
 
     [Fact]
+    public void Load_DifferentlyCasedSchemaVersionKeyDoesNotCount()
+    {
+        File.WriteAllText(_settingsPath, """{ "SCHEMAVERSION": 20, "ui": { "sidebarCollapsed": true } }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        var s = store.Load();
+        try
+        {
+            Assert.True(s.FeaturesOnboardingCompleted);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
     public void FeaturesReplayPending_SurvivesAStoreReload()
     {
         var store = new JsonConfigStore(_settingsPath);

@@ -161,7 +161,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         if (doc.RootElement.ValueKind != JsonValueKind.Object) return true;
         foreach (var prop in doc.RootElement.EnumerateObject())
         {
-            if (string.Equals(prop.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(prop.Name, "schemaVersion", StringComparison.Ordinal)) return true;
         }
         return false;
     }
