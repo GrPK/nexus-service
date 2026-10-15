@@ -118,9 +118,8 @@ begin
     + 'Restoring the file this window downloaded will not help, because each run downloads a new copy.';
 end;
 
-// Interactive runs show the message with three command links: start the
-// offline installer download, open the docs page (then ask again), or close.
-// Silent runs (any /SILENT or /VERYSILENT) only log it; the caller still fails.
+// Learn more asks again, so the user can still download. Silent runs log only
+// and show no box (also under /SUPPRESSMSGBOXES); the caller still fails.
 procedure ShowAntivirusBlock();
 var
   ErrCode: Integer;
@@ -135,7 +134,7 @@ begin
   Btns[1] := 'Learn more';
   Btns[2] := 'Close';
   repeat
-    Choice := SuppressibleTaskDialogMsgBox('Your antivirus blocked Nexus',
+    Choice := SuppressibleTaskDialogMsgBox('Nexus could not finish installing',
       AntivirusMessage(), mbError, MB_YESNOCANCEL, Btns, 0, IDCANCEL);
     if Choice = IDYES then
       ShellExec('open', '{#PayloadUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode)

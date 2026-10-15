@@ -565,7 +565,7 @@ begin
       + '  3. Click Try again.',
       mbError, MB_YESNOCANCEL, Btns, 0, IDCANCEL);
     if Result = IDNO then
-      ShellExec('open', '{#AntivirusDocsUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
+      ShellExecAsOriginalUser('open', '{#AntivirusDocsUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
   until Result <> IDNO;
   if Result = IDYES then
     Result := IDRETRY;
