@@ -121,6 +121,16 @@ public sealed class ShortcutTargetsTests
     [InlineData("ms-msdt:/id x", false)]
     [InlineData("search-ms:query=a", false)]
     [InlineData("javascript:alert(1)", false)]
+    [InlineData("steam://run/440", true)]
+    [InlineData("STEAM://RUNGAMEID/440", true)]
+    [InlineData("steam://run/440//+connect evil", false)]
+    [InlineData("steam://run/440/", false)]
+    [InlineData("steam://rungameid/440/x", false)]
+    [InlineData("steam://rungameid/", false)]
+    [InlineData("steam://rungameid/44a", false)]
+    [InlineData("steam://install/440", false)]
+    [InlineData("steam://open/games", false)]
+    [InlineData("steam:rungameid/440", false)]
     public void IsAllowedLaunchScheme_AllowsOnlyHttpHttpsSteam(string uri, bool expected)
     {
         Assert.Equal(expected, ShortcutTargets.IsAllowedLaunchScheme(uri));

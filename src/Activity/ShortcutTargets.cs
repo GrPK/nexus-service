@@ -86,7 +86,7 @@ internal static partial class ShortcutTargets
         return IsLaunchUri(s) || s.IndexOfAny(['\\', '/']) >= 0 || Path.IsPathFullyQualified(s);
     }
 
-    /// <summary>Schemes the launch-app fallback may hand to the shell.</summary>
+    /// <summary>Schemes the launch-app fallback may hand to the shell. steam is narrowed to a bare game id, since trailing segments become game command-line arguments.</summary>
     internal static bool IsAllowedLaunchScheme(string uri)
     {
         var colon = uri.IndexOf(':');
@@ -95,9 +95,45 @@ internal static partial class ShortcutTargets
             return false;
         }
         var scheme = uri.Substring(0, colon);
+        if (scheme.Equals("steam", StringComparison.OrdinalIgnoreCase))
+        {
+            return IsSteamGameUri(uri.AsSpan(colon + 1));
+        }
         return scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
-            scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
-            scheme.Equals("steam", StringComparison.OrdinalIgnoreCase);
+            scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSteamGameUri(ReadOnlySpan<char> rest)
+    {
+        if (!rest.StartsWith("//", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        rest = rest[2..];
+        if (rest.StartsWith("rungameid/", StringComparison.OrdinalIgnoreCase))
+        {
+            rest = rest["rungameid/".Length..];
+        }
+        else if (rest.StartsWith("run/", StringComparison.OrdinalIgnoreCase))
+        {
+            rest = rest["run/".Length..];
+        }
+        else
+        {
+            return false;
+        }
+        if (rest.Length == 0)
+        {
+            return false;
+        }
+        foreach (var c in rest)
+        {
+            if (!char.IsAsciiDigit(c))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     // InvariantGlobalization pins CultureInfo's ANSI page to 1252, so ask the OS.

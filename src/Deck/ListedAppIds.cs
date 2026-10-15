@@ -18,6 +18,9 @@ public sealed class ListedAppSnapshot
         _ids = ids;
     }
 
+    /// <summary>False until the first successful load.</summary>
+    public bool IsLoaded => _ids is not null;
+
     /// <summary>A cold snapshot (no successful load yet) lists nothing, so direct launchApp targets are privileged.</summary>
     public bool Contains(string id) => _ids is not null && _ids.Contains(id);
 

@@ -202,6 +202,38 @@ public sealed class PanelDeckPolicyRouteTests : IDisposable
         Assert.True(res.IsSuccessStatusCode);
     }
 
+    [Theory]
+    [InlineData("steam://rungameid/123")]
+    [InlineData("C:\\Games\\game.exe")]
+    public async Task Cold_listed_snapshot_keeps_a_lazy_widget_on_the_preset_with_a_direct_launchApp_key(string appId)
+    {
+        Assert.False(_factory.Services.GetRequiredService<Nexus.Service.Deck.ListedAppIds>().Snapshot().IsLoaded);
+        var store = _factory.Services.GetRequiredService<Nexus.Service.Persistence.IConfigStore>();
+        var launchId = "launch-" + Guid.NewGuid().ToString("n")[..8];
+        store.Update(s =>
+        {
+            s.StreamDeck.Presets.Clear();
+            s.StreamDeck.Presets.Add(new Nexus.Service.Persistence.DeckPreset
+            {
+                Id = launchId,
+                Name = "Launch",
+                Cols = 2,
+                Rows = 2,
+                Deck = new Nexus.Service.Deck.DeckConfig
+                {
+                    Pages = [new() { Slots = [new() { Action = new() { Type = "launchApp", AppId = appId } }] }],
+                },
+            });
+            s.StreamDeck.Presets.Add(new Nexus.Service.Persistence.DeckPreset { Id = "plain", Name = "Plain", Cols = 2, Rows = 2, Deck = Nexus.Service.Deck.DeckConfigNavigation.EmptyConfig() });
+        });
+
+        var res = await PanelClient().GetAsync("/deck/instances/widget:cold1");
+
+        Assert.True(res.IsSuccessStatusCode);
+        Assert.Equal(launchId, store.Load().StreamDeck.Instances["widget:cold1"].ActivePresetId);
+        Assert.Equal(2, store.Load().StreamDeck.Presets.Count);
+    }
+
     [Fact]
     public async Task Panel_can_point_its_widget_at_an_unprivileged_preset()
     {

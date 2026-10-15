@@ -483,7 +483,12 @@ public static class DeckRoutes
             }
             if (!id.StartsWith("streamdeck:", System.StringComparison.Ordinal))
             {
-                var lazy = CreateLazyWidgetInstance(store, id, cols, rows, ServiceTokenRequests.HasServiceToken(ctx, tokens), listed.Snapshot());
+                // The join is persisted, so it is never decided against a cold
+                // snapshot: that would read every listed path or URI id as
+                // privileged and move the widget off its preset.
+                var snapshot = listed.Snapshot();
+                System.Func<string, bool> isListed = snapshot.IsLoaded ? snapshot : _ => true;
+                var lazy = CreateLazyWidgetInstance(store, id, cols, rows, ServiceTokenRequests.HasServiceToken(ctx, tokens), isListed);
                 return Results.Json(new DeckInstanceResponse { Instance = lazy }, AppJsonContext.Default.DeckInstanceResponse);
             }
             var serial = id["streamdeck:".Length..];
