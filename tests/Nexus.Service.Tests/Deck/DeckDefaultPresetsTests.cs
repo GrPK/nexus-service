@@ -46,6 +46,16 @@ public sealed class DeckDefaultPresetsTests : IDisposable
         Assert.True(settings.DeckDefaultPresetsSeeded);
     }
 
+    // Pinned to nexus-web src/panel/widgets/deck/deckPreviewData.test.ts: the Add widget preview shows these keys, in this order.
+    [Fact]
+    public void Essentials_KeysMatchTheAddWidgetPreview()
+    {
+        var settings = new NexusSettings();
+        DeckDefaultPresets.SeedOnce(settings);
+
+        Assert.Equal(["volumeDown", "volumeUp", "screenshot", "taskManager"], Keys(settings.StreamDeck.Presets[0]));
+    }
+
     [Fact]
     public void SeedOnce_NeverIncludesShutdownRestartOrLogout()
     {
