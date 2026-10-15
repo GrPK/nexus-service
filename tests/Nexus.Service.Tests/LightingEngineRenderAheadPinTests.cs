@@ -373,15 +373,28 @@ public class LightingEngineRenderAheadPinTests
         }
     }
 
+    // A global whose ahead renders take a fixed minimum time, to hold a request open deterministically.
+    private sealed class SleepyGlobal : IClockOnlyEffect
+    {
+        public string Name => "sleepy";
+        public void RenderFrame(CanvasBuffer canvas, double tickMs)
+        {
+            if (tickMs < 100_000) Thread.Sleep(8);
+            canvas.Fill(9, 9, 9);
+        }
+        public void Dispose() { }
+    }
+
     [Fact]
     public async Task A_tombstone_expiring_mid_request_does_not_abandon_the_window()
     {
-        using var rig = new Rig(new RampEffect());
+        using var rig = new Rig(new SleepyGlobal());
         rig.Pins.Set("d-0", Pin(DevicePinKinds.Animate, "plasma"));
         Assert.True(await rig.RollsEventually("d-0", "d-1"));
         rig.Pins.Clear("d-0");
-        // Queued while the removal's tombstone exists; long enough to outlive its expiry.
-        var ticks = Enumerable.Range(1, 40000).Select(i => (long)i).ToArray();
+        // Queued while the removal's tombstone exists. Every ahead frame sleeps, so the request lasts at least
+        // 150 frames * 8 ms however fast the machine is, which outlives the expiry.
+        var ticks = Enumerable.Range(1, 150).Select(i => (long)i).ToArray();
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var req = rig.Engine.RequestAhead(new[] { "d-0", "d-2" }, ticks);
         Assert.True(req.Done.Wait(TimeSpan.FromSeconds(30)));
