@@ -194,7 +194,7 @@ public class IbpPeripheralHubTests
         var id = hub.Attached.Single().DeviceId;
         var leds = new RgbColor[IbpPeripheralProtocol.Mek4Keyboard.LedCount];
         var tick = Stopwatch.Frequency / 30;
-        var minGap = (long)(Stopwatch.Frequency / 15.0 * 0.9);
+        var minGap = (long)(Stopwatch.Frequency / (double)IbpPeripheralProtocol.Mek4MaxFrameRateHz * 0.9);
         var sentAt = new List<long>();
 
         void Tick(long advance)
