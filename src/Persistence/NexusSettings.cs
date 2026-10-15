@@ -133,6 +133,9 @@ public sealed class NexusSettings
     /// install sees the screen.</summary>
     public bool FeaturesOnboardingCompleted { get; set; }
 
+    /// <summary>Set by the onboarding replay, cleared when its features step completes. UI state only: it never feeds a feature gate.</summary>
+    public bool FeaturesReplayPending { get; set; }
+
     /// <summary>True once a touch panel's actions tray has been opened; the
     /// panel shows a swipe-up hint until then. Same scoping as
     /// <see cref="OnboardingCompleted"/>. No schema migration on purpose:

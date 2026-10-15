@@ -52,6 +52,31 @@ public class ConflictPillarFilterTests
         Assert.True(ConflictAppCatalog.Competes(App(id), false, false, h => h == handler));
     }
 
+    [Theory]
+    [InlineData("icue", true, false, true)]
+    [InlineData("icue", false, true, true)]
+    [InlineData("lian-li-l-connect", true, false, true)]
+    [InlineData("lian-li-l-connect", false, true, true)]
+    [InlineData("nzxt-cam", false, true, true)]
+    [InlineData("nzxt-kraken", true, false, true)]
+    [InlineData("thermaltake-rgb-plus", false, true, true)]
+    [InlineData("cooler-master-plus", false, true, true)]
+    [InlineData("evga-aio", true, false, true)]
+    [InlineData("icue", false, false, false)]
+    [InlineData("lian-li-l-connect", false, false, false)]
+    public void VendorAppsThatNexusDrivesOnBothPillars_CompeteOnEither(string id, bool lighting, bool cooling, bool competes)
+    {
+        Assert.Equal(competes, ConflictAppCatalog.Competes(App(id), lighting, cooling));
+    }
+
+    [Fact]
+    public void LConnectDisplayHandlers_AreDisplaysOnly()
+    {
+        var handlers = App("lian-li-l-connect").DisplayHandlers;
+        Assert.DoesNotContain("lianli-aio", handlers);
+        Assert.Contains("lianli-tl-lcd", handlers);
+    }
+
     [Fact]
     public void EveryDualApp_NamesADifferentSecondCategory()
     {

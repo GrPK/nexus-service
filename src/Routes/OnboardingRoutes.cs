@@ -14,7 +14,7 @@ namespace Nexus.Service.Routes;
 /// The desktop dashboard's first-run screens (welcome, feature pillars,
 /// lighting device selection) are
 /// <see cref="LocalhostOnlyEndpointExtensions.LocalhostOnly"/>:
-///   GET  /onboarding                    -> { completed, featuresCompleted, lightingCompleted, dismissedHints }
+///   GET  /onboarding                    -> { completed, featuresCompleted, featuresReplay, lightingCompleted, dismissedHints }
 ///   POST /onboarding/complete           -> set completed, return status
 ///   POST /onboarding/features-complete  -> set featuresCompleted, return status
 ///   POST /onboarding/lighting-complete  -> set lightingCompleted, return status
@@ -64,7 +64,11 @@ internal static partial class OnboardingRoutes
         app.MapPost("/onboarding/features-complete", (IConfigStore store, Nexus.Service.Lifecycle.FeatureReconciler reconciler) =>
         {
             // Through the reconciler: the chosen pillars switch on here, so the transition side effects must run.
-            reconciler.ApplyPatch(s => s.FeaturesOnboardingCompleted = true);
+            reconciler.ApplyPatch(s =>
+            {
+                s.FeaturesOnboardingCompleted = true;
+                s.FeaturesReplayPending = false;
+            });
             return Results.Ok(Status(store));
         }).LocalhostOnly();
 
@@ -144,6 +148,7 @@ internal static partial class OnboardingRoutes
             store.Update(s =>
             {
                 s.OnboardingCompleted = false;
+                s.FeaturesReplayPending = true;
                 s.LightingOnboardingCompleted = false;
                 s.PanelSwipeOnboardingCompleted = false;
                 s.ImmersiveSwipeOnboardingCompleted = false;
@@ -188,6 +193,7 @@ internal static partial class OnboardingRoutes
         {
             Completed = s.OnboardingCompleted,
             FeaturesCompleted = s.FeaturesOnboardingCompleted,
+            FeaturesReplay = s.FeaturesReplayPending,
             LightingCompleted = s.LightingOnboardingCompleted,
             DismissedHints = new List<string>(s.DismissedOnboardingHints),
         };
@@ -225,6 +231,7 @@ public sealed class OnboardingStatusDto
 {
     public bool Completed { get; set; }
     public bool FeaturesCompleted { get; set; }
+    public bool FeaturesReplay { get; set; }
     public bool LightingCompleted { get; set; }
     public List<string> DismissedHints { get; set; } = new();
 }

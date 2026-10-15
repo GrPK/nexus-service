@@ -87,9 +87,8 @@ public sealed class UmbraConnectionWorker : BackgroundService
                     {
                         started = true;
                         ServiceLog.Info("[asiahorse-umbra] connected");
-                        _lightingTouched = false;
-                        _coolingTouched = false;
                         _coolingApplied = false;
+                        HandBackStalePillars();
                         if (_gates.Cooling)
                         {
                             _coolingTouched = true;
@@ -161,6 +160,7 @@ public sealed class UmbraConnectionWorker : BackgroundService
                         _coolingApplied = false;
                         _cooling.ReleaseAll();
                         _hub.SetFanSync(true);
+                        _coolingTouched = false;
                     }
                 }
                 else if (!_coolingApplied)
@@ -187,42 +187,71 @@ public sealed class UmbraConnectionWorker : BackgroundService
         return true;
     }
 
+    // The frames that leave the controller playing a firmware effect (the stored device effect when Nexus was streaming) and its fans on the PWM header.
+    private byte[][] HandBackFrames(bool lighting, bool cooling)
+    {
+        var settings = _store.Load();
+        var ls = settings.Devices.AsiahorseUmbra;
+        var plan = UmbraLightingPlan.SourceOf(ls) == UmbraLightingPlan.SourceNexus
+            ? new AsiahorseUmbraSettings
+            {
+                Source = UmbraLightingPlan.SourceFirmware,
+                LightOn = ls.LightOn,
+                Group = ls.Group,
+                Sync = ls.Sync,
+                Merge = ls.Merge,
+                Async = ls.Async,
+                FanSyncMb = ls.FanSyncMb,
+            }
+            : ls;
+        var frames = new List<byte[]>();
+        if (lighting)
+        {
+            frames.AddRange(UmbraLightingPlan.Build(plan, _hub.Snapshot.Ports, MasterBrightness.Effective(settings.Lighting)));
+        }
+        // Fans stop following the software duty and go back to the PWM input header.
+        if (cooling && !ls.FanSyncMb)
+        {
+            frames.Add(UmbraProtocol.EncodeFanSync(true));
+        }
+        return frames.ToArray();
+    }
+
     // Leaves the controller playing a firmware effect: the stored device effect when Nexus was streaming.
     internal void HandBack()
     {
         try
         {
-            var settings = _store.Load();
-            var ls = settings.Devices.AsiahorseUmbra;
-            var plan = UmbraLightingPlan.SourceOf(ls) == UmbraLightingPlan.SourceNexus
-                ? new AsiahorseUmbraSettings
-                {
-                    Source = UmbraLightingPlan.SourceFirmware,
-                    LightOn = ls.LightOn,
-                    Group = ls.Group,
-                    Sync = ls.Sync,
-                    Merge = ls.Merge,
-                    Async = ls.Async,
-                    FanSyncMb = ls.FanSyncMb,
-                }
-                : ls;
-            var frames = new List<byte[]>();
-            if (_lightingTouched || _gates.Lighting)
-            {
-                frames.AddRange(UmbraLightingPlan.Build(plan, _hub.Snapshot.Ports, MasterBrightness.Effective(settings.Lighting)));
-            }
-            // Fans stop following the software duty and go back to the PWM input header.
-            if (!ls.FanSyncMb && (_coolingTouched || _gates.Cooling))
-            {
-                frames.Add(UmbraProtocol.EncodeFanSync(true));
-            }
-            _hub.ReleaseWithHandBack(frames.ToArray());
+            _hub.ReleaseWithHandBack(HandBackFrames(_lightingTouched || _gates.Lighting, _coolingTouched || _gates.Cooling));
+            _lightingTouched = false;
+            _coolingTouched = false;
             ServiceLog.Info("[asiahorse-umbra] released to the firmware effect");
         }
         catch (Exception ex)
         {
             ServiceLog.Error($"[asiahorse-umbra] hand-back failed: {ex.Message}");
             _hub.Detach();
+        }
+    }
+
+    // A pillar that went off while the device was away: Nexus drove it earlier this session, so hand that part back now.
+    internal void HandBackStalePillars()
+    {
+        var lighting = _lightingTouched && !_gates.Lighting;
+        var cooling = _coolingTouched && !_gates.Cooling;
+        if (!lighting && !cooling)
+        {
+            return;
+        }
+        try
+        {
+            _hub.SendFrames(HandBackFrames(lighting, cooling));
+            if (lighting) _lightingTouched = false;
+            if (cooling) _coolingTouched = false;
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Error($"[asiahorse-umbra] stale-pillar hand-back failed: {ex.Message}");
         }
     }
 

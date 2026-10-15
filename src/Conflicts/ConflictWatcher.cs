@@ -28,8 +28,15 @@ public interface IConflictDetector
     /// <summary>Every competing app currently running that matters under the current pillars, for callers that report the set rather than test one id.</summary>
     IReadOnlyList<DetectedConflict> GetConflicts();
 
-    /// <summary>Changes whenever the effective pillars change what <see cref="GetConflicts"/> returns; a detector with no pillar filter stays 0.</summary>
+    /// <summary>Changes whenever the filter changes which running apps <see cref="GetConflicts"/> returns; a detector with no filter stays 0.</summary>
     int FilterEpoch => 0;
+
+    /// <summary><see cref="GetConflicts"/> and <see cref="FilterEpoch"/> read as one, so a filter change between two separate reads cannot pair a stale list with a new epoch.</summary>
+    IReadOnlyList<DetectedConflict> GetConflicts(out int epoch)
+    {
+        epoch = FilterEpoch;
+        return GetConflicts();
+    }
 
     /// <summary>False until the first process scan completes, so callers do not treat "not yet scanned" as "no apps running".</summary>
     bool DetectionReady { get; }
@@ -81,7 +88,6 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     /// <summary>Every catalog app running at the last scan, before the pillar filter.</summary>
     private volatile IReadOnlyList<DetectedConflict> _all = Array.Empty<DetectedConflict>();
 
-    private int _pillarKey = -1;
     private int _filterEpoch;
 
     /// <summary>Set of conflict ids currently detected. Used to detect changes.</summary>
@@ -132,41 +138,81 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         return Filtered();
     }
 
-    /// <summary>Bumps whenever the effective Lighting or Cooling pillars differ from the last read, so a consumer can drop state keyed to the old filtered list.</summary>
+    /// <summary>Changes whenever the filter would show or hide a different set of already-running apps: a pillar flip, or a display starting or stopping to be driven.</summary>
     public int FilterEpoch
     {
         get
         {
-            SyncPillars(_gates.Lighting, _gates.Cooling);
-            return Volatile.Read(ref _filterEpoch);
+            Filtered(out var epoch);
+            return epoch;
         }
     }
 
-    private void SyncPillars(bool lighting, bool cooling)
+    /// <summary>The filtered list and the epoch it was computed under, read together.</summary>
+    public IReadOnlyList<DetectedConflict> GetConflicts(out int epoch)
     {
-        var key = (lighting ? 1 : 0) | (cooling ? 2 : 0);
-        if (Interlocked.Exchange(ref _pillarKey, key) != key)
-        {
-            Interlocked.Increment(ref _filterEpoch);
-        }
+        EnsureFresh();
+        return Filtered(out epoch);
     }
 
-    private IReadOnlyList<DetectedConflict> Filtered()
+    /// <summary>How long a display-in-use answer is reused; each one can cost a USB enumeration. Tests set 0.</summary>
+    /// <summary>Frames published to the conflicts topic so far; tests watch it.</summary>
+    internal int PublishCount { get; private set; }
+
+    internal long DisplayCacheMs { get; set; } = 2000;
+
+    private static readonly string[] DisplayHandlerIds = ConflictAppCatalog.All.SelectMany(a => a.DisplayHandlers).Distinct().ToArray();
+    private readonly object _filterLock = new();
+    private string _filterKey = "";
+    private Dictionary<string, bool> _displayCache = new();
+    private long _displayCacheAt = long.MinValue / 2;
+
+    private Dictionary<string, bool> DisplaySnapshot()
     {
-        var lighting = _gates.Lighting;
-        var cooling = _gates.Cooling;
-        SyncPillars(lighting, cooling);
-        var all = _all;
-        if (all.Count == 0) return all;
-        var kept = new List<DetectedConflict>(all.Count);
-        foreach (var d in all)
+        var now = Environment.TickCount64;
+        if (now - _displayCacheAt < DisplayCacheMs) return _displayCache;
+        var snapshot = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in DisplayHandlerIds)
         {
-            if (FindById(d.Id) is { } def && ConflictAppCatalog.Competes(def, lighting, cooling, _displayInUse))
+            snapshot[id] = _displayInUse?.Invoke(id) == true;
+        }
+        _displayCache = snapshot;
+        _displayCacheAt = now;
+        return snapshot;
+    }
+
+    private IReadOnlyList<DetectedConflict> Filtered() => Filtered(out _);
+
+    private IReadOnlyList<DetectedConflict> Filtered(out int epoch)
+    {
+        lock (_filterLock)
+        {
+            var lighting = _gates.Lighting;
+            var cooling = _gates.Cooling;
+            // Display state only matters while a pillar is off; with both on nothing is filtered.
+            var display = lighting && cooling ? null : DisplaySnapshot();
+            var key = display is null
+                ? "on"
+                : $"{(lighting ? 1 : 0)}{(cooling ? 1 : 0)}:" + string.Join(',', display.Where(kv => kv.Value).Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal));
+            if (key != _filterKey)
             {
-                kept.Add(d);
+                _filterKey = key;
+                _filterEpoch++;
             }
+            epoch = _filterEpoch;
+            var all = _all;
+            if (all.Count == 0) return all;
+            var kept = new List<DetectedConflict>(all.Count);
+            foreach (var d in all)
+            {
+                if (FindById(d.Id) is { } def
+                    && ConflictAppCatalog.Competes(def, lighting, cooling, h => display is not null && display.TryGetValue(h, out var inUse) && inUse))
+                {
+                    kept.Add(d);
+                }
+            }
+            return kept;
         }
-        return kept;
     }
 
     /// <summary>Rescans and republishes under the current pillars; called on a pillar change so subscribers and the next reader see the new list before the change returns.</summary>
@@ -314,6 +360,7 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         var frame = new ConflictsFrame { Conflicts = FrameConflicts(visible) };
         var env = WsEnvelope.Build(Topic, frame, AppJsonContext.Default.ConflictsFrame);
         _cachedEnvelope = env.ToArray();
+        PublishCount++;
 
         if (_hub.TopicHasSubscribers(Topic))
         {

@@ -30,6 +30,15 @@ public class NollieConnectionWorkerTests
         _worker = new NollieConnectionWorker(_hid, _hub, provider, new DeviceControlGate(_store), _store, new HardwarePresence(_bus), () => _now);
     }
 
+    // A board whose firmware takes standalone settings (the 32CH).
+    private NollieLightingDeviceProviderTests.FakeHidDevice PlugStandalone(string serial)
+    {
+        _bus.Entries.Add(new UsbDeviceEntry { VendorId = NollieProtocol.VendorIdHighChannel, ProductId = 0x4714, Serial = serial });
+        var device = new NollieLightingDeviceProviderTests.FakeHidDevice(NollieProtocol.VendorIdHighChannel, 0x4714, $"path-{serial}", serial);
+        _hid.Devices.Add(device);
+        return device;
+    }
+
     private NollieLightingDeviceProviderTests.FakeHidDevice Plug(string serial)
     {
         // Presence folds identical units into one entry, as the Windows enumerator does.
@@ -146,6 +155,60 @@ public class NollieConnectionWorkerTests
         device.WriteResult = true;
         _worker.Tick();
         Assert.Single(_hub.Controllers);
+    }
+
+    private NollieConnectionWorker Gated(InMemoryConfigStore store)
+    {
+        var provider = new NollieLightingDeviceProvider(_hub, store, new Np50IdentifyTracker());
+        return new NollieConnectionWorker(_hid, _hub, provider, new DeviceControlGate(store), store, new HardwarePresence(_bus), () => _now,
+            new Nexus.Service.Lifecycle.FeatureGates(store));
+    }
+
+    [Fact]
+    public void An_undecided_install_sends_the_board_nothing_then_applies_standalone_when_lighting_comes_on()
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.FeaturesOnboardingCompleted = false);
+        var worker = Gated(store);
+        var device = PlugStandalone("EDGE");
+
+        worker.Tick();
+        Assert.Single(_hub.Controllers);
+        Assert.Empty(device.Writes);
+
+        store.Update(s => s.FeaturesOnboardingCompleted = true);
+        worker.Tick();
+
+        Assert.NotEmpty(device.Writes);
+    }
+
+    [Fact]
+    public void A_board_Nexus_never_drove_gets_no_release_write()
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.FeaturesOnboardingCompleted = false);
+        var worker = Gated(store);
+        var device = PlugStandalone("UNDRIVEN");
+        worker.Tick();
+
+        worker.ReleaseAllForShutdown();
+
+        Assert.Empty(device.Writes);
+    }
+
+    [Fact]
+    public void A_board_driven_while_lighting_was_on_is_still_released_after_lighting_goes_off()
+    {
+        var store = new InMemoryConfigStore();
+        var worker = Gated(store);
+        var device = PlugStandalone("DRIVEN");
+        worker.Tick();
+        device.Writes.Clear();
+        store.Update(s => s.Features.Lighting = false);
+
+        worker.ReleaseAllForShutdown();
+
+        Assert.NotEmpty(device.Writes);
     }
 
     private sealed class Bus : IUsbEnumerator

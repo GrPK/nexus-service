@@ -141,9 +141,9 @@ public class FeatureReconcilerTests
         }
     }
 
-    private static (FeatureReconciler Reconciler, RecordingLightingProvider Lighting, RecordingFanControlProvider Fans, CurveEngine CurveEngine, LightingEngine Engine, DeviceFrame[] Devices, InMemoryConfigStore Store) Build()
+    private static (FeatureReconciler Reconciler, RecordingLightingProvider Lighting, RecordingFanControlProvider Fans, CurveEngine CurveEngine, LightingEngine Engine, DeviceFrame[] Devices, InMemoryConfigStore Store) Build(Nexus.Service.Conflicts.ConflictWatcher? conflicts = null, InMemoryConfigStore? existingStore = null)
     {
-        var store = new InMemoryConfigStore();
+        var store = existingStore ?? new InMemoryConfigStore();
         var gates = new FeatureGates(store);
         var lighting = new RecordingLightingProvider();
         var fans = new RecordingFanControlProvider();
@@ -153,7 +153,7 @@ public class FeatureReconcilerTests
         engine.UpdateDevices(devices);
         var blackout = new SleepBlackoutCoordinator(engine, store, bridge: null, gates);
         var keeb = new KeebSettingsApplier(new KeebHub(new NoDevices()), store, new Nexus.Service.Sockets.MultiplexHub());
-        var reconciler = new FeatureReconciler(lighting, curveEngine, blackout, store, keeb);
+        var reconciler = new FeatureReconciler(lighting, curveEngine, blackout, store, keeb, conflicts);
         return (reconciler, lighting, fans, curveEngine, engine, devices, store);
     }
 
@@ -245,6 +245,42 @@ public class FeatureReconcilerTests
         Assert.Equal(0, lighting.SuspendCallCount);
         curveEngine.Tick();
         Assert.Equal(0, fans.ReleaseAllCallCount);
+    }
+
+    [Fact]
+    public void ApplyPatch_ThatChangesThePillars_RescansAndRepublishesTheConflictsBeforeReturning()
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.FeaturesOnboardingCompleted = false);
+        var processes = new Dictionary<string, List<(int Pid, string? Path)>>(System.StringComparer.OrdinalIgnoreCase)
+        {
+            ["SignalRgb"] = new() { (100, null) },
+        };
+        var watcher = new Nexus.Service.Conflicts.ConflictWatcher(
+            new Nexus.Service.Sockets.MultiplexHub(), null, new FeatureGates(store), null, () => processes);
+        var (reconciler, _, _, _, _, _, _) = Build(watcher, store);
+        Assert.Empty(watcher.GetConflicts());
+        var before = watcher.PublishCount;
+
+        reconciler.ApplyPatch(s => s.FeaturesOnboardingCompleted = true);
+
+        Assert.True(watcher.PublishCount > before);
+        Assert.Single(watcher.GetConflicts());
+    }
+
+    [Fact]
+    public void ApplyPatch_ThatLeavesThePillarsAlone_DoesNotRescanTheConflicts()
+    {
+        var store = new InMemoryConfigStore();
+        var scans = 0;
+        var watcher = new Nexus.Service.Conflicts.ConflictWatcher(
+            new Nexus.Service.Sockets.MultiplexHub(), null, new FeatureGates(store), null,
+            () => { scans++; return new Dictionary<string, List<(int Pid, string? Path)>>(); });
+        var (reconciler, _, _, _, _, _, _) = Build(watcher, store);
+
+        reconciler.ApplyPatch(s => s.Features.Monitoring = false);
+
+        Assert.Equal(0, scans);
     }
 
     [Fact]

@@ -606,3 +606,42 @@ public sealed class OnboardingResetKeepsControlIntegrationTests : IClassFixture<
         Assert.True(gates.Cooling);
     }
 }
+
+public sealed class OnboardingReplayPendingTests : IClassFixture<NexusAppFactory>
+{
+    private readonly NexusAppFactory _factory;
+
+    public OnboardingReplayPendingTests(NexusAppFactory factory) => _factory = factory;
+
+    private HttpClient Client()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
+        return client;
+    }
+
+    [Fact]
+    public async Task Reset_sets_the_replay_flag_features_complete_clears_it_and_the_gates_never_move()
+    {
+        _factory.ResetSettings();
+        var store = _factory.Services.GetRequiredService<IConfigStore>();
+        var gates = _factory.Services.GetRequiredService<Nexus.Service.Lifecycle.FeatureGates>();
+        var client = Client();
+        Assert.False(store.Load().FeaturesReplayPending);
+
+        var reset = await client.PostAsync("/onboarding/reset", null);
+        Assert.Equal(System.Net.HttpStatusCode.OK, reset.StatusCode);
+        Assert.True(store.Load().FeaturesReplayPending);
+        Assert.True(store.Load().FeaturesOnboardingCompleted);
+        Assert.True(gates.Lighting);
+        Assert.True(gates.Cooling);
+        var body = await reset.Content.ReadAsStringAsync();
+        Assert.Contains("\"featuresReplay\":true", body);
+
+        var done = await client.PostAsync("/onboarding/features-complete", null);
+        Assert.Equal(System.Net.HttpStatusCode.OK, done.StatusCode);
+        Assert.False(store.Load().FeaturesReplayPending);
+        Assert.Contains("\"featuresReplay\":false", await done.Content.ReadAsStringAsync());
+    }
+}

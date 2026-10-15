@@ -57,7 +57,7 @@ public sealed class ConflictLaunchNotifier : BackgroundService
         }
 
         // A pillar change reveals or hides apps that were running all along: re-seed rather than announce them as launches.
-        var epoch = _detector.FilterEpoch;
+        var running = _detector.GetConflicts(out var epoch);
         if (epoch != _filterEpoch)
         {
             _filterEpoch = epoch;
@@ -72,7 +72,7 @@ public sealed class ConflictLaunchNotifier : BackgroundService
             || (windowOpen && ConflictWatcher.FindById(app.Id)?.AlwaysEnded == true)
             || ui.ConflictAutoKillExclusions.Exists(id => string.Equals(id, app.Id, StringComparison.OrdinalIgnoreCase));
 
-        foreach (var app in _tracker.Observe(_detector.GetConflicts(), nowMs, Silent))
+        foreach (var app in _tracker.Observe(running, nowMs, Silent))
         {
             ServiceLog.Info($"[conflicts] {app.DisplayName} opened while Nexus is running; notifying");
             try { AppLaunched?.Invoke(app); }

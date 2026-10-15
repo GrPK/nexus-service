@@ -84,7 +84,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 var pinsMigrated = Nexus.Service.Lighting.PinMigration.Apply(_cached);
                 // A file with no schemaVersion key deserializes to the current
                 // version and would skip Migrate(), yet it is not a fresh install.
-                if (json.IndexOf("\"schemaVersion\"", StringComparison.OrdinalIgnoreCase) < 0)
+                if (!HasTopLevelSchemaVersion(json))
                 {
                     _cached.FeaturesOnboardingCompleted = true;
                     pinsMigrated = true;
@@ -152,6 +152,18 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
 
             return _cached;
         }
+    }
+
+    /// <summary>True when the document is not an object, or its top level carries a schemaVersion property; a nested one does not count.</summary>
+    private static bool HasTopLevelSchemaVersion(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Object) return true;
+        foreach (var prop in doc.RootElement.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     private static AuthSettings? TryReadAuth(string? json)

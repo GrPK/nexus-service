@@ -42,6 +42,9 @@ public sealed class NollieConnectionWorker : BackgroundService
     private readonly HashSet<(int, int)> _warnedUnmatched = new();
     private long? _lastReconcileAt;
     private bool _lightingWasOn;
+    // Boards Nexus drove with Lighting on at some point this session; only these get a hand-back write on release.
+    private readonly HashSet<string> _driven = new(StringComparer.Ordinal);
+    private readonly object _drivenLock = new();
 
     /// <summary>The Nollie devnodes present at the last reconcile that left every board attached; null forces the next poll to reconcile.</summary>
     private string? _settledBus;
@@ -142,6 +145,10 @@ public sealed class NollieConnectionWorker : BackgroundService
             }
         }
         _lightingWasOn = lightingOn;
+        if (lightingOn)
+        {
+            MarkDriven();
+        }
 
         // An unplug that the presence cache has not seen yet surfaces as write
         // failures, which force the reconcile on their own.
@@ -178,12 +185,25 @@ public sealed class NollieConnectionWorker : BackgroundService
         var settings = _store.Load();
         foreach (var controller in _hub.Controllers)
         {
-            if (NollieStandalone.Release(controller, settings))
+            bool driven;
+            lock (_drivenLock) driven = _driven.Contains(controller.DeviceId);
+            if (driven && NollieStandalone.Release(controller, settings))
             {
                 ServiceLog.Info($"[nollie] {controller.Spec.Name} id={controller.DeviceId} handed to firmware");
             }
         }
         _hub.DetachAll();
+    }
+
+    private void MarkDriven()
+    {
+        lock (_drivenLock)
+        {
+            foreach (var controller in _hub.Controllers)
+            {
+                _driven.Add(controller.DeviceId);
+            }
+        }
     }
 
     internal bool Reconcile() => Reconcile(PresentNollies(), out _);
@@ -278,7 +298,11 @@ public sealed class NollieConnectionWorker : BackgroundService
         _hub.Attach(controller);
         DropBundledChannelState(controller);
         SeedPorts(controller);
-        if (_gates.Lighting) NollieStandalone.Apply(controller, _store.Load());
+        if (_gates.Lighting)
+        {
+            NollieStandalone.Apply(controller, _store.Load());
+            lock (_drivenLock) _driven.Add(controller.DeviceId);
+        }
         ServiceLog.Info($"[nollie] attached {spec.Name} ({spec.Channels}ch, max {spec.MaxLedsPerChannel} LEDs/ch) sn={(string.IsNullOrEmpty(controller.Serial) ? "-" : controller.Serial)} id={controller.DeviceId}");
     }
 

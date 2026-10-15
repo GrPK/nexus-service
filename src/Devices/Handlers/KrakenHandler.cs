@@ -38,6 +38,8 @@ public sealed class KrakenHandler : IDeviceHandler
             KrakenProtocol.ProductIds.Contains(d.ProductId));
     }
 
+    public bool DrivesDisplay => _hub.IsConnected && _hub.Model.HasLcd;
+
     public string GetFirmwareVersion() => _hub.IsConnected ? _hub.Snapshot.FirmwareVersion : "";
 
     /// <summary>

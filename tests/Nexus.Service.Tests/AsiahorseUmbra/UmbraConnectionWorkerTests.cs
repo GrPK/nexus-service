@@ -67,6 +67,46 @@ public class UmbraConnectionWorkerTests
         Assert.False(_hub.IsConnected);
     }
 
+    private UmbraConnectionWorker GatedWorker(Nexus.Service.Lifecycle.FeatureGates gates) =>
+        new(new FakeEnumerator(_fake), _hub, new AsiahorseUmbraLightingDeviceProvider(_hub, _store),
+            new AsiahorseUmbraCoolingProvider(_hub, _store), _gate, new HardwarePresence(new FakeUsb()), _store, gates);
+
+    private static void SetTouched(UmbraConnectionWorker worker, bool lighting, bool cooling)
+    {
+        var t = typeof(UmbraConnectionWorker);
+        t.GetField("_lightingTouched", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(worker, lighting);
+        t.GetField("_coolingTouched", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(worker, cooling);
+    }
+
+    [Fact]
+    public void A_pillar_that_went_off_while_the_device_was_away_is_handed_back_on_reconnect()
+    {
+        var worker = GatedWorker(new Nexus.Service.Lifecycle.FeatureGates(_store));
+        SetTouched(worker, lighting: false, cooling: true);
+        _store.Update(s => s.Features.Cooling = false);
+        Connect();
+
+        worker.HandBackStalePillars();
+
+        Assert.Equal(new byte[] { 0x08 }, Cmds(_fake.Writes));
+        Assert.True(_hub.IsConnected);
+    }
+
+    [Fact]
+    public void Nothing_is_handed_back_on_reconnect_for_a_pillar_that_is_still_on_or_was_never_driven()
+    {
+        var worker = GatedWorker(new Nexus.Service.Lifecycle.FeatureGates(_store));
+        SetTouched(worker, lighting: false, cooling: true);
+        Connect();
+        worker.HandBackStalePillars();
+        Assert.Empty(_fake.Writes);
+
+        _store.Update(s => s.Features.Cooling = false);
+        SetTouched(worker, lighting: false, cooling: false);
+        worker.HandBackStalePillars();
+        Assert.Empty(_fake.Writes);
+    }
+
     [Fact]
     public void HandBack_skips_the_fan_frame_when_fans_already_follow_the_motherboard()
     {

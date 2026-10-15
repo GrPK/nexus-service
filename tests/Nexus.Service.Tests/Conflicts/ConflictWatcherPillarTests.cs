@@ -16,7 +16,7 @@ public class ConflictWatcherPillarTests
         Dictionary<string, List<(int Pid, string? Path)>> processes, System.Func<string, bool>? displayInUse = null)
     {
         var store = new InMemoryConfigStore();
-        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), displayInUse, () => processes);
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), displayInUse, () => processes) { DisplayCacheMs = 0 };
         return (watcher, store);
     }
 
@@ -84,5 +84,74 @@ public class ConflictWatcherPillarTests
         driving = false;
 
         Assert.Empty(watcher.GetConflicts());
+    }
+}
+
+public class ConflictDisplayEpochTests
+{
+    private static Dictionary<string, List<(int Pid, string? Path)>> Cam() =>
+        new(System.StringComparer.OrdinalIgnoreCase) { ["NZXT CAM"] = new() { (100, null) } };
+
+    [Fact]
+    public void ADisplayStartingToBeDriven_BumpsTheEpochAndRevealsTheAppTogether()
+    {
+        var driving = false;
+        var store = new InMemoryConfigStore();
+        store.Update(s =>
+        {
+            s.Features.Lighting = false;
+            s.Features.Cooling = false;
+        });
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), h => driving && h == "nzxt-kraken", Cam) { DisplayCacheMs = 0 };
+        var hidden = watcher.GetConflicts(out var epochBefore);
+        Assert.Empty(hidden);
+
+        driving = true;
+        var shown = watcher.GetConflicts(out var epochAfter);
+
+        Assert.Single(shown);
+        Assert.NotEqual(epochBefore, epochAfter);
+    }
+
+    [Fact]
+    public void ADisplayComingIntoUse_IsNotToastedAsALaunch()
+    {
+        var driving = false;
+        var store = new InMemoryConfigStore();
+        store.Update(s =>
+        {
+            s.Features.Lighting = false;
+            s.Features.Cooling = false;
+            s.Ui.ConflictAutoKillExclusions.Clear();
+        });
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), h => driving && h == "nzxt-kraken", Cam) { DisplayCacheMs = 0 };
+        var notifier = new ConflictLaunchNotifier(watcher, store);
+        var launched = new List<string>();
+        notifier.AppLaunched += a => launched.Add(a.Id);
+
+        notifier.Tick(0);
+        driving = true;
+        notifier.Tick(6_000);
+
+        Assert.Empty(launched);
+    }
+
+    [Fact]
+    public void ARealLaunch_IsStillToasted()
+    {
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Ui.ConflictAutoKillExclusions.Clear());
+        var processes = new Dictionary<string, List<(int Pid, string? Path)>>(System.StringComparer.OrdinalIgnoreCase);
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes) { DisplayCacheMs = 0 };
+        var notifier = new ConflictLaunchNotifier(watcher, store);
+        var launched = new List<string>();
+        notifier.AppLaunched += a => launched.Add(a.Id);
+
+        notifier.Tick(0);
+        processes["SignalRgb"] = new() { (100, null) };
+        watcher.PillarsChanged();
+        notifier.Tick(6_000);
+
+        Assert.Equal(new[] { "signalrgb" }, launched);
     }
 }

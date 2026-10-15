@@ -124,6 +124,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "NZXT" },
             DisplayName = "NZXT CAM",
             Category = "lighting",
+            AlsoCategory = "cooling",
             DisplayHandlers = new[] { "nzxt-kraken" },
             ProcessNames = new[] { "NZXT CAM", "CAM", "NZXT CAM Beta", "NZXT CAM Service", "NZXTCAM" },
             // Stopped alongside the processes on End task. CAMService is NZXT's
@@ -146,6 +147,7 @@ public static class ConflictAppCatalog
             Id = "nzxt-kraken",
             DisplayName = "NZXT Kraken",
             Category = "cooling",
+            AlsoCategory = "lighting",
             DisplayHandlers = new[] { "nzxt-kraken" },
             ProcessNames = new[] { "NZXT Kraken" },
         },
@@ -355,6 +357,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Corsair" },
             DisplayName = "Corsair iCUE",
             Category = "lighting",
+            AlsoCategory = "cooling",
             DisplayHandlers = new[] { "corsair-xc7-lcd", "corsair-capellix-lcd", "corsair-link-lcd" },
             ProcessNames = new[]
             {
@@ -434,7 +437,8 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Lian Li" },
             DisplayName = "Lian Li L-Connect",
             Category = "lighting",
-            DisplayHandlers = new[] { "lianli-aio", "lianli-hydroshift-lcd", "lianli-galahad2-lcd", "lianli-screen88", "lianli-hydroshift2", "lianli-hydroshift2-curve" },
+            AlsoCategory = "cooling",
+            DisplayHandlers = new[] { "lianli-hydroshift-lcd", "lianli-galahad2-lcd", "lianli-screen88", "lianli-hydroshift2", "lianli-hydroshift2-curve", "lianli-tl-lcd" },
             ProcessNames = new[] { "L-Connect 3", "L-Connect", "LConnect3", "LConnect" },
             // Watcher first so it cannot restart the main service.
             WindowsServiceNames = new[] { "LConnectServiceWatcher", "LConnectService" },

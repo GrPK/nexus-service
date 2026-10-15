@@ -552,6 +552,40 @@ public class JsonConfigStoreMigrationTests : IDisposable
     }
 
     [Fact]
+    public void Load_NestedSchemaVersionKeyDoesNotCountAsTheTopLevelOne()
+    {
+        File.WriteAllText(_settingsPath, """{ "ui": { "schemaVersion": 3 } }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        var s = store.Load();
+        try
+        {
+            Assert.True(s.FeaturesOnboardingCompleted);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
+    public void FeaturesReplayPending_SurvivesAStoreReload()
+    {
+        var store = new JsonConfigStore(_settingsPath);
+        try
+        {
+            store.Update(x => x.FeaturesReplayPending = true);
+            store.FlushNow();
+            store.Reload();
+            Assert.True(store.Load().FeaturesReplayPending);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
     public void Load_CurrentSchemaWithTheFlagFalse_StaysUndecided()
     {
         File.WriteAllText(_settingsPath, $$"""{ "schemaVersion": {{NexusSettings.CurrentSchemaVersion}} }""");

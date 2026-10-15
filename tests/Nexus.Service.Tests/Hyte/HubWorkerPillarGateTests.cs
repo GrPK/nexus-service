@@ -127,6 +127,20 @@ public class HubWorkerPillarGateTests
         return (worker, transport);
     }
 
+    // Get firmware animation is sub 0x08, set is 0x07.
+    private static bool AnimationWrite(RecordingTransport t) =>
+        t.Writes.Any(w => w.Length >= 3 && w[1] == SmartHubControl && w[2] == 0x07);
+
+    [Fact]
+    public void SmartHub_UnreadableAnimationState_IsNeverWritten_WhateverThePillars()
+    {
+        var (worker, transport) = SmartHub(Store(decided: false));
+
+        worker.Tick();
+
+        Assert.False(AnimationWrite(transport));
+    }
+
     // Set fan speed is sub 0x02.
     private static bool FanWrite(RecordingTransport t) =>
         t.Writes.Any(w => w.Length >= 3 && w[1] == SmartHubControl && w[2] == 0x02);
