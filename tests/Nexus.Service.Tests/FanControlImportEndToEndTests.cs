@@ -83,6 +83,7 @@ public class FanControlImportEndToEndTests
 
         public int SetFanSpeed(string channelId, int dutyPercent)
         {
+            Driven.Add((channelId, dutyPercent));
             Duty[channelId] = dutyPercent;
             return dutyPercent;
         }
@@ -224,11 +225,15 @@ public class FanControlImportEndToEndTests
         clock[0] += 5000;
         engine.Tick();
         Assert.Equal(100, fans.Duty[Fan2]);
+        var tripWrites = fans.Driven.Count;
 
         import.Apply(null, AllCategories);
         engine.Tick();
+        clock[0] += 1000;
+        engine.Tick();
 
         Assert.Equal(100, fans.Duty[Fan2]);
+        Assert.DoesNotContain(fans.Driven.Skip(tripWrites), w => w.Id == Fan2 && w.Duty < 100);
     }
 
     [Fact]

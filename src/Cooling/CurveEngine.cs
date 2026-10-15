@@ -323,9 +323,11 @@ public sealed class CurveEngine : BackgroundService
         Isolated("uncontrolled release", () => ReleaseUncontrolledOnAppearance(settings, present));
         if (!_noWrites)
         {
-            Isolated("manual replay", () => ReplayManualDuties(settings, present, owned));
+            Isolated("manual replay", () => ReplayManualDuties(settings, present, owned, activePlan));
         }
-        Isolated("guard manual pass", () => ApplyGuardToUnownedChannels(activePlan, manualSnapshot, present, owned));
+        // Re-read: a replay or an import since the snapshot may have changed a duty,
+        // and a restore from the stale copy would undo it.
+        Isolated("guard manual pass", () => ApplyGuardToUnownedChannels(activePlan, CoolingSnapshots.ManualSpeeds(settings.Cooling), present, owned));
 
         if (curves.Count == 0)
         {
@@ -984,7 +986,7 @@ public sealed class CurveEngine : BackgroundService
     /// the curve drives them for now, and the saved duty must replay when
     /// the curve releases the channel (leaving a preset for Custom).
     /// </summary>
-    private void ReplayManualDuties(NexusSettings settings, HashSet<string> present, HashSet<string> curveOwned)
+    internal void ReplayManualDuties(NexusSettings settings, HashSet<string> present, HashSet<string> curveOwned, GuardPlan plan)
     {
         var manual = settings.Cooling.ManualSpeeds;
         if (manual.Count == 0)
@@ -1033,6 +1035,13 @@ public sealed class CurveEngine : BackgroundService
                 if (curveOwned.Contains(kv.Key))
                 {
                     _manualReplayed.Remove(kv.Key);
+                    continue;
+                }
+                // A channel the guard raises, forces, hands back or stops writing
+                // belongs to the guard pass; it stays armed and replays once the
+                // override lifts (the trip end also re-arms every channel).
+                if (plan.Apply(kv.Key, kv.Value) != kv.Value)
+                {
                     continue;
                 }
                 if (!_manualReplayed.Add(kv.Key))
