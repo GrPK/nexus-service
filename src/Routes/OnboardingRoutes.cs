@@ -131,7 +131,9 @@ internal static partial class OnboardingRoutes
             return full ? Results.Conflict() : Results.Ok(Status(store));
         }).LocalhostOnly();
 
-        // Replays the whole sequence. The import latches (two offered flags and
+        // Replays the whole sequence, except the features decision: that flag
+        // stays set so fans and lighting keep running through the replay.
+        // The import latches (two offered flags and
         // the FanControl completed flag) are cleared as well, or the import
         // step is silently skipped - they are per-app flags
         // the migration routes own, not onboarding ones. An app that is no
@@ -142,7 +144,6 @@ internal static partial class OnboardingRoutes
             store.Update(s =>
             {
                 s.OnboardingCompleted = false;
-                s.FeaturesOnboardingCompleted = false;
                 s.LightingOnboardingCompleted = false;
                 s.PanelSwipeOnboardingCompleted = false;
                 s.ImmersiveSwipeOnboardingCompleted = false;

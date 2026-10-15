@@ -82,6 +82,13 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 // Pre-pin per-device locks and fan locks fold into pins before
                 // anything reads the document; a no-op once migrated.
                 var pinsMigrated = Nexus.Service.Lighting.PinMigration.Apply(_cached);
+                // A file with no schemaVersion key deserializes to the current
+                // version and would skip Migrate(), yet it is not a fresh install.
+                if (json.IndexOf("\"schemaVersion\"", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    _cached.FeaturesOnboardingCompleted = true;
+                    pinsMigrated = true;
+                }
                 if (_cached.SchemaVersion < NexusSettings.CurrentSchemaVersion)
                 {
                     Migrate(_cached);
@@ -288,6 +295,11 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         if (doc.SchemaVersion < 20)
         {
             Nexus.Service.Conflicts.ConflictWhitelistMigration.KeepThirdPartyDevicesOn(doc);
+        }
+        if (doc.SchemaVersion < 21)
+        {
+            // Lighting and Cooling read off until this flag is set; no existing install may lose control on update.
+            doc.FeaturesOnboardingCompleted = true;
         }
         doc.SchemaVersion = NexusSettings.CurrentSchemaVersion;
     }

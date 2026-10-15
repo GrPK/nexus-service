@@ -62,6 +62,14 @@ public sealed class DeviceManager
         }).ToList();
     }
 
+    /// <summary>True when the handler exists, Nexus Control is on for it, and one of its devices is present.</summary>
+    public bool IsHandlerInUse(string handlerId)
+    {
+        if (!_gate.IsEnabled(handlerId)) return false;
+        var handler = AllHandlers.FirstOrDefault(h => string.Equals(h.Id, handlerId, System.StringComparison.OrdinalIgnoreCase));
+        return handler is not null && handler.IsConnected(_enumerator.Enumerate());
+    }
+
     /// <summary>
     /// Returns every USB device the OS reports, with full details. Backs /devices/usb/all.
     /// Dedupes by (VID, PID, Name, Manufacturer) so composite-device interface rows that

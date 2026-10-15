@@ -25,11 +25,14 @@ public sealed class FeatureReconciler
     private readonly SleepBlackoutCoordinator _blackout;
     private readonly IConfigStore _store;
     private readonly KeebSettingsApplier _keeb;
+    private readonly Nexus.Service.Conflicts.ConflictWatcher? _conflicts;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     public FeatureReconciler(
-        ILightingProvider lighting, CurveEngine curveEngine, SleepBlackoutCoordinator blackout, IConfigStore store, KeebSettingsApplier keeb)
+        ILightingProvider lighting, CurveEngine curveEngine, SleepBlackoutCoordinator blackout, IConfigStore store, KeebSettingsApplier keeb,
+        Nexus.Service.Conflicts.ConflictWatcher? conflicts = null)
     {
+        _conflicts = conflicts;
         _lighting = lighting;
         _curveEngine = curveEngine;
         _blackout = blackout;
@@ -122,6 +125,13 @@ public sealed class FeatureReconciler
         if (before.Cooling && !after.Cooling)
         {
             _curveEngine.RequestRelease();
+        }
+
+        // Which apps count as conflicts follows the pillars; republish before the caller's response returns.
+        if (before.Lighting != after.Lighting || before.Cooling != after.Cooling)
+        {
+            try { _conflicts?.PillarsChanged(); }
+            catch (Exception ex) { Console.Error.WriteLine($"[features] conflict rescan failed: {ex.Message}"); }
         }
     }
 }

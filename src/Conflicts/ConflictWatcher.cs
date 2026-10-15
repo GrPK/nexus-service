@@ -22,11 +22,14 @@ namespace Nexus.Service.Conflicts;
 /// </summary>
 public interface IConflictDetector
 {
-    /// <summary>True if the competing app with this <see cref="ConflictAppCatalog"/> id is currently running.</summary>
+    /// <summary>True if the competing app with this <see cref="ConflictAppCatalog"/> id is currently running, whatever the Lighting and Cooling pillars say.</summary>
     bool IsAppRunning(string appId);
 
-    /// <summary>Every competing app currently running, for callers that report the set rather than test one id.</summary>
+    /// <summary>Every competing app currently running that matters under the current pillars, for callers that report the set rather than test one id.</summary>
     IReadOnlyList<DetectedConflict> GetConflicts();
+
+    /// <summary>Changes whenever the effective pillars change what <see cref="GetConflicts"/> returns; a detector with no pillar filter stays 0.</summary>
+    int FilterEpoch => 0;
 
     /// <summary>False until the first process scan completes, so callers do not treat "not yet scanned" as "no apps running".</summary>
     bool DetectionReady { get; }
@@ -50,6 +53,8 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     private readonly MultiplexHub _hub;
     private readonly OpenRgbProcessManager? _openRgb;
     private readonly FeatureGates _gates;
+    private readonly Func<string, bool>? _displayInUse;
+    private readonly Func<Dictionary<string, List<(int Pid, string? Path)>>>? _processIndex;
 
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
@@ -73,8 +78,11 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     /// </summary>
     private volatile byte[]? _cachedEnvelope;
 
-    /// <summary>Plain list mirror of the same snapshot for the REST endpoint.</summary>
-    private volatile IReadOnlyList<DetectedConflict> _latest = Array.Empty<DetectedConflict>();
+    /// <summary>Every catalog app running at the last scan, before the pillar filter.</summary>
+    private volatile IReadOnlyList<DetectedConflict> _all = Array.Empty<DetectedConflict>();
+
+    private int _pillarKey = -1;
+    private int _filterEpoch;
 
     /// <summary>Set of conflict ids currently detected. Used to detect changes.</summary>
     private string[] _lastDetectedIds = Array.Empty<string>();
@@ -97,18 +105,77 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     private readonly object _scanLock = new();
     private long _lastScanTicks = long.MinValue / 2;
 
-    public ConflictWatcher(MultiplexHub hub, OpenRgbProcessManager? openRgb = null, FeatureGates? gates = null)
+    public ConflictWatcher(MultiplexHub hub, OpenRgbProcessManager? openRgb = null, FeatureGates? gates = null, Func<string, bool>? displayInUse = null)
+        : this(hub, openRgb, gates, displayInUse, null)
+    {
+    }
+
+    internal ConflictWatcher(
+        MultiplexHub hub,
+        OpenRgbProcessManager? openRgb,
+        FeatureGates? gates,
+        Func<string, bool>? displayInUse,
+        Func<Dictionary<string, List<(int Pid, string? Path)>>>? processIndex)
     {
         _hub = hub;
         _openRgb = openRgb;
         _gates = gates ?? FeatureGates.AllEnabled;
+        _displayInUse = displayInUse;
+        _processIndex = processIndex;
         _hub.RegisterSnapshotProvider(Topic, GetCachedSnapshotEnvelope);
     }
 
+    /// <summary>The running catalog apps that compete under the current pillars; read live, so a pillar change shows at once.</summary>
     public IReadOnlyList<DetectedConflict> GetConflicts()
     {
         EnsureFresh();
-        return _latest;
+        return Filtered();
+    }
+
+    /// <summary>Bumps whenever the effective Lighting or Cooling pillars differ from the last read, so a consumer can drop state keyed to the old filtered list.</summary>
+    public int FilterEpoch
+    {
+        get
+        {
+            SyncPillars(_gates.Lighting, _gates.Cooling);
+            return Volatile.Read(ref _filterEpoch);
+        }
+    }
+
+    private void SyncPillars(bool lighting, bool cooling)
+    {
+        var key = (lighting ? 1 : 0) | (cooling ? 2 : 0);
+        if (Interlocked.Exchange(ref _pillarKey, key) != key)
+        {
+            Interlocked.Increment(ref _filterEpoch);
+        }
+    }
+
+    private IReadOnlyList<DetectedConflict> Filtered()
+    {
+        var lighting = _gates.Lighting;
+        var cooling = _gates.Cooling;
+        SyncPillars(lighting, cooling);
+        var all = _all;
+        if (all.Count == 0) return all;
+        var kept = new List<DetectedConflict>(all.Count);
+        foreach (var d in all)
+        {
+            if (FindById(d.Id) is { } def && ConflictAppCatalog.Competes(def, lighting, cooling, _displayInUse))
+            {
+                kept.Add(d);
+            }
+        }
+        return kept;
+    }
+
+    /// <summary>Rescans and republishes under the current pillars; called on a pillar change so subscribers and the next reader see the new list before the change returns.</summary>
+    public void PillarsChanged()
+    {
+        lock (_scanLock)
+        {
+            ScanAndPublish();
+        }
     }
 
     public bool DetectionReady
@@ -144,10 +211,11 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         }
     }
 
+    /// <summary>Unfiltered: device pausing and hand-back must see a running vendor app whatever the pillars say.</summary>
     public bool IsAppRunning(string appId)
     {
         EnsureFresh();
-        var latest = _latest;
+        var latest = _all;
         foreach (var conflict in latest)
         {
             if (string.Equals(conflict.Id, appId, StringComparison.OrdinalIgnoreCase))
@@ -228,21 +296,22 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     private void ScanAndPublish()
     {
         var detected = DetectRunningConflicts();
+        _all = detected;
+        var visible = Filtered();
 
-        var ids = ChangeKey(detected);
+        var ids = ChangeKey(visible);
 
         LogTransitions(detected, first: !_detectionReady);
 
         bool changed = !ArraysEqual(ids, _lastDetectedIds);
         _lastDetectedIds = ids;
-        _latest = detected;
         _detectionReady = true;
         Volatile.Write(ref _lastScanTicks, Environment.TickCount64);
 
         if (!changed && _cachedEnvelope is not null)
             return;
 
-        var frame = new ConflictsFrame { Conflicts = FrameConflicts(detected) };
+        var frame = new ConflictsFrame { Conflicts = FrameConflicts(visible) };
         var env = WsEnvelope.Build(Topic, frame, AppJsonContext.Default.ConflictsFrame);
         _cachedEnvelope = env.ToArray();
 
@@ -268,7 +337,7 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     {
         lock (_scanLock)
         {
-            var frame = new ConflictsFrame { Conflicts = FrameConflicts(_latest) };
+            var frame = new ConflictsFrame { Conflicts = FrameConflicts(Filtered()) };
             var env = WsEnvelope.Build(Topic, frame, AppJsonContext.Default.ConflictsFrame);
             _cachedEnvelope = env.ToArray();
             if (_hub.TopicHasSubscribers(Topic))
@@ -281,19 +350,15 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
 
     private List<DetectedConflict> DetectRunningConflicts()
     {
-        var byName = BuildProcessNameIndex();
+        var byName = _processIndex?.Invoke() ?? BuildProcessNameIndex();
         if (byName.Count == 0)
             return new List<DetectedConflict>(0);
 
         var bundledOpenRgbPath = _openRgb?.ExePath;
         var result = new List<DetectedConflict>();
 
-        var lightingOn = _gates.Lighting;
-        var coolingOn = _gates.Cooling;
         foreach (var def in ConflictAppCatalog.All)
         {
-            if (!ConflictAppCatalog.Competes(def, lightingOn, coolingOn))
-                continue;
             DetectedConflict? best = null;
             foreach (var procName in def.ProcessNames)
             {

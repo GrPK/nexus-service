@@ -516,6 +516,59 @@ public class JsonConfigStoreMigrationTests : IDisposable
     }
 
     [Fact]
+    public void Load_V20WithTheFlagFalse_MarksTheInstallFeaturesOnboarded()
+    {
+        File.WriteAllText(_settingsPath, """{ "schemaVersion": 20, "featuresOnboardingCompleted": false }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        var s = store.Load();
+        try
+        {
+            Assert.True(s.FeaturesOnboardingCompleted);
+            Assert.Equal(NexusSettings.CurrentSchemaVersion, s.SchemaVersion);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Load_FileWithoutASchemaVersionKey_MarksTheInstallFeaturesOnboarded()
+    {
+        File.WriteAllText(_settingsPath, """{ "ui": { "sidebarCollapsed": true } }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        var s = store.Load();
+        try
+        {
+            Assert.True(s.FeaturesOnboardingCompleted);
+            Assert.True(s.Ui.SidebarCollapsed);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Load_CurrentSchemaWithTheFlagFalse_StaysUndecided()
+    {
+        File.WriteAllText(_settingsPath, $$"""{ "schemaVersion": {{NexusSettings.CurrentSchemaVersion}} }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        var s = store.Load();
+        try
+        {
+            Assert.False(s.FeaturesOnboardingCompleted);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
     public void Load_NoSettingsFile_FeaturesOnboardingCompletedDefaultsFalse()
     {
         var store = new JsonConfigStore(_settingsPath);

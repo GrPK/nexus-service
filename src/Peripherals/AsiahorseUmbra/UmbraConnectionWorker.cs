@@ -35,6 +35,8 @@ public sealed class UmbraConnectionWorker : BackgroundService
     // Set once a pillar was on during this connection, so HandBack only releases what Nexus may have touched.
     private bool _lightingTouched;
     private bool _coolingTouched;
+    // True while the fan mode and duty are under Nexus: set by the connect-time apply, cleared on a Cooling switch-off.
+    private bool _coolingApplied;
     // Released on a control change for this handler so a release stops the stream at once, not on the next poll.
     private readonly SemaphoreSlim _gateChanged = new(0);
 
@@ -87,6 +89,13 @@ public sealed class UmbraConnectionWorker : BackgroundService
                         ServiceLog.Info("[asiahorse-umbra] connected");
                         _lightingTouched = false;
                         _coolingTouched = false;
+                        _coolingApplied = false;
+                        if (_gates.Cooling)
+                        {
+                            _coolingTouched = true;
+                            _coolingApplied = true;
+                            _cooling.OnConnected();
+                        }
                         _lighting.OnHubStateUpdated();
                         reachable = await PollAsync(stoppingToken).ConfigureAwait(false);
                     }
@@ -134,7 +143,6 @@ public sealed class UmbraConnectionWorker : BackgroundService
     private async Task<bool> PollAsync(CancellationToken ct)
     {
         var failures = 0;
-        var coolingApplied = false;
         while (_gateChanged.CurrentCount > 0)
         {
             _gateChanged.Wait(0);
@@ -145,15 +153,20 @@ public sealed class UmbraConnectionWorker : BackgroundService
             {
                 failures = 0;
                 if (_gates.Lighting) _lightingTouched = true;
-                // Cooling off: no fan mode or duty writes. A later switch-on applies the persisted fan mode on the next poll.
+                // Cooling off: no fan mode or duty writes. The switch-off edge hands the fans back to the PWM header; a later switch-on applies the persisted fan mode again.
                 if (!_gates.Cooling)
                 {
-                    coolingApplied = false;
+                    if (_coolingApplied)
+                    {
+                        _coolingApplied = false;
+                        _cooling.ReleaseAll();
+                        _hub.SetFanSync(true);
+                    }
                 }
-                else if (!coolingApplied)
+                else if (!_coolingApplied)
                 {
                     _coolingTouched = true;
-                    coolingApplied = true;
+                    _coolingApplied = true;
                     _cooling.OnConnected();
                 }
                 else

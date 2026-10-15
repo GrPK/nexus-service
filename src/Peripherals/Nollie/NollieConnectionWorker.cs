@@ -41,6 +41,7 @@ public sealed class NollieConnectionWorker : BackgroundService
     private readonly Func<long> _clock;
     private readonly HashSet<(int, int)> _warnedUnmatched = new();
     private long? _lastReconcileAt;
+    private bool _lightingWasOn;
 
     /// <summary>The Nollie devnodes present at the last reconcile that left every board attached; null forces the next poll to reconcile.</summary>
     private string? _settledBus;
@@ -129,6 +130,18 @@ public sealed class NollieConnectionWorker : BackgroundService
             }
             return;
         }
+
+        // Boards attached while Lighting was off never got their standalone settings; send them on the switch-on edge.
+        var lightingOn = _gates.Lighting;
+        if (lightingOn && !_lightingWasOn)
+        {
+            var settings = _store.Load();
+            foreach (var controller in _hub.Controllers)
+            {
+                NollieStandalone.Apply(controller, settings);
+            }
+        }
+        _lightingWasOn = lightingOn;
 
         // An unplug that the presence cache has not seen yet surfaces as write
         // failures, which force the reconcile on their own.

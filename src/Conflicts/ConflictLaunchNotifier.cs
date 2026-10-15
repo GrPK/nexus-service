@@ -19,6 +19,7 @@ public sealed class ConflictLaunchNotifier : BackgroundService
     private readonly IConfigStore _store;
     private readonly ConflictStartupShutdown? _startupShutdown;
     private readonly ConflictLaunchTracker _tracker = new();
+    private int _filterEpoch;
 
     public ConflictLaunchNotifier(IConflictDetector detector, IConfigStore store, ConflictStartupShutdown? startupShutdown = null)
     {
@@ -53,6 +54,14 @@ public sealed class ConflictLaunchNotifier : BackgroundService
         {
             _tracker.Reset();
             return;
+        }
+
+        // A pillar change reveals or hides apps that were running all along: re-seed rather than announce them as launches.
+        var epoch = _detector.FilterEpoch;
+        if (epoch != _filterEpoch)
+        {
+            _filterEpoch = epoch;
+            _tracker.Reset();
         }
 
         // Inside the kill window the startup shutdown ends the app and says so in its own notice.

@@ -58,8 +58,8 @@ public sealed class ConflictAppDefinition
     /// <summary>A second pillar category ("lighting" or "cooling") the app also controls, when <see cref="Category"/> names only one. Empty for single-purpose apps.</summary>
     public string AlsoCategory { get; init; } = "";
 
-    /// <summary>The app also owns a display or LCD Nexus drives, so it competes whatever the Lighting and Cooling pillars say.</summary>
-    public bool DrivesDisplay { get; init; }
+    /// <summary>Handler ids of displays or LCDs this app also drives. While Nexus Control is on for one of them and that device is present, the app competes whatever the Lighting and Cooling pillars say.</summary>
+    public string[] DisplayHandlers { get; init; } = Array.Empty<string>();
 
     /// <summary>Process names to match against <c>Process.GetProcesses().ProcessName</c>.</summary>
     public string[] ProcessNames { get; init; } = Array.Empty<string>();
@@ -124,7 +124,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "NZXT" },
             DisplayName = "NZXT CAM",
             Category = "lighting",
-            DrivesDisplay = true,
+            DisplayHandlers = new[] { "nzxt-kraken" },
             ProcessNames = new[] { "NZXT CAM", "CAM", "NZXT CAM Beta", "NZXT CAM Service", "NZXTCAM" },
             // Stopped alongside the processes on End task. CAMService is NZXT's
             // own; Windows' unrelated "camsvc" (svchost -k osprivacy) must never
@@ -146,7 +146,7 @@ public static class ConflictAppCatalog
             Id = "nzxt-kraken",
             DisplayName = "NZXT Kraken",
             Category = "cooling",
-            DrivesDisplay = true,
+            DisplayHandlers = new[] { "nzxt-kraken" },
             ProcessNames = new[] { "NZXT Kraken" },
         },
 
@@ -202,6 +202,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "ASUS" },
             DisplayName = "ASUS Armoury Crate",
             Category = "lighting",
+            DisplayHandlers = new[] { "asus-ryujin-lcd" },
             AlsoCategory = "cooling",
             ProcessNames = new[] { "ArmouryCrate", "ArmouryCrate.Service", "ArmouryCrate.UserSessionHelper", "ArmourySocketServer", "Armoury Crate" },
         },
@@ -354,7 +355,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Corsair" },
             DisplayName = "Corsair iCUE",
             Category = "lighting",
-            DrivesDisplay = true,
+            DisplayHandlers = new[] { "corsair-xc7-lcd", "corsair-capellix-lcd", "corsair-link-lcd" },
             ProcessNames = new[]
             {
                 "iCUE", "iCUE Launcher", "iCUELauncher", "iCUEDevicePluginHost",
@@ -433,7 +434,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Lian Li" },
             DisplayName = "Lian Li L-Connect",
             Category = "lighting",
-            DrivesDisplay = true,
+            DisplayHandlers = new[] { "lianli-aio", "lianli-hydroshift-lcd", "lianli-galahad2-lcd", "lianli-screen88", "lianli-hydroshift2", "lianli-hydroshift2-curve" },
             ProcessNames = new[] { "L-Connect 3", "L-Connect", "LConnect3", "LConnect" },
             // Watcher first so it cannot restart the main service.
             WindowsServiceNames = new[] { "LConnectServiceWatcher", "LConnectService" },
@@ -460,7 +461,7 @@ public static class ConflictAppCatalog
             DefaultWhitelisted = true,
             DisplayName = "Tryx Kanali",
             Category = "cooling",
-            DrivesDisplay = true,
+            DisplayHandlers = new[] { "tryx" },
             ProcessNames = new[] { "Kanali" },
         },
 
@@ -473,7 +474,7 @@ public static class ConflictAppCatalog
             DefaultWhitelisted = true,
             DisplayName = "ZMatrices",
             Category = "cooling",
-            DrivesDisplay = true,
+            DisplayHandlers = new[] { "zmatrices-lcd" },
             ProcessNames = new[] { "ZMatrices", "zmUsbSendJpg" },
         },
 
@@ -574,6 +575,7 @@ public static class ConflictAppCatalog
             Id = "evga-aio",
             DisplayName = "EVGA AIO Control",
             Category = "cooling",
+            AlsoCategory = "lighting",
             ProcessNames = new[] { "EVGAAIO" },
         },
 
@@ -592,6 +594,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Thermaltake" },
             DisplayName = "Thermaltake RGB Plus",
             Category = "lighting",
+            AlsoCategory = "cooling",
             // TTRGBPlusGUI = real binary (the upstream Nexus registry has a
             // lowercase-L typo "TTRGBPlusGUl" we keep as a defensive alias).
             ProcessNames = new[] { "TTRGBPlus", "TTRGBPlusGUI", "TTRGBPlusGUl" },
@@ -611,6 +614,7 @@ public static class ConflictAppCatalog
             Vendors = new[] { "Cooler Master" },
             DisplayName = "Cooler Master MasterPlus+",
             Category = "lighting",
+            AlsoCategory = "cooling",
             ProcessNames = new[] { "CoolerMasterPlus" },
         },
 
@@ -661,17 +665,19 @@ public static class ConflictAppCatalog
 
     /// <summary>
     /// False when every pillar the app controls is off, so the conflict system
-    /// ignores it. Apps outside lighting and cooling (peripherals, monitoring),
-    /// display apps and <see cref="ConflictAppDefinition.AlwaysEnded"/> apps
-    /// always compete.
+    /// ignores it, unless it drives a display Nexus is using
+    /// (<paramref name="displayInUse"/> takes a handler id). Apps outside
+    /// lighting and cooling (peripherals, monitoring) and
+    /// <see cref="ConflictAppDefinition.AlwaysEnded"/> apps always compete.
     /// </summary>
-    public static bool Competes(ConflictAppDefinition def, bool lightingOn, bool coolingOn)
+    public static bool Competes(ConflictAppDefinition def, bool lightingOn, bool coolingOn, Func<string, bool>? displayInUse = null)
     {
-        if (def.AlwaysEnded || def.DrivesDisplay) return true;
+        if (def.AlwaysEnded) return true;
         var lighting = def.Category == "lighting" || def.AlsoCategory == "lighting";
         var cooling = def.Category == "cooling" || def.AlsoCategory == "cooling";
         if (!lighting && !cooling) return true;
-        return (lighting && lightingOn) || (cooling && coolingOn);
+        if ((lighting && lightingOn) || (cooling && coolingOn)) return true;
+        return displayInUse is not null && Array.Exists(def.DisplayHandlers, h => displayInUse(h));
     }
 
     /// <summary>Ids of every <see cref="ConflictAppDefinition.DefaultWhitelisted"/> app: the whitelist a fresh install starts with.</summary>

@@ -100,7 +100,7 @@ public sealed class SmartHubHeartbeatWorker : BackgroundService
         // write is a flash erase + program on the hub whatever the byte, so a
         // hub only ever takes it once. Older nexus builds left this OFF, which
         // is why a hub that has seen one of them never falls back on its own.
-        if (!_animationEnabledAsserted && _gates.Lighting && _hub.ReadFirmwareAnimation(out var animationOn))
+        if (!_animationEnabledAsserted && _hub.ReadFirmwareAnimation(out var animationOn))
         {
             if (animationOn)
             {
@@ -113,8 +113,8 @@ public sealed class SmartHubHeartbeatWorker : BackgroundService
             }
         }
 
-        // Cooling off: no duty writes, so the hub's 5 s watchdog expires and
-        // it runs its own flash-default duty. Re-armed so a later switch-on
+        // Cooling off: no duty writes, so the hub's watchdog expires and it
+        // runs its own flash-default duty. Re-armed so a later switch-on
         // restores the saved speeds.
         if (!_gates.Cooling)
             _initialDutyAsserted = false;

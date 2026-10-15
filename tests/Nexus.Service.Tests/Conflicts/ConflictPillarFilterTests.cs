@@ -34,13 +34,22 @@ public class ConflictPillarFilterTests
 
     [Theory]
     [InlineData("hyte-nexus-2")]
-    [InlineData("nzxt-cam")]
-    [InlineData("tryx-kanali")]
     [InlineData("razer-synapse")]
     [InlineData("msi-afterburner")]
-    public void AlwaysEndedDisplayPeripheralAndMonitoringApps_CompeteWithBothPillarsOff(string id)
+    public void AlwaysEndedPeripheralAndMonitoringApps_CompeteWithBothPillarsOff(string id)
     {
         Assert.True(ConflictAppCatalog.Competes(App(id), lightingOn: false, coolingOn: false));
+    }
+
+    [Theory]
+    [InlineData("nzxt-cam", "nzxt-kraken")]
+    [InlineData("tryx-kanali", "tryx")]
+    [InlineData("armoury-crate", "asus-ryujin-lcd")]
+    public void ADisplayApp_CompetesWithBothPillarsOff_OnlyForAHandlerInUse(string id, string handler)
+    {
+        Assert.False(ConflictAppCatalog.Competes(App(id), false, false));
+        Assert.False(ConflictAppCatalog.Competes(App(id), false, false, h => false));
+        Assert.True(ConflictAppCatalog.Competes(App(id), false, false, h => h == handler));
     }
 
     [Fact]

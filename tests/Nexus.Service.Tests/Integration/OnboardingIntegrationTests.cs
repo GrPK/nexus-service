@@ -270,7 +270,7 @@ public sealed class OnboardingResetIntegrationTests : IClassFixture<UndecidedApp
     public OnboardingResetIntegrationTests(UndecidedAppFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task Reset_clears_completed_features_and_lighting_flags()
+    public async Task Reset_clears_the_lighting_flag_and_keeps_the_features_decision()
     {
         var store = _factory.Services.GetRequiredService<IConfigStore>();
         var token = _factory.Services.GetRequiredService<TokenService>().Token;
@@ -293,7 +293,7 @@ public sealed class OnboardingResetIntegrationTests : IClassFixture<UndecidedApp
 
         Assert.Equal(StatusCodes.Status200OK, ctx.Response.StatusCode);
         Assert.False(store.Load().OnboardingCompleted);
-        Assert.False(store.Load().FeaturesOnboardingCompleted);
+        Assert.True(store.Load().FeaturesOnboardingCompleted);
         Assert.False(store.Load().LightingOnboardingCompleted);
         Assert.False(store.Load().PanelSwipeOnboardingCompleted);
         Assert.False(store.Load().ImmersiveSwipeOnboardingCompleted);
@@ -551,5 +551,58 @@ public sealed class OnboardingHintsProfileIsolationTests : IDisposable
         });
 
         Assert.Equal(new[] { "calibrate-fans" }, _store.Load().DismissedOnboardingHints);
+    }
+}
+
+public sealed class OnboardingFeaturesCompleteSwitchesPillarsTests : IClassFixture<UndecidedAppFactory>
+{
+    private readonly UndecidedAppFactory _factory;
+
+    public OnboardingFeaturesCompleteSwitchesPillarsTests(UndecidedAppFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task FeaturesComplete_switches_the_chosen_pillars_on_live_and_keeps_an_off_one_off()
+    {
+        var gates = _factory.Services.GetRequiredService<Nexus.Service.Lifecycle.FeatureGates>();
+        var store = _factory.Services.GetRequiredService<IConfigStore>();
+        store.Update(s => s.Features.Cooling = false);
+        Assert.False(gates.Lighting);
+        Assert.False(gates.Cooling);
+
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
+        var res = await client.PostAsync("/onboarding/features-complete", null);
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, res.StatusCode);
+        Assert.True(gates.Lighting);
+        Assert.False(gates.Cooling);
+    }
+}
+
+public sealed class OnboardingResetKeepsControlIntegrationTests : IClassFixture<NexusAppFactory>
+{
+    private readonly NexusAppFactory _factory;
+
+    public OnboardingResetKeepsControlIntegrationTests(NexusAppFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Reset_on_a_decided_install_keeps_the_pillars_on()
+    {
+        var gates = _factory.Services.GetRequiredService<Nexus.Service.Lifecycle.FeatureGates>();
+        var store = _factory.Services.GetRequiredService<IConfigStore>();
+        Assert.True(gates.Lighting);
+        Assert.True(gates.Cooling);
+
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
+        var res = await client.PostAsync("/onboarding/reset", null);
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, res.StatusCode);
+        Assert.False(store.Load().OnboardingCompleted);
+        Assert.True(store.Load().FeaturesOnboardingCompleted);
+        Assert.True(gates.Lighting);
+        Assert.True(gates.Cooling);
     }
 }
