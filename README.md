@@ -215,6 +215,12 @@ those hot paths, outside the solution and the publish:
 dotnet run -c Release -p:BuildWeb=false --project tests/Nexus.Service.Benchmarks -- --filter '*'
 ```
 
+On Windows, `Nexus.exe --lighting-bench <out.json> [--backends angle,wgl]
+[--adapters integrated,dedicated,warp] [--seconds N]` renders every built-in
+shader effect at the 30 Hz cadence in one child process per backend and
+adapter, and writes timing, CPU, memory and output-fingerprint results as JSON
+plus a summary table (also to the logs directory).
+
 ## Releases
 
 Installers are published as GitHub Releases on

@@ -17,6 +17,10 @@ internal static class CommandLineEntry
             // Throwaway render-GPU probe (see GpuProbe): optionally set the
             // GpuPreference class, create a GL context, print the bound renderer.
             ["--gpu-probe"] = GpuProbe.Run,
+            // Developer lighting render benchmark (see LightingBench); the child flag
+            // is the per-(backend, adapter) process the parent spawns.
+            ["--lighting-bench"] = Nexus.Service.Lighting.Bench.LightingBench.RunParent,
+            ["--lighting-bench-child"] = Nexus.Service.Lighting.Bench.LightingBench.RunChild,
             // One-shot invoked by the service via schtasks when the desktop
             // widget context menu's "Open dashboard" item is clicked.
             ["--open-app"] = static _ =>
