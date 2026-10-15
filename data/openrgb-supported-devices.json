@@ -1,5 +1,5 @@
 {
-  "count": 1996,
+  "count": 2010,
   "devices": [
     {
       "name": "Bloody B820R",
@@ -108,6 +108,13 @@
     },
     {
       "name": "ASRock Radeon RX 7900 XTX Phantom Gaming",
+      "vid": null,
+      "pid": null,
+      "controller": "ASRockSMBusController",
+      "kind": "i2c"
+    },
+    {
+      "name": "ASRock Radeon RX 7900 XTX Taichi 24GB OC",
       "vid": null,
       "pid": null,
       "controller": "ASRockSMBusController",
@@ -1878,6 +1885,13 @@
       "kind": "i2c"
     },
     {
+      "name": "iGame GeForce RTX 5080 Ultra W OC",
+      "vid": null,
+      "pid": null,
+      "controller": "ColorfulGPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "iGame GeForce RTX 2070 SUPER Advanced OC-V",
       "vid": null,
       "pid": null,
@@ -2868,6 +2882,13 @@
       "name": "Corsair MM700 3XL",
       "vid": "0x1B1C",
       "pid": "0x1BC9",
+      "controller": "CorsairPeripheralV2Controller",
+      "kind": "hid"
+    },
+    {
+      "name": "Corsair Scimitar Elite RGB",
+      "vid": "0x1B1C",
+      "pid": "0x1BE3",
       "controller": "CorsairPeripheralV2Controller",
       "kind": "hid"
     },
@@ -5308,6 +5329,13 @@
       "kind": "hid"
     },
     {
+      "name": "GameSir Nova 2 Lite (Wireless)",
+      "vid": "0x3537",
+      "pid": "0x1098",
+      "controller": "GameSirController",
+      "kind": "hid"
+    },
+    {
       "name": "Gigabyte AORUS ATC800",
       "vid": "0x1044",
       "pid": "0x7A42",
@@ -5407,6 +5435,13 @@
     },
     {
       "name": "Gigabyte AORUS Radeon RX 9070 XT Elite",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2BlackwellGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte GeForce RTX 5060 Ti Aero OC",
       "vid": null,
       "pid": null,
       "controller": "GigabyteRGBFusion2BlackwellGPUController",
@@ -5539,7 +5574,21 @@
       "kind": "i2c"
     },
     {
+      "name": "Gigabyte Radeon RX 9060 XT GAMING OC ICE 16G",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2BlackwellGPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "Gigabyte Radeon RX 9070 GAMING OC",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2BlackwellGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte Radeon RX 9070 GRE GAMING OC 12G",
       "vid": null,
       "pid": null,
       "controller": "GigabyteRGBFusion2BlackwellGPUController",
@@ -5931,6 +5980,20 @@
       "kind": "i2c"
     },
     {
+      "name": "Gigabyte GeForce RTX 4070 Ti SUPER AORUS MASTER",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2GPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte GeForce RTX 4070 Ti SUPER Eagle OC ICE",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2GPUController",
+      "kind": "i2c"
+    },
+    {
       "name": "Gigabyte GeForce RTX 4070 Ti SUPER GAMING OC",
       "vid": null,
       "pid": null,
@@ -6016,6 +6079,13 @@
     },
     {
       "name": "Gigabyte Radeon RX 6700 XT GAMING OC 12G",
+      "vid": null,
+      "pid": null,
+      "controller": "GigabyteRGBFusion2GPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "Gigabyte Radeon RX 6750 XT GAMING OC 12G",
       "vid": null,
       "pid": null,
       "controller": "GigabyteRGBFusion2GPUController",
@@ -8382,6 +8452,20 @@
     },
     {
       "name": "MSI GeForce RTX 4090 Suprim X Classic",
+      "vid": null,
+      "pid": null,
+      "controller": "MSIGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "MSI GeForce RTX 5060 8G Gaming Trio OC",
+      "vid": null,
+      "pid": null,
+      "controller": "MSIGPUController",
+      "kind": "i2c"
+    },
+    {
+      "name": "MSI GeForce RTX 5060 Ti 16G Gaming Trio OC",
       "vid": null,
       "pid": null,
       "controller": "MSIGPUController",
@@ -12245,6 +12329,13 @@
       "kind": "hid"
     },
     {
+      "name": "Roccat Vulcan II Mini",
+      "vid": "0x1E7D",
+      "pid": "0x2F09",
+      "controller": "RoccatController",
+      "kind": "hid"
+    },
+    {
       "name": "Roccat Vulcan Pro",
       "vid": "0x1E7D",
       "pid": "0x30F7",
@@ -13067,6 +13158,13 @@
       "name": "SteelSeries Rival 3 (Old Firmware)",
       "vid": "0x1038",
       "pid": "0x1824",
+      "controller": "SteelSeriesController",
+      "kind": "hid"
+    },
+    {
+      "name": "SteelSeries Rival 3 Wireless",
+      "vid": "0x1038",
+      "pid": "0x1830",
       "controller": "SteelSeriesController",
       "kind": "hid"
     },
