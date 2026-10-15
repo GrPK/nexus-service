@@ -98,4 +98,39 @@ public class LightingEngineRenderAheadPinTests
         Assert.True(req.Done.Wait(TimeSpan.FromSeconds(5)));
         Assert.Null(req.Frames);
     }
+
+    private static async Task<DeviceFrame[][]> Window(LightingEngine engine, params string[] ids)
+    {
+        Assert.True(await SettledAhead(engine, ids));
+        var req = engine.RequestAhead(ids, new long[] { 1, 2, 3 });
+        Assert.True(req.Done.Wait(TimeSpan.FromSeconds(5)));
+        Assert.NotNull(req.Frames);
+        return req.Frames!;
+    }
+
+    [Fact]
+    public async Task Ahead_window_paints_a_static_color_pin_over_the_global_effect()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("d-0", new DevicePin { Kind = DevicePinKinds.Static, Color = "#102030" });
+        using var engine = Engine(pins);
+        foreach (var frame in await Window(engine, "d-0", "d-1"))
+        {
+            Assert.All(Enumerable.Range(0, 4), i => Assert.Equal(new byte[] { 0x10, 0x20, 0x30 }, frame[0].LedBytes.ToArray().Skip(i * 3).Take(3).ToArray()));
+            Assert.Equal(new byte[] { 0, 255, 0 }, frame[1].LedBytes.ToArray().Take(3).ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task Ahead_window_paints_a_static_effect_pin_with_its_own_look()
+    {
+        var pins = new DevicePinTracker();
+        pins.Set("d-0", Pin(DevicePinKinds.Static, "red"));
+        using var engine = Engine(pins);
+        foreach (var frame in await Window(engine, "d-0", "d-1"))
+        {
+            Assert.Equal(new byte[] { 0, 0, 255 }, frame[0].LedBytes.ToArray().Take(3).ToArray());
+            Assert.Equal(new byte[] { 0, 255, 0 }, frame[1].LedBytes.ToArray().Take(3).ToArray());
+        }
+    }
 }

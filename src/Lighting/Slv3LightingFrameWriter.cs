@@ -34,6 +34,10 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
     // telemetry beacon and the device-list poll keep their share.
     private const int MinPushIntervalMs = 100;
 
+    // Live-path floor per chain. Left at the shipped value until measured on hardware; a smaller step raises the
+    // live update rate but costs RF air the telemetry beacon and device-list poll share.
+    internal static int LivePushIntervalMs = MinPushIntervalMs;
+
     // How long after a push the RX-reported effect_index is given to catch up
     // (a few device-list polls) before a mismatch counts as a lost push and is
     // re-sent. Comparing before the echo can arrive re-sent every unchanged
@@ -167,7 +171,7 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
         var structures = _provider.BuildStructures();
         var liveMacs = new HashSet<string>(structures.Count);
 
-        var minPushIntervalMs = MinPushIntervalMs * Math.Max(1, structures.Count);
+        var minPushIntervalMs = LivePushIntervalMs * Math.Max(1, structures.Count);
         var nowMs = UtcNowMs();
         AdvanceSharedWindow(nowMs);
         _rollingIds.Clear();
