@@ -247,6 +247,79 @@ public sealed class AudioMixerService : IDisposable
         return true;
     }
 
+    /// <summary>Most ids kept in a saved order per direction.</summary>
+    public const int MaxOrdered = 64;
+
+    /// <summary>Replaces the saved device order for one direction. Blank and repeated ids
+    /// are dropped; ids of devices that are not plugged in are kept on purpose.
+    /// Returns "" on success, else the refusal reason.</summary>
+    public string SetOrder(string direction, IEnumerable<string>? ids)
+    {
+        var isOutput = string.Equals(direction, "output", StringComparison.OrdinalIgnoreCase);
+        if (!isOutput && !string.Equals(direction, "input", StringComparison.OrdinalIgnoreCase)) return ErrorUnknownDirection;
+
+        var unique = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in ids ?? Array.Empty<string>())
+        {
+            if (!string.IsNullOrWhiteSpace(id) && seen.Add(id)) unique.Add(id);
+        }
+        var clean = unique;
+        if (unique.Count > MaxOrdered)
+        {
+            // Detected ids always survive the cap, so a drag is never lost to a
+            // pile of stale ids; the stale ones are cut from the tail.
+            var list = _devices.ListDevices();
+            var detected = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in isOutput ? list.Outputs : list.Inputs) detected.Add(d.Id);
+            // A provider that failed to enumerate returns nothing in either
+            // direction; trimming then would cut by position and could drop what
+            // the user just dragged. One empty direction alone is a real PC.
+            if (list.Outputs.Count == 0 && list.Inputs.Count == 0) return ErrorDevicesUnavailable;
+            var budget = Math.Max(0, MaxOrdered - unique.FindAll(detected.Contains).Count);
+            clean = unique.FindAll(id => detected.Contains(id) || budget-- > 0);
+        }
+        _store.Update(s =>
+        {
+            if (isOutput) s.AudioMixer.OutputOrder = clean;
+            else s.AudioMixer.InputOrder = clean;
+        });
+        BumpConfig();
+        return "";
+    }
+
+    public const string ErrorUnknownDirection = "unknown direction";
+    public const string ErrorDevicesUnavailable = "audio devices could not be read";
+
+    /// <summary>The device list with detected devices from the saved order
+    /// first, in that order, then the rest in the provider's order. The saved
+    /// order rides along whole so an unplugged device keeps its slot on the next write.</summary>
+    public AudioDeviceList ListDevices()
+    {
+        var list = _devices.ListDevices();
+        var settings = _store.Load().AudioMixer;
+        var outputOrder = settings.OutputOrder;
+        var inputOrder = settings.InputOrder;
+        list.Outputs = SavedOrderFirst(list.Outputs, outputOrder);
+        list.Inputs = SavedOrderFirst(list.Inputs, inputOrder);
+        list.OutputOrder = new List<string>(outputOrder);
+        list.InputOrder = new List<string>(inputOrder);
+        return list;
+    }
+
+    internal static List<AudioDevice> SavedOrderFirst(List<AudioDevice> devices, List<string> saved)
+    {
+        if (saved.Count == 0) return devices;
+        var rank = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < saved.Count; i++) rank.TryAdd(saved[i], i);
+        var head = new List<AudioDevice>();
+        var tail = new List<AudioDevice>();
+        foreach (var d in devices) (rank.ContainsKey(d.Id) ? head : tail).Add(d);
+        head.Sort((a, b) => rank[a.Id].CompareTo(rank[b.Id]));
+        head.AddRange(tail);
+        return head;
+    }
+
     /// <summary>The default output or input moved, so open mixers must re-read
     /// the device list rather than wait out their poll.</summary>
     public void NotifyEndpointsChanged() => BumpConfig();

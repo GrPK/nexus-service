@@ -395,6 +395,12 @@ public sealed class AudioMixerSettings
     public Dictionary<string, Nexus.Service.Models.Activity.AudioMixerLevelDto> Levels { get; set; } = new();
 
     public List<Nexus.Service.Models.Activity.AudioMixerPresetDto> Presets { get; set; } = new();
+
+    /// <summary>Endpoint ids in the order the user dragged them. Kept while a device
+    /// is unplugged so it returns to its slot when it reappears.</summary>
+    public List<string> OutputOrder { get; set; } = new();
+
+    public List<string> InputOrder { get; set; } = new();
 }
 
 public sealed class SteamSettings
