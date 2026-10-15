@@ -299,6 +299,16 @@ public sealed class LhmComputer : IDisposable
         }
     }
 
+    /// <summary>A forced walk for an explicit health refresh: opens the reader window first so the drives read, serialized with the other SMART readers.</summary>
+    public void WalkForSmartRefresh()
+    {
+        lock (_readerLock)
+        {
+            SmartLiveConsumers.NoteRead();
+            Update(SensorRefresh.Force);
+        }
+    }
+
     // Drives the walk enumerates; read outside _updateLock, like the rest of the demand inputs.
     private List<string> StorageIdentifiers()
     {

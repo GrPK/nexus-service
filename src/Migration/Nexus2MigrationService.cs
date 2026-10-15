@@ -79,7 +79,7 @@ public sealed class Nexus2MigrationService
     public bool HasImportableFanCurves()
     {
         // The gate can flip while a cached answer is still fresh.
-        if (!_store.Load().Features.Cooling || _services.GetService<Cooling.IFanControlProvider>() is null)
+        if (!Lifecycle.FeatureGates.CoolingOf(_store.Load()) || _services.GetService<Cooling.IFanControlProvider>() is null)
         {
             return false;
         }
@@ -131,7 +131,7 @@ public sealed class Nexus2MigrationService
         {
             Channels = readChannels,
             Sources = sources,
-            CoolingEnabled = settings.Features.Cooling,
+            CoolingEnabled = Lifecycle.FeatureGates.CoolingOf(settings),
             IsCoolingUntouched = target => Nexus2RecommendedPreset.IsUntouched(settings.Cooling, target),
             ThermalGuardEnabled = settings.Cooling.ThermalGuardEnabled,
             FanRoles = Cooling.CoolingSnapshots.FanRoles(settings.Cooling),
@@ -206,7 +206,7 @@ public sealed class Nexus2MigrationService
 
     /// <summary>What the plan depends on in settings; a change between planning and writing means the plan is stale.</summary>
     private static string CoolingFingerprint(Persistence.NexusSettings settings) =>
-        settings.Features.Cooling + "|" + Cooling.CoolingSnapshots.Retry(() => System.Text.Json.JsonSerializer.Serialize(settings.Cooling, Serialization.PersistenceJsonContext.Default.CoolingSettings));
+        Lifecycle.FeatureGates.CoolingOf(settings) + "|" + Cooling.CoolingSnapshots.Retry(() => System.Text.Json.JsonSerializer.Serialize(settings.Cooling, Serialization.PersistenceJsonContext.Default.CoolingSettings));
 
     internal Nexus2ApplyResultDto ApplyFanCurves(JsonElement root)
     {
@@ -228,10 +228,10 @@ public sealed class Nexus2MigrationService
                         preset,
                         fans,
                         _store,
-                        s => s.Features.Cooling && Nexus2RecommendedPreset.IsUntouched(s.Cooling, preset));
+                        s => Lifecycle.FeatureGates.CoolingOf(s) && Nexus2RecommendedPreset.IsUntouched(s.Cooling, preset));
                     if (applied is null)
                     {
-                        return Skip(id, _store.Load().Features.Cooling ? Nexus2FanCurveReasons.NoteCoolingCustomized : Nexus2FanCurveReasons.NoteCoolingDisabled);
+                        return Skip(id, Lifecycle.FeatureGates.CoolingOf(_store.Load()) ? Nexus2FanCurveReasons.NoteCoolingCustomized : Nexus2FanCurveReasons.NoteCoolingDisabled);
                     }
                     lock (_fanCurveCheckLock)
                     {

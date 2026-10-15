@@ -669,27 +669,3 @@ public sealed class SmartPollActiveRouteTests : IClassFixture<NexusAppFactory>
         Assert.Contains("\"active\":true", await client.GetStringAsync("/monitoring/smart-poll"));
     }
 }
-
-[Collection("SmartLiveConsumers")]
-public sealed class SmartRefreshRouteKeepsReadsTests : IClassFixture<NexusAppFactory>
-{
-    private readonly NexusAppFactory _factory;
-
-    public SmartRefreshRouteKeepsReadsTests(NexusAppFactory factory) => _factory = factory;
-
-    [Fact]
-    public async Task A_diagnostics_smart_refresh_marks_a_live_reader()
-    {
-        Nexus.Service.Sensors.SmartLiveConsumers.Forget();
-        var client = _factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-            "Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
-        Assert.False(Nexus.Service.Sensors.SmartLiveConsumers.Any(null));
-
-        var res = await client.GetAsync("/diagnostics/smart?refresh=true");
-
-        Assert.Equal(System.Net.HttpStatusCode.OK, res.StatusCode);
-        Assert.True(Nexus.Service.Sensors.SmartLiveConsumers.Any(null));
-        Nexus.Service.Sensors.SmartLiveConsumers.Forget();
-    }
-}

@@ -962,10 +962,14 @@ static void FastServiceShutdown(WebApplication app)
         {
             try
             {
-                // Cooling off (or undecided) forbids any fan write, shutdown included.
+                // Cooling off (or undecided) forbids any fan write, shutdown included, except the one release a switch-off queued.
                 if (sp.GetService<Nexus.Service.Lifecycle.FeatureGates>()?.Cooling ?? true)
                 {
                     sp.GetService<IFanControlProvider>()?.ReleaseAll();
+                }
+                else
+                {
+                    sp.GetService<Nexus.Service.Cooling.CurveEngine>()?.DrainPendingRelease();
                 }
             }
             catch { }

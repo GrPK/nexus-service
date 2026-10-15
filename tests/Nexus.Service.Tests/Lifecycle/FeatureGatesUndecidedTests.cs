@@ -38,4 +38,19 @@ public class FeatureGatesUndecidedTests
 
         Assert.True(gates.Cooling);
     }
+
+    [Fact]
+    public void TheStaticHelpers_MatchTheGates_ForASettingsSnapshot()
+    {
+        var undecided = new Nexus.Service.Persistence.NexusSettings();
+        Assert.False(FeatureGates.LightingOf(undecided));
+        Assert.False(FeatureGates.CoolingOf(undecided));
+
+        undecided.FeaturesOnboardingCompleted = true;
+        Assert.True(FeatureGates.CoolingOf(undecided));
+
+        undecided.Features.Cooling = false;
+        Assert.False(FeatureGates.CoolingOf(undecided));
+        Assert.True(FeatureGates.LightingOf(undecided));
+    }
 }

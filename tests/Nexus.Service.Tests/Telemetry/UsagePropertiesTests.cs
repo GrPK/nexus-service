@@ -91,10 +91,15 @@ public class UsagePropertiesTests
     public void Reports_only_the_pillars_that_are_off()
     {
         // Every flag defaults true, so the common install reports an empty list.
-        var defaults = SystemProfileService.BuildUsageProperties(new NexusSettings(), 0, 0);
+        var decided = new NexusSettings { FeaturesOnboardingCompleted = true };
+        var defaults = SystemProfileService.BuildUsageProperties(decided, 0, 0);
         Assert.Empty((string[])Value(defaults, "features_off")!);
 
-        var s = new NexusSettings();
+        // An undecided install behaves as lighting and cooling off, and reports it.
+        var undecided = SystemProfileService.BuildUsageProperties(new NexusSettings(), 0, 0);
+        Assert.Equal(new[] { "lighting", "cooling" }, Value(undecided, "features_off"));
+
+        var s = new NexusSettings { FeaturesOnboardingCompleted = true };
         s.Features.Cooling = false;
         s.Features.Diagnostics = false;
         var props = SystemProfileService.BuildUsageProperties(s, 0, 0);

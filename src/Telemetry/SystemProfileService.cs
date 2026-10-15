@@ -216,8 +216,8 @@ internal sealed class SystemProfileService : BackgroundService
         // Which pillars are OFF is the signal; every flag defaults true, so an
         // empty list is the overwhelmingly common case and costs nothing.
         var featuresOff = new List<string>(4);
-        if (!settings.Features.Lighting) featuresOff.Add("lighting");
-        if (!settings.Features.Cooling) featuresOff.Add("cooling");
+        if (!Lifecycle.FeatureGates.LightingOf(settings)) featuresOff.Add("lighting");
+        if (!Lifecycle.FeatureGates.CoolingOf(settings)) featuresOff.Add("cooling");
         if (!settings.Features.Monitoring) featuresOff.Add("monitoring");
         if (!settings.Features.Diagnostics) featuresOff.Add("diagnostics");
 

@@ -299,6 +299,22 @@ public class FeatureReconcilerTests
     }
 
     [Fact]
+    public void DrainPendingRelease_FulfillsAQueuedRelease_BeforeTheNextTick_AndOnlyOnce()
+    {
+        var (reconciler, _, fans, curveEngine, _, _, store) = Build();
+        var before = new FeaturesSettings { Lighting = true, Cooling = true, Monitoring = true, Diagnostics = true };
+        var after = new FeaturesSettings { Lighting = true, Cooling = false, Monitoring = true, Diagnostics = true };
+        reconciler.Apply(before, after);
+        store.Update(s => s.Features.Cooling = false);
+
+        curveEngine.DrainPendingRelease();
+        curveEngine.DrainPendingRelease();
+        curveEngine.Tick();
+
+        Assert.Equal(1, fans.ReleaseAllCallCount);
+    }
+
+    [Fact]
     public void Apply_CoolingOnToOff_ReleasesOnce_OnTheNextDisabledTick()
     {
         var (reconciler, _, fans, curveEngine, _, _, store) = Build();

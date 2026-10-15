@@ -119,6 +119,9 @@ public sealed class CurveEngine : BackgroundService
 
     public void RequestRelease() => Interlocked.Exchange(ref _pendingRelease, 1);
 
+    /// <summary>Fulfills a queued release now; shutdown calls it so a stop before the next tick still hands the fans back.</summary>
+    public void DrainPendingRelease() => ReleaseIfPending();
+
     private void ReleaseIfPending()
     {
         if (Interlocked.Exchange(ref _pendingRelease, 0) != 1)
