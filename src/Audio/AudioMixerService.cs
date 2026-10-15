@@ -275,14 +275,31 @@ public sealed class AudioMixerService : IDisposable
         return true;
     }
 
-    /// <summary>The device list with the saved pins attached.</summary>
+    /// <summary>The device list with detected pinned devices first, in pinned
+    /// order, then the rest in the provider's order. The saved pins ride along
+    /// whole so a pin for an unplugged device is not lost on the next write.</summary>
     public AudioDeviceList ListDevices()
     {
         var list = _devices.ListDevices();
         var settings = _store.Load().AudioMixer;
+        list.Outputs = PinnedFirst(list.Outputs, settings.PinnedOutputIds);
+        list.Inputs = PinnedFirst(list.Inputs, settings.PinnedInputIds);
         list.PinnedOutputIds = new List<string>(settings.PinnedOutputIds);
         list.PinnedInputIds = new List<string>(settings.PinnedInputIds);
         return list;
+    }
+
+    internal static List<AudioDevice> PinnedFirst(List<AudioDevice> devices, List<string> pinned)
+    {
+        if (pinned.Count == 0) return devices;
+        var rank = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < pinned.Count; i++) rank.TryAdd(pinned[i], i);
+        var head = new List<AudioDevice>();
+        var tail = new List<AudioDevice>();
+        foreach (var d in devices) (rank.ContainsKey(d.Id) ? head : tail).Add(d);
+        head.Sort((a, b) => rank[a.Id].CompareTo(rank[b.Id]));
+        head.AddRange(tail);
+        return head;
     }
 
     /// <summary>The default output or input moved, so open mixers must re-read

@@ -442,6 +442,26 @@ public sealed class AudioMixerServiceTests
     }
 
     [Fact]
+    public void PinnedDetectedDevicesComeFirstInPinnedOrderAndUndetectedPinsAreHidden()
+    {
+        var (mixer, _, _) = Build();
+
+        mixer.SetPinned("output", new[] { "gone", "out-b" });
+
+        var ids = mixer.ListDevices().Outputs.ConvertAll(d => d.Id);
+        Assert.Equal(new[] { "out-b", "out-a" }, ids);
+        Assert.Equal(new[] { "gone", "out-b" }, mixer.ListDevices().PinnedOutputIds);
+    }
+
+    [Fact]
+    public void WithNoPinsTheProviderOrderIsUntouched()
+    {
+        var (mixer, _, _) = Build();
+
+        Assert.Equal(new[] { "out-a", "out-b" }, mixer.ListDevices().Outputs.ConvertAll(d => d.Id));
+    }
+
+    [Fact]
     public void AnUnknownPinDirectionIsRefusedAndChangesNothing()
     {
         var (mixer, _, _) = Build();
