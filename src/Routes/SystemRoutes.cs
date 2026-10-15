@@ -226,7 +226,7 @@ public static class SystemRoutes
         app.MapGet("/system/audio/devices", (Nexus.Service.Audio.AudioMixerService mixer) => mixer.ListDevices()).AllowPanel();
         // The order applies at once; the bump re-reads the list on every open mixer.
         app.MapPost("/system/audio/order", (SetAudioDeviceOrderBody body, Nexus.Service.Audio.AudioMixerService mixer) =>
-            mixer.SetOrder(body.Direction ?? "", body.Ids) ? ApiResponse.Ok() : ApiResponse.Fail("unknown direction")).AllowPanel();
+            mixer.SetOrder(body.Direction ?? "", body.Ids) is { Length: > 0 } error ? ApiResponse.Fail(error) : ApiResponse.Ok()).AllowPanel();
         // The bump is what tells other open mixers to re-read the endpoints; the
         // caller's own view updates off its POST resolving.
         app.MapPost("/system/audio/default-output", (SetAudioDefaultBody body,

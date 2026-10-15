@@ -252,11 +252,11 @@ public sealed class AudioMixerService : IDisposable
 
     /// <summary>Replaces the saved device order for one direction. Blank and repeated ids
     /// are dropped; ids of devices that are not plugged in are kept on purpose.
-    /// Returns false for an unknown direction.</summary>
-    public bool SetOrder(string direction, IEnumerable<string>? ids)
+    /// Returns "" on success, else the refusal reason.</summary>
+    public string SetOrder(string direction, IEnumerable<string>? ids)
     {
         var isOutput = string.Equals(direction, "output", StringComparison.OrdinalIgnoreCase);
-        if (!isOutput && !string.Equals(direction, "input", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!isOutput && !string.Equals(direction, "input", StringComparison.OrdinalIgnoreCase)) return ErrorUnknownDirection;
 
         var unique = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -272,6 +272,9 @@ public sealed class AudioMixerService : IDisposable
             var list = _devices.ListDevices();
             var detected = new HashSet<string>(StringComparer.Ordinal);
             foreach (var d in isOutput ? list.Outputs : list.Inputs) detected.Add(d.Id);
+            // A provider that failed to enumerate returns an empty list; trimming
+            // then would cut by position and could drop what the user just dragged.
+            if (detected.Count == 0) return ErrorDevicesUnavailable;
             var budget = Math.Max(0, MaxOrdered - unique.FindAll(detected.Contains).Count);
             clean = unique.FindAll(id => detected.Contains(id) || budget-- > 0);
         }
@@ -281,8 +284,11 @@ public sealed class AudioMixerService : IDisposable
             else s.AudioMixer.InputOrder = clean;
         });
         BumpConfig();
-        return true;
+        return "";
     }
+
+    public const string ErrorUnknownDirection = "unknown direction";
+    public const string ErrorDevicesUnavailable = "audio devices could not be read";
 
     /// <summary>The device list with detected devices from the saved order
     /// first, in that order, then the rest in the provider's order. The saved
