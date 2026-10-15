@@ -28,7 +28,7 @@ public static class DeckIconDefaults
             case "openUrl": return DeckCategory.Open;
             case "system":
                 var op = action.SystemAction?.Op ?? "";
-                if (op is "openSettings" or "screenshot" or "screenRecord") { return DeckCategory.Open; }
+                if (op is "openSettings" or "screenshot" or "screenRecord" or "taskManager") { return DeckCategory.Open; }
                 if (op.StartsWith("volume") || op == "muteToggle") { return DeckCategory.Volume; }
                 if (op.StartsWith("media")) { return DeckCategory.Media; }
                 return DeckCategory.Brightness;
@@ -107,6 +107,7 @@ public static class DeckIconDefaults
                     "openSettings" => "Settings",
                     "screenshot" => "Camera",
                     "screenRecord" => "Monitor",
+                    "taskManager" => "Activity",
                     _ => "Sliders",
                 };
             case "hotkey": return "Keyboard";

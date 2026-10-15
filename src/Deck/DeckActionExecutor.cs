@@ -402,6 +402,12 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
             case "openSettings":
                 await _system.OpenSettingsAsync().ConfigureAwait(false);
                 return;
+            case "taskManager":
+                if (!_system.OpenTaskManager())
+                {
+                    throw new InvalidOperationException("failed to open task manager");
+                }
+                return;
             case "screenshot":
             case "screenRecord":
             {

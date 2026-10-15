@@ -523,6 +523,13 @@ if (!testHost)
             .Load().StartupDelaySeconds);
 }
 
+// One-time default Stream Deck presets; a test host starts from an empty store.
+if (!testHost)
+{
+    Nexus.Service.Deck.DeckDefaultPresets.SeedOnce(
+        app.Services.GetRequiredService<Nexus.Service.Persistence.IConfigStore>());
+}
+
 // Connect the session D-Bus once here - single-threaded, BEFORE hosted services
 // (curve engine etc.) start. A root daemon drops euid for this socket connect
 // (LinuxSession.ConnectAsSessionUser); doing it now keeps that process-wide euid

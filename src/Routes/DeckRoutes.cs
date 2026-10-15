@@ -634,9 +634,10 @@ public static class DeckRoutes
     }
 
     /// <summary>
-    /// A new widget joins the first existing preset (adding a deck is like
-    /// plugging in a second Stream Deck, not starting a fresh layout); only a
-    /// host with no presets at all gets a fresh empty one at the widget's grid.
+    /// A new widget joins the first existing preset that has keys (adding a
+    /// deck is like plugging in a second Stream Deck, not starting a fresh
+    /// layout); a host with none gets a fresh preset at the widget's grid
+    /// holding the Essentials keys.
     /// </summary>
     private static DeckInstance CreateLazyWidgetInstance(IConfigStore store, string instanceId, int? cols, int? rows, bool isDesktop)
     {
@@ -648,18 +649,21 @@ public static class DeckRoutes
                 created = already;
                 return;
             }
-            // A panel caller joins only what PUT would let it activate.
+            // A panel caller joins only what PUT would let it activate. An empty
+            // preset is never worth joining: the widget would show no keys.
             var presetId = s.StreamDeck.Presets
-                .FirstOrDefault(p => isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck).Any())?.Id;
+                .FirstOrDefault(p => DeckConfigNavigation.HasContent(p.Deck) && (isDesktop || !DeckLayoutPolicy.PrivilegedActions(p.Deck).Any()))?.Id;
             if (presetId is null)
             {
+                var (presetCols, presetRows, deck) = DeckDefaultPresets.EssentialsFor(
+                    System.Math.Clamp(cols ?? 2, 1, 8), System.Math.Clamp(rows ?? 2, 1, 8));
                 var preset = new DeckPreset
                 {
                     Id = DeckModesMigration.NewPresetId(),
                     Name = DeckModesMigration.UniqueName(s.StreamDeck.Presets, "Deck", "widget"),
-                    Cols = System.Math.Clamp(cols ?? 2, 1, 8),
-                    Rows = System.Math.Clamp(rows ?? 2, 1, 8),
-                    Deck = DeckConfigNavigation.EmptyConfig(),
+                    Cols = presetCols,
+                    Rows = presetRows,
+                    Deck = deck,
                 };
                 s.StreamDeck.Presets.Add(preset);
                 presetId = preset.Id;

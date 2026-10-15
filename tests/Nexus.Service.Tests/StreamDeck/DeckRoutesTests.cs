@@ -532,7 +532,7 @@ public sealed class DeckRoutesTests : IClassFixture<DeckRoutesHostFactory>
     }
 
     [Fact]
-    public async Task GetInstance_UnknownWidgetInstance_LazilyCreatesAnEmptyPreset()
+    public async Task GetInstance_UnknownWidgetInstance_LazilyCreatesAnEssentialsPreset()
     {
         var (factory, client) = Boot();
         using (factory)
@@ -546,8 +546,58 @@ public sealed class DeckRoutesTests : IClassFixture<DeckRoutesHostFactory>
             var store = factory.Services.GetRequiredService<IConfigStore>();
             var preset = Assert.Single(store.Load().StreamDeck.Presets, p => p.Id == presetId);
             Assert.Equal((4, 2), (preset.Cols, preset.Rows));
-            Assert.Single(preset.Deck.Pages);
+            var slots = Assert.Single(preset.Deck.Pages).Slots;
+            Assert.Equal(8, slots.Count);
+            Assert.Equal(
+                ["volumeDown", "volumeUp", "screenshot", "taskManager"],
+                slots.Take(4).Select(sl => sl.Action!.SystemAction!.Op));
+            Assert.All(slots.Skip(4), sl => Assert.Null(sl.Action));
             Assert.Equal("custom", store.Load().StreamDeck.Instances["widget:fresh"].Mode);
+        }
+    }
+
+    [Fact]
+    public async Task GetInstance_UnknownWidgetInstance_SkipsEmptyPresetsAndCreatesEssentials()
+    {
+        var (factory, client) = Boot();
+        using (factory)
+        {
+            var store = factory.Services.GetRequiredService<IConfigStore>();
+            store.Update(s => s.StreamDeck.Presets.Add(new DeckPreset { Id = "empty", Name = "Deck", Cols = 2, Rows = 2 }));
+
+            var res = await client.GetAsync("/deck/instances/widget:fresh?cols=4&rows=1");
+            Assert.True(res.IsSuccessStatusCode);
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+            var presetId = doc.RootElement.GetProperty("instance").GetProperty("activePresetId").GetString();
+
+            Assert.NotEqual("empty", presetId);
+            var created = Assert.Single(store.Load().StreamDeck.Presets, p => p.Id == presetId);
+            Assert.Equal(4, created.Deck.Pages[0].Slots.Count(sl => sl.Action is not null));
+            Assert.Equal("Deck (widget)", created.Name);
+            Assert.Equal(2, store.Load().StreamDeck.Presets.Count);
+        }
+    }
+
+    [Fact]
+    public async Task GetInstance_ExistingWidgetInstance_IsLeftUntouched()
+    {
+        var (factory, client) = Boot();
+        using (factory)
+        {
+            var store = factory.Services.GetRequiredService<IConfigStore>();
+            store.Update(s =>
+            {
+                s.StreamDeck.Presets.Add(new DeckPreset { Id = "empty", Name = "Deck", Cols = 2, Rows = 2 });
+                s.StreamDeck.Instances["widget:old"] = new DeckInstance { Mode = "custom", ActivePresetId = "empty" };
+            });
+
+            var res = await client.GetAsync("/deck/instances/widget:old?cols=4&rows=1");
+            Assert.True(res.IsSuccessStatusCode);
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+
+            Assert.Equal("empty", doc.RootElement.GetProperty("instance").GetProperty("activePresetId").GetString());
+            Assert.Single(store.Load().StreamDeck.Presets);
+            Assert.Empty(store.Load().StreamDeck.Presets[0].Deck.Pages.SelectMany(p => p.Slots));
         }
     }
 
@@ -560,8 +610,9 @@ public sealed class DeckRoutesTests : IClassFixture<DeckRoutesHostFactory>
             var store = factory.Services.GetRequiredService<IConfigStore>();
             store.Update(s =>
             {
-                s.StreamDeck.Presets.Add(new DeckPreset { Id = "p1", Name = "First", Cols = 5, Rows = 3 });
-                s.StreamDeck.Presets.Add(new DeckPreset { Id = "p2", Name = "Second", Cols = 5, Rows = 3 });
+                var withKey = () => new DeckConfig { Pages = { new DeckPage { Slots = { new DeckSlot { Label = "Key" } } } } };
+                s.StreamDeck.Presets.Add(new DeckPreset { Id = "p1", Name = "First", Cols = 5, Rows = 3, Deck = withKey() });
+                s.StreamDeck.Presets.Add(new DeckPreset { Id = "p2", Name = "Second", Cols = 5, Rows = 3, Deck = withKey() });
             });
 
             var res = await client.GetAsync("/deck/instances/widget:fresh");

@@ -139,6 +139,9 @@ public sealed class NexusSettings
     /// every install shows the hint until the tray is opened once.</summary>
     public bool PanelSwipeOnboardingCompleted { get; set; }
 
+    /// <summary>True once the three default Stream Deck presets were added to the preset list (see <see cref="Nexus.Service.Deck.DeckDefaultPresets"/>). Install-scoped, never profile-synced; it is what stops a deleted or edited default from returning.</summary>
+    public bool DeckDefaultPresetsSeeded { get; set; }
+
     /// <summary>True once a touch panel's fullscreen (immersive) view has been
     /// closed; the view shows a swipe-down hint until then. Same scoping and
     /// no-migration rule as <see cref="PanelSwipeOnboardingCompleted"/>.</summary>

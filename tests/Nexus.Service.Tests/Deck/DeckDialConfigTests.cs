@@ -192,7 +192,8 @@ public sealed class DeckDialConfigTests
     [Theory]
     [InlineData("screenshot", "Camera")]
     [InlineData("screenRecord", "Monitor")]
-    public void ScreenCaptureOps_RoundTripAndGetOwnIcons(string op, string icon)
+    [InlineData("taskManager", "Activity")]
+    public void HostOps_RoundTripAndGetOwnIcons(string op, string icon)
     {
         var action = JsonSerializer.Deserialize(
             "{\"type\":\"system\",\"action\":{\"op\":\"" + op + "\"}}", AppJsonContext.Default.DeckAction)!;
