@@ -210,7 +210,7 @@ public sealed class SystemActions
         if (!Nexus.Service.Activity.ShortcutTargets.IsLaunchUri(target) ||
             !Nexus.Service.Activity.ShortcutTargets.IsAllowedLaunchScheme(target))
         {
-            return ApiResponse.Fail("invalid uri - must use the http, https or steam scheme");
+            return ApiResponse.Fail("invalid uri - must be http, https or a steam game id (rungameid or run)");
         }
         return await LaunchUrlAsync(target).ConfigureAwait(false);
     }

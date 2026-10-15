@@ -3,7 +3,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Nexus.Service.Auth;
 using Nexus.Service.Models.Panel;
 
@@ -17,13 +19,27 @@ namespace Nexus.Service.Tests.Integration;
 /// </summary>
 public sealed class PanelDeckPolicyRouteTests : IDisposable
 {
+    private sealed class EmptyShortcutsProvider : Nexus.Service.Activity.IShortcutsProvider
+    {
+        public IReadOnlyList<Nexus.Service.Models.Activity.Shortcut> GetAll() => [];
+        public Nexus.Service.Models.Activity.Shortcut? GetById(string targetId) => null;
+        public byte[]? GetIcon(string targetId) => null;
+        public bool Launch(string targetId) => false;
+        public string ResolveProcessName(string targetId) => "";
+    }
+
     private readonly NexusAppFactory _baseFactory;
     private readonly Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> _factory;
 
     public PanelDeckPolicyRouteTests()
     {
         _baseFactory = new NexusAppFactory();
-        _factory = _baseFactory.WithWebHostBuilder(_ => { });
+        _factory = _baseFactory.WithWebHostBuilder(b => b.ConfigureTestServices(services =>
+        {
+            // An empty provider never loads, so the listed-app snapshot stays cold.
+            services.RemoveAll<Nexus.Service.Deck.ListedAppIds>();
+            services.AddSingleton(new Nexus.Service.Deck.ListedAppIds(new EmptyShortcutsProvider()));
+        }));
     }
 
     public void Dispose()
@@ -202,17 +218,15 @@ public sealed class PanelDeckPolicyRouteTests : IDisposable
         Assert.True(res.IsSuccessStatusCode);
     }
 
-    [Theory]
-    [InlineData("steam://rungameid/123")]
-    [InlineData("C:\\Games\\game.exe")]
-    public async Task Cold_listed_snapshot_keeps_a_lazy_widget_on_the_preset_with_a_direct_launchApp_key(string appId)
+    private (Nexus.Service.Persistence.IConfigStore Store, string LaunchId) SeedColdPresets(string appId)
     {
-        Assert.False(_factory.Services.GetRequiredService<Nexus.Service.Deck.ListedAppIds>().Snapshot().IsLoaded);
+        Assert.False(_factory.Services.GetRequiredService<Nexus.Service.Deck.ListedAppIds>().Snapshot().Contains(appId));
         var store = _factory.Services.GetRequiredService<Nexus.Service.Persistence.IConfigStore>();
         var launchId = "launch-" + Guid.NewGuid().ToString("n")[..8];
         store.Update(s =>
         {
             s.StreamDeck.Presets.Clear();
+            s.StreamDeck.Instances.Clear();
             s.StreamDeck.Presets.Add(new Nexus.Service.Persistence.DeckPreset
             {
                 Id = launchId,
@@ -226,12 +240,35 @@ public sealed class PanelDeckPolicyRouteTests : IDisposable
             });
             s.StreamDeck.Presets.Add(new Nexus.Service.Persistence.DeckPreset { Id = "plain", Name = "Plain", Cols = 2, Rows = 2, Deck = Nexus.Service.Deck.DeckConfigNavigation.EmptyConfig() });
         });
+        return (store, launchId);
+    }
 
-        var res = await PanelClient().GetAsync("/deck/instances/widget:cold1");
+    [Theory]
+    [InlineData("steam://rungameid/123")]
+    [InlineData("C:\\Games\\game.exe")]
+    public async Task Cold_snapshot_keeps_an_existing_instance_on_its_preset_with_a_direct_launchApp_key(string appId)
+    {
+        var (store, launchId) = SeedColdPresets(appId);
+        store.Update(s => s.StreamDeck.Instances["widget:existing"] = new Nexus.Service.Persistence.DeckInstance { Mode = "custom", ActivePresetId = launchId });
+
+        var res = await PanelClient().GetAsync("/deck/instances/widget:existing");
 
         Assert.True(res.IsSuccessStatusCode);
-        Assert.Equal(launchId, store.Load().StreamDeck.Instances["widget:cold1"].ActivePresetId);
+        Assert.Equal(launchId, store.Load().StreamDeck.Instances["widget:existing"].ActivePresetId);
         Assert.Equal(2, store.Load().StreamDeck.Presets.Count);
+    }
+
+    [Theory]
+    [InlineData("steam://rungameid/123")]
+    [InlineData("C:\\Games\\game.exe")]
+    public async Task Cold_snapshot_does_not_let_a_new_panel_widget_join_a_preset_with_a_direct_launchApp_key(string appId)
+    {
+        var (store, launchId) = SeedColdPresets(appId);
+
+        var res = await PanelClient().GetAsync("/deck/instances/widget:fresh");
+
+        Assert.True(res.IsSuccessStatusCode);
+        Assert.NotEqual(launchId, store.Load().StreamDeck.Instances["widget:fresh"].ActivePresetId);
     }
 
     [Fact]

@@ -259,7 +259,7 @@ public sealed class DeckActionExecutor : IDeckActionExecutor
         {
             if (!Nexus.Service.Activity.ShortcutTargets.IsAllowedLaunchScheme(target))
             {
-                ServiceLog.Warn("[streamdeck] launchApp refused a URI scheme outside http, https, steam");
+                ServiceLog.Warn("[streamdeck] launchApp refused a URI scheme outside http, https and steam game ids");
                 return;
             }
             response = await _system.LaunchUrlAsync(target).ConfigureAwait(false);
