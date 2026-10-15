@@ -306,8 +306,9 @@ public sealed class UmbraHub : IDisposable
 
     // The controller holds the last streamed frame forever, so a release first replays a firmware effect.
     // Written and closed under one lock so no stream packet can land after the hand-back.
-    public void ReleaseWithHandBack(byte[][] frames)
+    public bool ReleaseWithHandBack(byte[][] frames)
     {
+        var ok = true;
         lock (_lock)
         {
             if (_device is not null)
@@ -316,6 +317,7 @@ public sealed class UmbraHub : IDisposable
                 {
                     if (!_device.Write(UmbraProtocol.ToReport(frame)))
                     {
+                        ok = false;
                         break;
                     }
                 }
@@ -325,6 +327,7 @@ public sealed class UmbraHub : IDisposable
             _device?.Dispose();
             _device = null;
         }
+        return ok;
     }
 
     public void Detach()

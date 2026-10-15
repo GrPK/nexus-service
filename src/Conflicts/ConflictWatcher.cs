@@ -180,22 +180,23 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
     /// <summary>Frames published to the conflicts topic so far; tests watch it.</summary>
     internal int PublishCount { get; private set; }
 
-    /// <summary>How long a handler-in-use answer is reused, since each can cost a USB enumeration. Tests set 0.</summary>
-    internal long DisplayCacheMs { get; set; } = 2000;
+    /// <summary>How long the display- and handler-in-use answers are reused, since each can cost a USB enumeration. Tests set 0.</summary>
+    internal long HandlerCacheMs { get; set; } = 2000;
 
     private static readonly string[] DisplayHandlerIds = ConflictAppCatalog.All.SelectMany(a => a.DisplayHandlers).Distinct().ToArray();
     private static readonly string[] AlsoHandlerIds = ConflictAppCatalog.All.SelectMany(a => a.AlsoHandlers).Distinct().ToArray();
+    private HashSet<string> _previousKept = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<string> _seenIds = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyCollection<string> _revealed = Array.Empty<string>();
     private readonly object _filterLock = new();
     private string _filterKey = "";
-    private Dictionary<string, bool> _displayCache = new();
-    private long _displayCacheAt = long.MinValue / 2;
+    private Dictionary<string, bool> _handlerCache = new();
+    private long _handlerCacheAt = long.MinValue / 2;
 
-    private Dictionary<string, bool> DisplaySnapshot()
+    private Dictionary<string, bool> HandlerSnapshot()
     {
         var now = Environment.TickCount64;
-        if (now - _displayCacheAt < DisplayCacheMs) return _displayCache;
+        if (now - _handlerCacheAt < HandlerCacheMs) return _handlerCache;
         var snapshot = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         foreach (var id in DisplayHandlerIds)
         {
@@ -205,8 +206,8 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
         {
             snapshot["h:" + id] = _handlerInUse?.Invoke(id) == true;
         }
-        _displayCache = snapshot;
-        _displayCacheAt = now;
+        _handlerCache = snapshot;
+        _handlerCacheAt = now;
         return snapshot;
     }
 
@@ -219,17 +220,12 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
             var lighting = _gates.Lighting;
             var cooling = _gates.Cooling;
             // Display state only matters while a pillar is off; with both on nothing is filtered.
-            var display = lighting && cooling ? null : DisplaySnapshot();
+            var display = lighting && cooling ? null : HandlerSnapshot();
             var key = display is null
                 ? "on"
                 : $"{(lighting ? 1 : 0)}{(cooling ? 1 : 0)}:" + string.Join(',', display.Where(kv => kv.Value).Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal));
-            var changed = key != _filterKey;
-            if (changed)
-            {
-                _filterKey = key;
-                _filterEpoch++;
-            }
-            epoch = _filterEpoch;
+            var keyChanged = key != _filterKey;
+            _filterKey = key;
             var all = _all;
             var kept = new List<DetectedConflict>(all.Count);
             foreach (var d in all)
@@ -243,11 +239,15 @@ public sealed class ConflictWatcher : BackgroundService, IConflictDetector
                     kept.Add(d);
                 }
             }
-            if (changed)
+            var keptIds = new HashSet<string>(kept.Select(k => k.Id), StringComparer.OrdinalIgnoreCase);
+            if (keyChanged && !keptIds.SetEquals(_previousKept))
             {
-                // Apps already seen running at the previous read, so a consumer does not take them for launches.
-                _revealed = kept.Where(k => _seenIds.Contains(k.Id)).Select(k => k.Id).ToArray();
+                _filterEpoch++;
+                // Newly kept apps that were already seen running at the previous read; a consumer must not take them for launches.
+                _revealed = keptIds.Where(id => _seenIds.Contains(id) && !_previousKept.Contains(id)).ToArray();
             }
+            epoch = _filterEpoch;
+            _previousKept = keptIds;
             _seenIds = new HashSet<string>(all.Select(a => a.Id), StringComparer.OrdinalIgnoreCase);
             return kept;
         }

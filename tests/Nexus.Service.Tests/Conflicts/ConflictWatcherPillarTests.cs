@@ -16,7 +16,7 @@ public class ConflictWatcherPillarTests
         Dictionary<string, List<(int Pid, string? Path)>> processes, System.Func<string, bool>? displayInUse = null)
     {
         var store = new InMemoryConfigStore();
-        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), displayInUse, () => processes) { DisplayCacheMs = 0 };
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), displayInUse, () => processes) { HandlerCacheMs = 0 };
         return (watcher, store);
     }
 
@@ -60,10 +60,11 @@ public class ConflictWatcherPillarTests
     public void FilterEpoch_ChangesWhenThePillarsDo()
     {
         var (watcher, store) = Build(Running("SignalRgb"));
+        watcher.GetConflicts();
         var first = watcher.FilterEpoch;
         Assert.Equal(first, watcher.FilterEpoch);
 
-        store.Update(s => s.Features.Cooling = false);
+        store.Update(s => s.Features.Lighting = false);
 
         Assert.NotEqual(first, watcher.FilterEpoch);
     }
@@ -101,7 +102,7 @@ public class ConflictHandlerFilterTests
         };
         var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes, h => inUse && h == "corsair")
         {
-            DisplayCacheMs = 0,
+            HandlerCacheMs = 0,
         };
 
         Assert.Empty(watcher.GetConflicts());
@@ -123,7 +124,7 @@ public class ConflictHandlerFilterTests
         };
         var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes, h => inUse && h == "corsair")
         {
-            DisplayCacheMs = 0,
+            HandlerCacheMs = 0,
         };
         watcher.GetConflicts();
         watcher.PillarsChanged();
@@ -136,6 +137,58 @@ public class ConflictHandlerFilterTests
         Assert.Contains("icue", revealed);
         Assert.DoesNotContain("fan-control", revealed);
         Assert.Equal(2, list.Count);
+    }
+}
+
+public class ConflictRevealedTests
+{
+    [Fact]
+    public void AnAppAlreadyVisibleBeforeTheChange_IsNotReportedAsRevealed()
+    {
+        var corsair = false;
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Features.Lighting = false);
+        var processes = new Dictionary<string, List<(int Pid, string? Path)>>(System.StringComparer.OrdinalIgnoreCase);
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes, h => corsair && h == "corsair")
+        {
+            HandlerCacheMs = 0,
+        };
+        watcher.GetConflicts();
+
+        // FanControl launches and is read while visible; only then does a Corsair hub appear and reveal iCUE.
+        processes["FanControl"] = new() { (200, null) };
+        processes["iCUE"] = new() { (100, null) };
+        watcher.PillarsChanged();
+        var visibleBefore = watcher.GetConflicts();
+        Assert.Equal(new[] { "fan-control" }, visibleBefore.Select(c => c.Id));
+
+        corsair = true;
+        var list = watcher.GetConflicts(out _, out var revealed);
+
+        Assert.Equal(2, list.Count);
+        Assert.Equal(new[] { "icue" }, revealed);
+    }
+
+    [Fact]
+    public void AKeyChangeThatLeavesTheVisibleSetAlone_DoesNotBumpTheEpoch()
+    {
+        var kraken = false;
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Features.Lighting = false);
+        var processes = new Dictionary<string, List<(int Pid, string? Path)>>(System.StringComparer.OrdinalIgnoreCase)
+        {
+            ["FanControl"] = new() { (200, null) },
+        };
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes, h => kraken && h == "nzxt-kraken")
+        {
+            HandlerCacheMs = 0,
+        };
+        watcher.GetConflicts(out var before, out _);
+
+        kraken = true;
+        watcher.GetConflicts(out var after, out _);
+
+        Assert.Equal(before, after);
     }
 }
 
@@ -154,7 +207,7 @@ public class ConflictDisplayEpochTests
             s.Features.Lighting = false;
             s.Features.Cooling = false;
         });
-        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), h => driving && h == "nzxt-kraken", Cam) { DisplayCacheMs = 0 };
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), h => driving && h == "nzxt-kraken", Cam) { HandlerCacheMs = 0 };
         var hidden = watcher.GetConflicts(out var epochBefore);
         Assert.Empty(hidden);
 
@@ -176,7 +229,7 @@ public class ConflictDisplayEpochTests
             s.Features.Cooling = false;
             s.Ui.ConflictAutoKillExclusions.Clear();
         });
-        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), h => driving && h == "nzxt-kraken", Cam) { DisplayCacheMs = 0 };
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), h => driving && h == "nzxt-kraken", Cam) { HandlerCacheMs = 0 };
         var notifier = new ConflictLaunchNotifier(watcher, store);
         var launched = new List<string>();
         notifier.AppLaunched += a => launched.Add(a.Id);
@@ -194,7 +247,7 @@ public class ConflictDisplayEpochTests
         var store = new InMemoryConfigStore();
         store.Update(s => s.Ui.ConflictAutoKillExclusions.Clear());
         var processes = new Dictionary<string, List<(int Pid, string? Path)>>(System.StringComparer.OrdinalIgnoreCase);
-        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes) { DisplayCacheMs = 0 };
+        var watcher = new ConflictWatcher(new MultiplexHub(), null, new FeatureGates(store), null, () => processes) { HandlerCacheMs = 0 };
         var notifier = new ConflictLaunchNotifier(watcher, store);
         var launched = new List<string>();
         notifier.AppLaunched += a => launched.Add(a.Id);

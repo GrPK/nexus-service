@@ -74,7 +74,7 @@ public sealed class DeviceManager
         var handler = AllHandlers.FirstOrDefault(h => string.Equals(h.Id, handlerId, System.StringComparison.OrdinalIgnoreCase));
         if (handler is null) return false;
         var present = _enumerator.Enumerate();
-        return handler.IsConnected(present) && (!displayOnly || handler.DrivesDisplay(present));
+        return displayOnly ? handler.DrivesDisplay(present) : handler.IsConnected(present);
     }
 
     /// <summary>

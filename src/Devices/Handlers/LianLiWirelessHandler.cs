@@ -42,7 +42,7 @@ public sealed class LianLiWirelessHandler : IDeviceHandler
             Identifiers.Any(id => id.VendorId == d.VendorId && id.ProductId == d.ProductId));
     }
 
-    /// <summary>True only while a bound LCD fan is attached; a fan hub without screens drives no display.</summary>
+    /// <summary>True while a bound LCD fan is attached. The screens are wired USB devices of their own, so the RF dongle need not be present.</summary>
     public bool DrivesDisplay(IReadOnlyList<UsbDeviceEntry> detectedDevices) => _lcd is { Screens.Count: > 0 };
 
     public string GetFirmwareVersion() =>

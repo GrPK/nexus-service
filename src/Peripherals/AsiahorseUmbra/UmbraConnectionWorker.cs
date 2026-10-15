@@ -218,19 +218,25 @@ public sealed class UmbraConnectionWorker : BackgroundService
     }
 
     // Leaves the controller playing a firmware effect: the stored device effect when Nexus was streaming.
-    internal void HandBack()
+    internal bool HandBack()
     {
         try
         {
-            _hub.ReleaseWithHandBack(HandBackFrames(_lightingTouched || _gates.Lighting, _coolingTouched || _gates.Cooling));
+            if (!_hub.ReleaseWithHandBack(HandBackFrames(_lightingTouched || _gates.Lighting, _coolingTouched || _gates.Cooling)))
+            {
+                ServiceLog.Warn("[asiahorse-umbra] hand-back write failed; the next connect retries");
+                return false;
+            }
             _lightingTouched = false;
             _coolingTouched = false;
             ServiceLog.Info("[asiahorse-umbra] released to the firmware effect");
+            return true;
         }
         catch (Exception ex)
         {
             ServiceLog.Error($"[asiahorse-umbra] hand-back failed: {ex.Message}");
             _hub.Detach();
+            return false;
         }
     }
 
