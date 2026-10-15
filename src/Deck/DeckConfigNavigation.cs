@@ -136,6 +136,7 @@ public static class DeckConfigNavigation
     public static (int Cols, int Rows) InnerGridForSize(string size) => size switch
     {
         "4x4" => (4, 4),
+        "4x1" => (4, 1),
         "4x2" => (4, 2),
         "2x4" => (2, 4),
         _ => (2, 2),

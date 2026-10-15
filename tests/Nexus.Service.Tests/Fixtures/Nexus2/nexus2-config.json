@@ -24,17 +24,45 @@
             "page": "page-1",
             "dock": [
               {
-                "id": "dock-clock",
-                "type": "clock",
-                "size": "1x1",
-                "design": "flip",
-                "timeFormat": "12",
-                "seconds": true,
-                "timezone": "America/New_York",
-                "displayTimezone": true,
+                "id": "dock-0",
+                "isImmersive": false,
                 "position": 0,
                 "positionHorizontal": 0,
-                "isImmersive": false
+                "size": "1x1",
+                "type": "macros",
+                "macro": { "type": "shortcut", "targetId": "C:\\WINDOWS\\explorer.exe" },
+                "front": { "type": "default" },
+                "title": { "value": "", "position": "top", "size": 12, "bold": false, "italic": false, "underline": false, "color": "#ffffff" }
+              },
+              {
+                "id": "dock-1",
+                "isImmersive": false,
+                "position": 1,
+                "positionHorizontal": 1,
+                "size": "1x1",
+                "type": "macros",
+                "macro": { "type": "shortcut", "targetId": "C:\\WINDOWS\\System32\\Taskmgr.exe" },
+                "front": { "type": "default" },
+                "title": { "value": "", "position": "top", "size": 12, "bold": false, "italic": false, "underline": false, "color": "#ffffff" }
+              },
+              {
+                "id": "dock-2",
+                "isImmersive": false,
+                "position": 2,
+                "positionHorizontal": 2,
+                "size": "1x1",
+                "type": "macros",
+                "macro": { "type": "shortcut", "targetId": "Microsoft.Paint_8wekyb3d8bbwe!App" },
+                "front": { "type": "default" },
+                "title": { "value": "", "position": "top", "size": 12, "bold": false, "italic": false, "underline": false, "color": "#ffffff" }
+              },
+              {
+                "id": "dock-3",
+                "isImmersive": false,
+                "position": 3,
+                "positionHorizontal": 3,
+                "size": "1x1",
+                "type": "blocks"
               }
             ],
             "pages": [

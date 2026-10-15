@@ -12,6 +12,19 @@ internal sealed class Nexus2Y70LayoutResult
     public int Widgets { get; set; }
     public int MappedWidgets { get; set; }
     public List<string> DroppedTypes { get; } = new();
+    /// <summary>The Nexus 2 dock as a 4x1 deck widget on the layout; null when there is no dock to carry.</summary>
+    public Nexus2DockDeck? Dock { get; set; }
+}
+
+/// <summary>The deck widget a Nexus 2 dock becomes: its id on the layout plus the key pages its instance shows.</summary>
+internal sealed class Nexus2DockDeck
+{
+    public string WidgetId { get; set; } = "";
+    public Nexus.Service.Deck.DeckConfig Config { get; set; } = new();
+    /// <summary>Authored rows of 4 keys the config holds.</summary>
+    public int Rows { get; set; } = 1;
+    public int Items { get; set; }
+    public int MappedItems { get; set; }
 }
 
 /// <summary>Where the Y70 background Nexus 2 is showing comes from.</summary>

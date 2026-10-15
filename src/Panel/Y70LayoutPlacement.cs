@@ -20,6 +20,7 @@ internal static class Y70LayoutPlacement
     {
         "1x1" => (1, 1),
         "2x2" => (2, 2),
+        "4x1" => (4, 1),
         "4x2" => (4, 2),
         "4x4" => (4, 4),
         _ => (2, 2),
@@ -52,6 +53,36 @@ internal static class Y70LayoutPlacement
         widget.Col = 0;
         widget.Row = 0;
         pages.Add(new PanelPageDto { Id = System.Guid.NewGuid().ToString(), Widgets = { widget } });
+        return true;
+    }
+
+    /// <summary>Places <paramref name="widget"/> on the first page at the exact cell when its rect is inside the grid and clear of every widget there; false leaves the pages untouched.</summary>
+    public static bool TryPlaceAt(List<PanelPageDto> pages, PanelWidgetDto widget, string size, int col, int row)
+    {
+        var (colSpan, rowSpan) = SpanForSize(size);
+        if (col < 0 || row < 0 || col + colSpan > GridCols || row + rowSpan > GridRows)
+        {
+            return false;
+        }
+        var target = (col, row, colSpan, rowSpan);
+        if (pages.Count > 0)
+        {
+            foreach (var w in pages[0].Widgets)
+            {
+                var (ecs, ers) = SpanForSize(w.Size);
+                if (RectsOverlap((w.Col, w.Row, ecs > GridCols ? GridCols : ecs, ers), target))
+                {
+                    return false;
+                }
+            }
+        }
+        widget.Col = col;
+        widget.Row = row;
+        if (pages.Count == 0)
+        {
+            pages.Add(new PanelPageDto { Id = System.Guid.NewGuid().ToString() });
+        }
+        pages[0].Widgets.Add(widget);
         return true;
     }
 

@@ -31,10 +31,10 @@ public static class OverlayRoutes
     // visually but the bogus string round-trips on every save.
     private static readonly HashSet<string> AllowedSizes = new(StringComparer.Ordinal)
     {
-        "1x1", "2x2", "2x4", "4x2", "4x4",
+        "1x1", "2x2", "2x4", "4x1", "4x2", "4x4",
     };
 
-    private static string NormalizeSize(string? raw)
+    internal static string NormalizeSize(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return "2x2";
         return AllowedSizes.Contains(raw) ? raw : "2x2";
@@ -229,6 +229,7 @@ public static class OverlayRoutes
         "1x1" => 1,
         "2x2" => 2,
         "2x4" => 2,
+        "4x1" => 4,
         "4x2" => 4,
         "4x4" => 4,
         _ => 2,
@@ -239,6 +240,7 @@ public static class OverlayRoutes
         "1x1" => 1,
         "2x2" => 2,
         "2x4" => 4,
+        "4x1" => 1,
         "4x2" => 2,
         "4x4" => 4,
         _ => 2,

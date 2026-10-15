@@ -14,7 +14,7 @@ public sealed class OverlayWidgetDto
     /// <summary>Widget kind key ("clock", "performance", ...). Mirrors PanelWidgetDto.Type.</summary>
     public string Type { get; set; } = "";
 
-    /// <summary>"1x1" | "2x2" | "2x4" | "4x2" | "4x4". Mirrors PanelWidgetDto.Size.</summary>
+    /// <summary>"1x1" | "2x2" | "2x4" | "4x1" | "4x2" | "4x4". Mirrors PanelWidgetDto.Size.</summary>
     public string Size { get; set; } = "2x2";
 
     /// <summary>0-based monitor index in EnumDisplayMonitors order.</summary>
