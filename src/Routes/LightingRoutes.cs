@@ -207,7 +207,10 @@ public static class LightingRoutes
                 // Same enumeration the render-GPU picker gates on, so the UI never
                 // offers a shortcut to a control that will not be there. Cached:
                 // GetGpus() runs a full LHM refresh and this is polled.
-                GpuCanSwitch = MultiGpuCache.Value(sp),
+                GpuCanSwitch = MultiGpuCache.Value(sp)
+                    || GpuBackend.SoftwareRenderingAvailable(
+                        sp.GetService<Nexus.Service.Persistence.IConfigStore>()?.Load().Lighting.RenderBackend,
+                        GpuBackend.AngleAvailable()),
                 GpuRenderer = gpu is { Available: true } ? gpu.Renderer ?? "" : "",
                 GpuSoftware = gpu is { Available: true, IsWarp: true },
                 GpuSoftwareForced = gpu is { Available: true, IsWarp: true } && GpuBackend.SoftwareForced,
