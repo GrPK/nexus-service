@@ -189,7 +189,7 @@ public sealed class RgbBridge : IDisposable
     private readonly ConcurrentDictionary<int, RgbColor[]> _lastPushed = new();
     private readonly ConcurrentDictionary<int, long> _lastPushTicks = new();
     private const long HeartbeatMs = 1000;
-    // Lowest user cap among the zones sharing a physical push, rebuilt every frame.
+    // Physical index -> user cap in Hz for devices that have one, rebuilt every frame.
     private readonly Dictionary<int, int> _physCapsHz = new();
     // Physical index -> stable OpenRGB device id, the key LightingMaxRates uses. Replaced wholesale on device-set change.
     private volatile Dictionary<int, string> _physStableIds = new();

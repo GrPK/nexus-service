@@ -19,7 +19,9 @@ public static class DeviceRateCap
 /// </summary>
 public sealed class PushRateLimiter<TKey> where TKey : notnull
 {
-    private readonly ConcurrentDictionary<TKey, long> _dueMs = new();
+    private readonly record struct Schedule(long DueMs, long LastPassMs, int PeriodMs);
+
+    private readonly ConcurrentDictionary<TKey, Schedule> _schedules = new();
 
     public static int PeriodMs(int capHz) => 1000 / Math.Max(1, capHz);
 
@@ -33,24 +35,28 @@ public sealed class PushRateLimiter<TKey> where TKey : notnull
         var period = PeriodMs(capHz);
         // Early by up to a tenth of a period still counts, so timer jitter does not cost a whole tick.
         var slack = period / 10;
-        if (!_dueMs.TryGetValue(key, out var due))
+        if (!_schedules.TryGetValue(key, out var schedule))
         {
-            _dueMs[key] = nowMs + period;
+            _schedules[key] = new Schedule(nowMs + period, nowMs, period);
             return true;
         }
+        // Raising the cap shortens the wait to the new period; lowering it leaves the due time alone.
+        var due = period < schedule.PeriodMs
+            ? Math.Min(schedule.DueMs, schedule.LastPassMs + period)
+            : schedule.DueMs;
         if (nowMs + slack < due)
         {
             return false;
         }
         due += period;
-        // More than a period behind (stall, or the cap was just raised): re-anchor instead of bursting.
-        if (nowMs - due >= period)
+        // More than a period late (stall): re-anchor instead of releasing a catch-up burst.
+        if (nowMs > due)
         {
             due = nowMs + period;
         }
-        _dueMs[key] = due;
+        _schedules[key] = new Schedule(due, nowMs, period);
         return true;
     }
 
-    public void Reset() => _dueMs.Clear();
+    public void Reset() => _schedules.Clear();
 }

@@ -84,6 +84,15 @@ public class PushRateLimiterTests : IDisposable
     }
 
     [Fact]
+    public void Raising_the_cap_takes_effect_within_the_new_period()
+    {
+        var limiter = new PushRateLimiter<int>();
+        Assert.True(limiter.TryPass(0, 1, 0));
+        Assert.False(limiter.TryPass(0, 1, 20));
+        Assert.True(limiter.TryPass(0, 30, 40));
+    }
+
+    [Fact]
     public void A_long_stall_re_anchors_instead_of_bursting()
     {
         var limiter = new PushRateLimiter<int>();
