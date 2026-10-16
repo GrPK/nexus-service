@@ -26,6 +26,8 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
     private Task<HttpResponseMessage> Post(string body) =>
         _client.PostAsync("/devices/lighting-devices/max-rate", new StringContent(body, Encoding.UTF8, "application/json"));
 
+    private IConfigStore Store => _factory.Services.GetRequiredService<IConfigStore>();
+
     private NexusSettings Settings => _factory.Services.GetRequiredService<IConfigStore>().Load();
 
     [Theory]
@@ -36,7 +38,31 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
     {
         var res = await Post($$"""{"id":"openrgb-s-X","maxRateHz":{{hz}}}""");
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Equal(hz, Settings.Devices.LightingDevicePrefs["openrgb-s-X"].MaxRateHz);
+        Assert.Equal(hz, Settings.Devices.LightingMaxRates["openrgb-s-X"]);
+    }
+
+    [Fact]
+    public async Task Preset_activation_leaves_the_caps_intact()
+    {
+        Store.Update(s =>
+        {
+            s.Devices.LightingMaxRates["openrgb-s-X"] = 10;
+            s.Devices.LightingDevicePrefs["openrgb-s-X"] = new LightingDevicePreference { Brightness = 40 };
+        });
+        var create = await _client.PostAsync(
+            "/devices/lighting-devices/layout-presets",
+            new StringContent("""{"name":"P"}""", Encoding.UTF8, "application/json"));
+        using var doc = System.Text.Json.JsonDocument.Parse(await create.Content.ReadAsStringAsync());
+        var id = doc.RootElement.GetProperty("preset").GetProperty("id").GetString();
+
+        Store.Update(s => s.Devices.LightingMaxRates["openrgb-s-X"] = 5);
+        var res = await _client.PostAsync(
+            $"/devices/lighting-devices/layout-presets/{id}/activate",
+            new StringContent("{}", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(40, Settings.Devices.LightingDevicePrefs["openrgb-s-X"].Brightness);
+        Assert.Equal(5, Settings.Devices.LightingMaxRates["openrgb-s-X"]);
     }
 
     [Fact]
@@ -45,7 +71,7 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
         await Post("""{"id":"openrgb-s-X","maxRateHz":10}""");
         var res = await Post("""{"id":"openrgb-s-X","maxRateHz":null}""");
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Null(Settings.Devices.LightingDevicePrefs["openrgb-s-X"].MaxRateHz);
+        Assert.False(Settings.Devices.LightingMaxRates.ContainsKey("openrgb-s-X"));
     }
 
     [Theory]
@@ -57,7 +83,7 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
     {
         var res = await Post(body);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.False(Settings.Devices.LightingDevicePrefs.ContainsKey("openrgb-s-X"));
+        Assert.False(Settings.Devices.LightingMaxRates.ContainsKey("openrgb-s-X"));
     }
 }
 
@@ -121,9 +147,9 @@ public sealed class LightingMaxRateSiblingTests : IClassFixture<SiblingZoneHostF
             new StringContent("""{"id":"openrgb-s-MB-1","maxRateHz":10}""", Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
-        var prefs = _factory.Services.GetRequiredService<IConfigStore>().Load().Devices.LightingDevicePrefs;
-        Assert.Equal(10, prefs["openrgb-s-MB-0"].MaxRateHz);
-        Assert.Equal(10, prefs["openrgb-s-MB-1"].MaxRateHz);
+        var prefs = _factory.Services.GetRequiredService<IConfigStore>().Load().Devices.LightingMaxRates;
+        Assert.Equal(10, prefs["openrgb-s-MB-0"]);
+        Assert.Equal(10, prefs["openrgb-s-MB-1"]);
         Assert.False(prefs.ContainsKey("openrgb-s-OTHER"));
         Assert.False(prefs.ContainsKey("keeb-1"));
     }
