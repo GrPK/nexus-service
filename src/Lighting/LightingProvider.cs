@@ -85,7 +85,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     private readonly FeatureGates _gates;
 
-    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null, MultiplexHub? panelHub = null)
+    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null, MultiplexHub? panelHub = null, ScreenPreviewHub? previewHub = null)
     {
         _panelHub = panelHub;
         _gates = gates ?? FeatureGates.AllEnabled;
@@ -99,6 +99,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         _engine.PinLookTag = PinTag;
         _engine.PinEffectFactory = BuildPinnedEffect;
         _sharedSource = frameSource is null ? null : new SharedScreenFrameSource(frameSource);
+        _previewStreamer = previewHub is null || _sharedSource is null ? null : new ScreenPreviewStreamer(previewHub, ScreenSource, () => _mirrorMonitor, _screenPP);
         _hub = hub;
         _rgb = rgb;
         _gpu = gpu;
@@ -947,6 +948,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     // The one screen capture. The global Mirror effect and the mirror-pin effect
     // each take a handle, so the capture runs once and closes with its last user.
     private readonly SharedScreenFrameSource? _sharedSource;
+    private readonly ScreenPreviewStreamer? _previewStreamer;
     // Monitor and its pin tag change together, so a reader never sees one
     // without the other and the per-tick tag lookup allocates nothing.
     private sealed record MirrorSelection(string Monitor, string Tag);
@@ -1901,6 +1903,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     public void Dispose()
     {
         _studioTimer?.Dispose();
+        _previewStreamer?.Dispose();
         _rgb?.Dispose();
         _engine.Dispose();
     }
