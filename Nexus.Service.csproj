@@ -369,12 +369,24 @@
     </ParameterGroup>
     <Task>
       <Using Namespace="System.Linq" />
+      <Using Namespace="System.Collections.Generic" />
       <Code Type="Fragment" Language="cs"><![CDATA[
-        Version V(Microsoft.Build.Framework.ITaskItem i) =>
-            Version.TryParse(System.IO.Path.GetFileNameWithoutExtension(i.ItemSpec), out var v) ? v : new Version(0, 0);
+        // Same ordering as BundledFirmwareCatalog.CompareVersions: dotted numeric parts, missing or non-numeric count as 0.
+        int[] V(Microsoft.Build.Framework.ITaskItem i) =>
+            System.IO.Path.GetFileNameWithoutExtension(i.ItemSpec).Split('.')
+                .Select(p => int.TryParse(p, out var n) ? n : 0).ToArray();
+        int Cmp(int[] x, int[] y)
+        {
+            for (var k = 0; k < Math.Max(x.Length, y.Length); k++)
+            {
+                var d = (k < x.Length ? x[k] : 0).CompareTo(k < y.Length ? y[k] : 0);
+                if (d != 0) return d;
+            }
+            return 0;
+        }
         Older = Images
             .GroupBy(i => System.IO.Path.GetDirectoryName(i.ItemSpec))
-            .SelectMany(g => g.OrderByDescending(V).Skip(1))
+            .SelectMany(g => g.OrderBy(i => V(i), Comparer<int[]>.Create(Cmp)).Reverse().Skip(1))
             .ToArray();
       ]]></Code>
     </Task>
@@ -545,6 +557,7 @@
       <Using Namespace="System.Collections.Generic" />
       <Using Namespace="System.IO" />
       <Using Namespace="System.Linq" />
+      <Using Namespace="System.Collections.Generic" />
       <Using Namespace="System.Text.RegularExpressions" />
       <Code Type="Fragment" Language="cs"><![CDATA[
         var latin1 = System.Text.Encoding.GetEncoding(28591);

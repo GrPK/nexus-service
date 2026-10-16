@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Nexus.Service.Platform;
 
 namespace Nexus.Service.Lighting.Engine.Gpu;
 
@@ -52,7 +51,7 @@ internal static class GpuBackend
         if (string.Equals(r, RetiredGlfw, StringComparison.OrdinalIgnoreCase)
             && Interlocked.Exchange(ref _retiredWarned, 1) == 0)
         {
-            ServiceLog.Warn($"[gpu] the retired render backend \"{RetiredGlfw}\" is ignored; using {resolved}");
+            GpuContext.Log($"[gpu] the retired render backend \"{RetiredGlfw}\" is ignored; using {resolved}");
         }
         return resolved;
     }
