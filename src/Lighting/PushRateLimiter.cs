@@ -11,16 +11,17 @@ public static class DeviceRateCap
 }
 
 /// <summary>
-/// Per-key minimum gap between pushes. Holds only the last-pass stamp: the
-/// caller keeps the frame, and a dropped frame stays unsent in the caller's
-/// dedupe baseline, so its next tick offers it again once the gap has elapsed.
+/// Per-key rate gate on deadlines: each pass advances the next due time by one
+/// period and carries the remainder, so the average rate matches the cap even
+/// when the caller ticks at a coarser, non-divisible interval. Holds only
+/// deadlines: the caller keeps the frame, and a dropped frame stays unsent in
+/// the caller's dedupe baseline, so its next tick offers it again.
 /// </summary>
 public sealed class PushRateLimiter<TKey> where TKey : notnull
 {
-    private readonly ConcurrentDictionary<TKey, long> _lastPassMs = new();
+    private readonly ConcurrentDictionary<TKey, long> _dueMs = new();
 
-    /// <summary>Slightly under the period at <paramref name="capHz"/>, so timer jitter never undershoots the cap.</summary>
-    public static int GapMs(int capHz) => 900 / Math.Max(1, capHz);
+    public static int PeriodMs(int capHz) => 1000 / Math.Max(1, capHz);
 
     /// <summary>True when a push may go out at <paramref name="nowMs"/>; records the pass.</summary>
     public bool TryPass(TKey key, int capHz, long nowMs)
@@ -29,13 +30,27 @@ public sealed class PushRateLimiter<TKey> where TKey : notnull
         {
             return true;
         }
-        if (_lastPassMs.TryGetValue(key, out var last) && nowMs - last < GapMs(capHz))
+        var period = PeriodMs(capHz);
+        // Early by up to a tenth of a period still counts, so timer jitter does not cost a whole tick.
+        var slack = period / 10;
+        if (!_dueMs.TryGetValue(key, out var due))
+        {
+            _dueMs[key] = nowMs + period;
+            return true;
+        }
+        if (nowMs + slack < due)
         {
             return false;
         }
-        _lastPassMs[key] = nowMs;
+        due += period;
+        // More than a period behind (stall, or the cap was just raised): re-anchor instead of bursting.
+        if (nowMs - due >= period)
+        {
+            due = nowMs + period;
+        }
+        _dueMs[key] = due;
         return true;
     }
 
-    public void Reset() => _lastPassMs.Clear();
+    public void Reset() => _dueMs.Clear();
 }

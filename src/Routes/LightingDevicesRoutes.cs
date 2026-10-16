@@ -908,39 +908,27 @@ public static partial class DevicesRoutes
             {
                 return Results.BadRequest(ApiResponse.Fail("Invalid id or maxRateHz."));
             }
-            // Zone cards of one OpenRGB device share a single push, so the cap is
-            // written to every sibling and all of them report the same value.
-            var ids = new HashSet<string> { body.Id };
-            var cards = ld.GetAll().Devices;
-            var target = cards.FirstOrDefault(c => c.Id == body.Id);
-            if (target is { RateCapSupported: true })
+            var target = ld.GetAll().Devices.FirstOrDefault(c => c.Id == body.Id);
+            if (target is not { RateCapSupported: true })
             {
-                var group = string.IsNullOrEmpty(target.ParentDeviceId) ? target.Id : target.ParentDeviceId;
-                foreach (var c in cards)
-                {
-                    if (c.RateCapSupported && (c.Id == group || c.ParentDeviceId == group))
-                    {
-                        ids.Add(c.Id);
-                    }
-                }
+                return Results.BadRequest(ApiResponse.Fail("Device does not support a rate cap."));
             }
+            // Keyed by the owning device so every zone card of it shares one cap
+            // and the cap survives the user re-drawing zones.
+            var key = string.IsNullOrEmpty(target.ParentDeviceId) ? target.Id : target.ParentDeviceId;
             store.Update(s =>
             {
                 var rates = new Dictionary<string, int>(s.Devices.LightingMaxRates);
-                foreach (var id in ids)
+                if (body.MaxRateHz is int hz)
                 {
-                    if (body.MaxRateHz is int hz)
-                    {
-                        rates[id] = hz;
-                    }
-                    else
-                    {
-                        rates.Remove(id);
-                    }
+                    rates[key] = hz;
+                }
+                else
+                {
+                    rates.Remove(key);
                 }
                 s.Devices.LightingMaxRates = rates;
             });
-            CaptureDeviceStateIntoActive(store);
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
 

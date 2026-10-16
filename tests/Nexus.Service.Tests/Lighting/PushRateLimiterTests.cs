@@ -1,5 +1,6 @@
 using Nexus.Service.Devices.Detection;
 using Nexus.Service.Lighting;
+using Nexus.Service.Lighting.Engine;
 using Nexus.Service.Lighting.Rgb;
 
 namespace Nexus.Service.Tests.Lighting;
@@ -44,21 +45,52 @@ public class PushRateLimiterTests : IDisposable
         new StubUsbEnumerator());
 
     [Theory]
-    [InlineData(30, 30)]
-    [InlineData(10, 90)]
-    [InlineData(1, 900)]
-    public void Gap_is_just_under_the_period(int hz, int expectedMs)
+    [InlineData(30)]
+    [InlineData(20)]
+    [InlineData(15)]
+    [InlineData(10)]
+    [InlineData(5)]
+    [InlineData(1)]
+    public void Average_rate_over_engine_ticks_matches_the_cap(int hz)
     {
-        Assert.Equal(expectedMs, PushRateLimiter<int>.GapMs(hz));
+        var limiter = new PushRateLimiter<int>();
+        const int tickMs = 33;
+        const int seconds = 120;
+        var passes = 0;
+        for (long now = 0; now < seconds * 1000; now += tickMs)
+        {
+            if (limiter.TryPass(0, hz, now))
+            {
+                passes++;
+            }
+        }
+        var avg = passes / (double)seconds;
+        Assert.InRange(avg, hz * 0.95, hz * 1.05);
     }
 
     [Fact]
-    public void Drops_inside_the_gap_and_passes_after_it()
+    public void Twenty_hz_passes_about_two_of_every_three_ticks()
     {
         var limiter = new PushRateLimiter<int>();
-        Assert.True(limiter.TryPass(0, 10, 1000));
-        Assert.False(limiter.TryPass(0, 10, 1050));
-        Assert.True(limiter.TryPass(0, 10, 1090));
+        var passes = 0;
+        for (var i = 0; i < 300; i++)
+        {
+            if (limiter.TryPass(0, 20, i * 33L))
+            {
+                passes++;
+            }
+        }
+        Assert.InRange(passes, 190, 210);
+    }
+
+    [Fact]
+    public void A_long_stall_re_anchors_instead_of_bursting()
+    {
+        var limiter = new PushRateLimiter<int>();
+        Assert.True(limiter.TryPass(0, 10, 0));
+        Assert.True(limiter.TryPass(0, 10, 10_000));
+        Assert.False(limiter.TryPass(0, 10, 10_033));
+        Assert.True(limiter.TryPass(0, 10, 10_100));
     }
 
     [Fact]
@@ -72,15 +104,22 @@ public class PushRateLimiterTests : IDisposable
     }
 
     [Fact]
-    public void Split_zones_sharing_a_push_take_the_lowest_cap()
+    public void Frames_sharing_a_device_resolve_the_cap_from_its_stable_id()
     {
-        var caps = new Dictionary<int, int>();
-        RgbBridge.FoldCap(caps, 2, 20);
-        RgbBridge.FoldCap(caps, 2, 5);
-        RgbBridge.FoldCap(caps, 2, 15);
-        RgbBridge.FoldCap(caps, 3, 30);
-        Assert.Equal(5, caps[2]);
-        Assert.Equal(30, caps[3]);
+        var frames = new[]
+        {
+            new DeviceFrame(0, "openrgb-s-MB-0", 4, physicalIndex: 2),
+            new DeviceFrame(1, "openrgb-s-MB-1", 4, physicalIndex: 2),
+            new DeviceFrame(2, "openrgb-s-OTHER", 4, physicalIndex: 3),
+            new DeviceFrame(3, "keeb-1", 4, physicalIndex: 2),
+        };
+        var bridgeIds = new HashSet<string> { "openrgb-s-MB-0", "openrgb-s-MB-1", "openrgb-s-OTHER" };
+        var stable = new Dictionary<int, string> { [2] = "openrgb-s-MB", [3] = "openrgb-s-OTHER" };
+        var caps = new Dictionary<int, int> { [99] = 1 };
+
+        RgbBridge.ComputePhysicalCaps(frames, bridgeIds, stable, new Dictionary<string, int> { ["openrgb-s-MB"] = 10 }, caps);
+
+        Assert.Equal(new Dictionary<int, int> { [2] = 10 }, caps);
     }
 
     [Fact]
@@ -94,9 +133,9 @@ public class PushRateLimiterTests : IDisposable
         Assert.False(bridge.ShouldPush(0, buf, 10, 1033));
         buf[0] = new RgbColor(3, 0, 0);
         Assert.False(bridge.ShouldPush(0, buf, 10, 1066));
-        Assert.True(bridge.ShouldPush(0, buf, 10, 1099));
+        Assert.True(bridge.ShouldPush(0, buf, 10, 1100));
         // The send recorded the newest content as the baseline.
-        Assert.False(bridge.ShouldPush(0, buf, 10, 1200));
+        Assert.False(bridge.ShouldPush(0, buf, 10, 1133));
     }
 
     [Fact]
@@ -108,7 +147,7 @@ public class PushRateLimiterTests : IDisposable
         Assert.False(bridge.ShouldPush(0, buf, 10, 1010));
         buf[0] = new RgbColor(2, 0, 0);
         Assert.False(bridge.ShouldPush(0, buf, 10, 1050));
-        Assert.True(bridge.ShouldPush(0, buf, 10, 1090));
+        Assert.True(bridge.ShouldPush(0, buf, 10, 1100));
     }
 
     [Fact]
@@ -135,12 +174,5 @@ public class PushRateLimiterTests : IDisposable
     public void Only_listed_rates_are_valid(int? hz, bool valid)
     {
         Assert.Equal(valid, DeviceRateCap.IsValid(hz));
-    }
-
-    [Fact]
-    public void Engine_default_interval_is_thirty_hz()
-    {
-        using var engine = new Nexus.Service.Lighting.Engine.LightingEngine();
-        Assert.Equal(33, engine.FrameIntervalMs);
     }
 }

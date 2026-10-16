@@ -9,12 +9,12 @@ using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Tests.Integration;
 
-public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFactory>
+public sealed class LightingMaxRateRouteTests : IClassFixture<SiblingZoneHostFactory>
 {
-    private readonly StubDeviceHostFactory _factory;
+    private readonly SiblingZoneHostFactory _factory;
     private readonly HttpClient _client;
 
-    public LightingMaxRateRouteTests(StubDeviceHostFactory factory)
+    public LightingMaxRateRouteTests(SiblingZoneHostFactory factory)
     {
         _factory = factory;
         _factory.ResetSettings();
@@ -36,9 +36,9 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
     [InlineData(1)]
     public async Task Allowed_rate_is_stored(int hz)
     {
-        var res = await Post($$"""{"id":"openrgb-s-X","maxRateHz":{{hz}}}""");
+        var res = await Post($$"""{"id":"openrgb-s-OTHER","maxRateHz":{{hz}}}""");
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Equal(hz, Settings.Devices.LightingMaxRates["openrgb-s-X"]);
+        Assert.Equal(hz, Settings.Devices.LightingMaxRates["openrgb-s-OTHER"]);
     }
 
     [Fact]
@@ -46,8 +46,8 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
     {
         Store.Update(s =>
         {
-            s.Devices.LightingMaxRates["openrgb-s-X"] = 10;
-            s.Devices.LightingDevicePrefs["openrgb-s-X"] = new LightingDevicePreference { Brightness = 40 };
+            s.Devices.LightingMaxRates["openrgb-s-OTHER"] = 10;
+            s.Devices.LightingDevicePrefs["openrgb-s-OTHER"] = new LightingDevicePreference { Brightness = 40 };
         });
         var create = await _client.PostAsync(
             "/devices/lighting-devices/layout-presets",
@@ -55,35 +55,37 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
         using var doc = System.Text.Json.JsonDocument.Parse(await create.Content.ReadAsStringAsync());
         var id = doc.RootElement.GetProperty("preset").GetProperty("id").GetString();
 
-        Store.Update(s => s.Devices.LightingMaxRates["openrgb-s-X"] = 5);
+        Store.Update(s => s.Devices.LightingMaxRates["openrgb-s-OTHER"] = 5);
         var res = await _client.PostAsync(
             $"/devices/lighting-devices/layout-presets/{id}/activate",
             new StringContent("{}", Encoding.UTF8, "application/json"));
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Equal(40, Settings.Devices.LightingDevicePrefs["openrgb-s-X"].Brightness);
-        Assert.Equal(5, Settings.Devices.LightingMaxRates["openrgb-s-X"]);
+        Assert.Equal(40, Settings.Devices.LightingDevicePrefs["openrgb-s-OTHER"].Brightness);
+        Assert.Equal(5, Settings.Devices.LightingMaxRates["openrgb-s-OTHER"]);
     }
 
     [Fact]
     public async Task Null_clears_the_cap()
     {
-        await Post("""{"id":"openrgb-s-X","maxRateHz":10}""");
-        var res = await Post("""{"id":"openrgb-s-X","maxRateHz":null}""");
+        await Post("""{"id":"openrgb-s-OTHER","maxRateHz":10}""");
+        var res = await Post("""{"id":"openrgb-s-OTHER","maxRateHz":null}""");
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.False(Settings.Devices.LightingMaxRates.ContainsKey("openrgb-s-X"));
+        Assert.False(Settings.Devices.LightingMaxRates.ContainsKey("openrgb-s-OTHER"));
     }
 
     [Theory]
-    [InlineData("""{"id":"openrgb-s-X","maxRateHz":25}""")]
-    [InlineData("""{"id":"openrgb-s-X","maxRateHz":0}""")]
-    [InlineData("""{"id":"openrgb-s-X","maxRateHz":60}""")]
+    [InlineData("""{"id":"openrgb-s-OTHER","maxRateHz":25}""")]
+    [InlineData("""{"id":"openrgb-s-OTHER","maxRateHz":0}""")]
+    [InlineData("""{"id":"openrgb-s-OTHER","maxRateHz":60}""")]
     [InlineData("""{"id":"","maxRateHz":10}""")]
+    [InlineData("""{"id":"unknown-card","maxRateHz":10}""")]
+    [InlineData("""{"id":"keeb-1","maxRateHz":10}""")]
     public async Task Invalid_input_is_rejected(string body)
     {
         var res = await Post(body);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.False(Settings.Devices.LightingMaxRates.ContainsKey("openrgb-s-X"));
+        Assert.Empty(Settings.Devices.LightingMaxRates);
     }
 }
 
@@ -140,7 +142,7 @@ public sealed class LightingMaxRateSiblingTests : IClassFixture<SiblingZoneHostF
     }
 
     [Fact]
-    public async Task Cap_is_written_to_every_zone_card_of_the_same_device_only()
+    public async Task Cap_is_stored_once_under_the_owning_device_id()
     {
         var res = await _client.PostAsync(
             "/devices/lighting-devices/max-rate",
@@ -148,9 +150,6 @@ public sealed class LightingMaxRateSiblingTests : IClassFixture<SiblingZoneHostF
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
         var prefs = _factory.Services.GetRequiredService<IConfigStore>().Load().Devices.LightingMaxRates;
-        Assert.Equal(10, prefs["openrgb-s-MB-0"]);
-        Assert.Equal(10, prefs["openrgb-s-MB-1"]);
-        Assert.False(prefs.ContainsKey("openrgb-s-OTHER"));
-        Assert.False(prefs.ContainsKey("keeb-1"));
+        Assert.Equal(new Dictionary<string, int> { ["openrgb-s-MB"] = 10 }, prefs);
     }
 }

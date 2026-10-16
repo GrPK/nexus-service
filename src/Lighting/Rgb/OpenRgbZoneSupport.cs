@@ -266,6 +266,7 @@ public static class OpenRgbZoneSupport
         return true;
     }
 
+    /// <summary>Caps are keyed by the owning device (the cards' ParentDeviceId, else the card id), so they survive re-partitioning.</summary>
     private static int? MaxRateFor(Dictionary<string, int> rates, string id) => rates.TryGetValue(id, out var hz) ? hz : null;
 
     /// <summary>Full GetAll card emission; static and bridge-free so tests cover it with fake controller data.</summary>
@@ -391,7 +392,7 @@ public static class OpenRgbZoneSupport
                         Hue = pref?.Hue ?? 0,
                         Saturation = pref?.Saturation ?? 1.0f,
                         RateCapSupported = true,
-                        MaxRateHz = MaxRateFor(maxRates, zoneId),
+                        MaxRateHz = MaxRateFor(maxRates, baseId),
                         LedCount = effectiveLedCount,
                         EnabledLedCount = ZoneResolution.CountEnabled(portStructures[z], portZone, zoneId, effectiveLedCount, zoneHint, settings),
                         CanvasX = layout?.X ?? sx,
@@ -444,7 +445,7 @@ public static class OpenRgbZoneSupport
                     Hue = pref?.Hue ?? 0,
                     Saturation = pref?.Saturation ?? 1.0f,
                     RateCapSupported = true,
-                    MaxRateHz = MaxRateFor(maxRates, zone.Id),
+                    MaxRateHz = MaxRateFor(maxRates, baseId),
                     LedCount = zone.LedCount,
                     EnabledLedCount = ZoneResolution.CountEnabled(structure, zone, zone.Id, zone.LedCount, zone.Ordinal, settings),
                     CanvasX = layout?.X ?? zx,

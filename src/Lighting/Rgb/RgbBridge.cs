@@ -191,6 +191,8 @@ public sealed class RgbBridge : IDisposable
     private const long HeartbeatMs = 1000;
     // Lowest user cap among the zones sharing a physical push, rebuilt every frame.
     private readonly Dictionary<int, int> _physCapsHz = new();
+    // Physical index -> stable OpenRGB device id, the key LightingMaxRates uses. Replaced wholesale on device-set change.
+    private volatile Dictionary<int, string> _physStableIds = new();
     private readonly PushRateLimiter<int> _pushLimiter = new();
     // Reused across frames - set of physical indices that had at least one zone
     // written in the current OnFrame. Cleared at the start of every frame.
@@ -1820,10 +1822,32 @@ public sealed class RgbBridge : IDisposable
         return true;
     }
 
-    /// <summary>Zones sharing one physical push take the lowest cap among them.</summary>
-    internal static void FoldCap(Dictionary<int, int> caps, int physIdx, int capHz)
+    /// <summary>
+    /// Fills <paramref name="caps"/> (cleared first) with physical index -> Hz for
+    /// every bridge frame whose owning device has a cap. The cap is keyed by the
+    /// physical device, so all zone frames sharing a push resolve the same value.
+    /// </summary>
+    internal static void ComputePhysicalCaps(
+        IReadOnlyList<DeviceFrame> deviceFrames,
+        IReadOnlySet<string> bridgeFrameIds,
+        IReadOnlyDictionary<int, string> physStableIds,
+        IReadOnlyDictionary<string, int> maxRates,
+        Dictionary<int, int> caps)
     {
-        caps[physIdx] = caps.TryGetValue(physIdx, out var prev) ? Math.Min(prev, capHz) : capHz;
+        caps.Clear();
+        if (maxRates.Count == 0)
+        {
+            return;
+        }
+        foreach (var f in deviceFrames)
+        {
+            if (IsBridgeFrame(f, bridgeFrameIds)
+                && physStableIds.TryGetValue(f.PhysicalIndex, out var key)
+                && maxRates.TryGetValue(key, out var hz) && hz > 0)
+            {
+                caps[f.PhysicalIndex] = hz;
+            }
+        }
     }
 
     internal void SyncPhysicalBuffers(IReadOnlyList<RgbDevice> devices)
@@ -1832,6 +1856,15 @@ public sealed class RgbBridge : IDisposable
         _lastPushed.Clear();
         _lastPushTicks.Clear();
         _pushLimiter.Reset();
+        var stableIds = new Dictionary<int, string>();
+        foreach (var d in devices)
+        {
+            if (d.LedCount > 0)
+            {
+                stableIds[d.Address] = d.StableId;
+            }
+        }
+        _physStableIds = stableIds;
         SizePhysicalBuffers(_physBuffers, devices);
     }
 
@@ -2406,13 +2439,12 @@ public sealed class RgbBridge : IDisposable
         var uncontrolled = settings.Devices.UncontrolledLightingDevices;
         var uncontrolledCount = uncontrolled.Count;
         var devicePrefs = settings.Devices.LightingDevicePrefs;
-        var maxRates = settings.Devices.LightingMaxRates;
         var globalBrightness = MasterBrightness.Effective(settings.Lighting);
         var nowTicks = DateTime.UtcNow.Ticks;
 
         _touchedPhysicals.Clear();
-        _physCapsHz.Clear();
         ComputeFullyUncontrolledPhysicals(deviceFrames, _bridgeFrameIds, uncontrolled, _physFullyUncontrolled);
+        ComputePhysicalCaps(deviceFrames, _bridgeFrameIds, _physStableIds, settings.Devices.LightingMaxRates, _physCapsHz);
 
         var deviceCount = frame[pos++];
         for (int d = 0; d < deviceCount && pos + 3 <= frame.Length; d++)
@@ -2489,10 +2521,6 @@ public sealed class RgbBridge : IDisposable
             }
             catch (InvalidOperationException) { devBrightness = 100; }
             var brightnessMul = Math.Min(Math.Clamp(devBrightness, 0, 100) / 100.0, globalBrightness);
-            if (maxRates.Count > 0 && maxRates.TryGetValue(dev.Id, out var capHz) && capHz > 0)
-            {
-                FoldCap(_physCapsHz, dev.PhysicalIndex, capHz);
-            }
 
             if (isOff)
             {
