@@ -67,6 +67,8 @@ public sealed class HydroShiftFanLeds
             _hub.Exchange((_, _) => { _primedFor = null; return true; }, false);
             _backoffMs = 0;
             _retryAtMs = 0;
+            _failures = 0;
+            _failuresLogged = 0;
             _failureLogged = false;
         }
         ConnectionChanged?.Invoke();
