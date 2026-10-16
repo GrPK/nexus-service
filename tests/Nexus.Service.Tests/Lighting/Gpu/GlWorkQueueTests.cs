@@ -80,6 +80,24 @@ public class GlWorkQueueTests
     }
 
     [Fact]
+    public void A_long_live_run_does_not_delay_a_later_background_job_beyond_the_streak()
+    {
+        var q = new GlWorkQueue();
+        for (var i = 0; i < 1000; i++)
+        {
+            q.Add(() => { }, background: false);
+            _ = q.Take();
+        }
+        var ran = new List<string>();
+        q.Add(() => ran.Add("bg"), background: true);
+        q.Add(() => ran.Add("live"), background: false);
+
+        Drain(q);
+
+        Assert.Equal(new[] { "bg", "live" }, ran);
+    }
+
+    [Fact]
     public void Completed_queue_refuses_adds_drains_then_throws()
     {
         var q = new GlWorkQueue();

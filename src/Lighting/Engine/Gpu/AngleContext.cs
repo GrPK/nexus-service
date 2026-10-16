@@ -80,8 +80,8 @@ internal static unsafe partial class AngleContext
     private const long ProgramCacheCapBytes = 128L * 1024 * 1024;
     private const int MaxBlobKeyBytes = 256;
     private static readonly DiskBlobCache ProgramCache = new(
-        Path.Combine(Nexus.Service.Persistence.NexusDataPaths.NexusRoot(), "cache", "angle-programs"),
-        ProgramCacheCapBytes);
+        Path.Combine(BlobCacheKey.CacheRoot(), "angle-programs"),
+        ProgramCacheCapBytes, "angle-programs", BlobCacheKey.Get);
     // ANGLE may link on its own worker threads, so the size-query/copy memo is per thread.
     [ThreadStatic]
     private static string? _lastGetName;
