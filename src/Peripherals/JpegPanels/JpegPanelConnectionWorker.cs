@@ -27,7 +27,7 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
     private readonly JpegPanelHub _hub;
     private readonly DeviceControlGate _gate;
     private readonly HardwarePresence _presence;
-    private readonly AttachBackoff _backoff = new(() => Environment.TickCount64);
+    private readonly AttachBackoff _backoff;
 
     /// <summary>Latched so a retry every few seconds does not repeat the miss.</summary>
     private bool _missLogged;
@@ -38,6 +38,8 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
         _hub = hub;
         _gate = gate;
         _presence = presence;
+        // Only a model with a session has a re-attach loop worth spacing out; the rest keep the fixed retry.
+        _backoff = new AttachBackoff(() => Environment.TickCount64, enabled: hub.SettleMs > 0);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -54,12 +56,14 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
 
                 if (!_gate.IsEnabled(model.HandlerId))
                 {
+                    _backoff.Clear();
                     await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
                 if (!OnBus())
                 {
+                    _backoff.Clear();
                     await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
@@ -115,7 +119,11 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
                         }
                         if (_hub.IsConnected && Environment.TickCount64 - connectedMs >= AttachBackoff.HealthyAfterMs)
                         {
-                            _backoff.NoteHealthy();
+                            int ended = _backoff.NoteHealthy();
+                            if (ended > 0)
+                            {
+                                ServiceLog.Info($"[{model.HandlerId}] recovered after {ended} failed cycle(s)");
+                            }
                         }
                     }
                 }

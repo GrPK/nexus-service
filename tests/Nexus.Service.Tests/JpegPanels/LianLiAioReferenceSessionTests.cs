@@ -396,6 +396,50 @@ public class LianLiAioReferenceSessionTests
         Assert.Equal(6, backoff.NoteFailure());
     }
 
+    [Fact]
+    public void Clearing_the_backoff_makes_a_replug_attach_at_the_normal_cadence()
+    {
+        long now = 0;
+        var backoff = new AttachBackoff(() => now);
+        for (int i = 0; i < 6; i++)
+        {
+            backoff.NoteFailure();
+        }
+        Assert.True(backoff.DelayMs > 100_000);
+
+        backoff.Clear();
+
+        Assert.Equal(0, backoff.DelayMs);
+        Assert.Equal(0, backoff.Failures);
+    }
+
+    [Fact]
+    public void A_healthy_connection_reports_how_many_failures_it_ended()
+    {
+        var backoff = new AttachBackoff(() => 0);
+        backoff.NoteFailure();
+        backoff.NoteFailure();
+
+        Assert.Equal(2, backoff.NoteHealthy());
+        Assert.Equal(0, backoff.NoteHealthy());
+    }
+
+    [Fact]
+    public void Galahad_keeps_its_fixed_retry_because_only_a_session_model_backs_off()
+    {
+        using var hub = new JpegPanelHub(JpegPanelModel.GalahadIiLcd);
+        Assert.Equal(0, hub.SettleMs);
+
+        var backoff = new AttachBackoff(() => 0, enabled: hub.SettleMs > 0);
+        for (int i = 0; i < 5; i++)
+        {
+            Assert.Equal(0, backoff.NoteFailure());
+        }
+
+        Assert.Equal(0, backoff.DelayMs);
+        Assert.Equal(0, backoff.Failures);
+    }
+
     private static byte[] AResponse(byte cmd, string text)
     {
         var frame = new byte[64];

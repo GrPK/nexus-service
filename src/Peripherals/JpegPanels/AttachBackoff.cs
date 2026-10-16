@@ -22,7 +22,14 @@ public sealed class AttachBackoff
     private long _lastLogMs;
     private int _unloggedFailures;
 
-    public AttachBackoff(Func<long> clock) => _clock = clock;
+    private readonly bool _enabled;
+
+    /// <param name="enabled">False leaves every call a no-op, so a model that keeps its fixed retry cadence is untouched.</param>
+    public AttachBackoff(Func<long> clock, bool enabled = true)
+    {
+        _clock = clock;
+        _enabled = enabled;
+    }
 
     public int Failures { get; private set; }
 
@@ -35,6 +42,10 @@ public sealed class AttachBackoff
     /// </summary>
     public int NoteFailure()
     {
+        if (!_enabled)
+        {
+            return 0;
+        }
         long now = _clock();
         Failures++;
         _unloggedFailures++;
@@ -50,7 +61,16 @@ public sealed class AttachBackoff
         return report;
     }
 
-    public void NoteHealthy()
+    /// <summary>Clears the streak after a healthy connection; returns how many failures it ended.</summary>
+    public int NoteHealthy()
+    {
+        int ended = Failures;
+        Clear();
+        return ended;
+    }
+
+    /// <summary>Forgets the streak without a verdict, for when the device left or was switched off and a return deserves a fresh start.</summary>
+    public void Clear()
     {
         Failures = 0;
         _unloggedFailures = 0;
