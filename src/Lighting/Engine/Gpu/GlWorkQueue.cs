@@ -75,7 +75,10 @@ internal sealed class GlWorkQueue
     {
         if (_live.Count > 0 && !(_background.Count > 0 && _liveStreak >= MaxLiveStreak))
         {
-            _liveStreak++;
+            if (_liveStreak < MaxLiveStreak)
+            {
+                _liveStreak++;
+            }
             job = _live.Dequeue();
             return true;
         }

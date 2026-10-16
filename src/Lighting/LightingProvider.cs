@@ -619,22 +619,38 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
-    // Build identity folded into every disk key, so a render change in any release never serves an older image.
-    private static readonly string ThumbnailDiskVersion =
-        System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(LightingProvider).Assembly)?.InformationalVersion
-        ?? typeof(LightingProvider).Assembly.GetName().Version?.ToString()
-        ?? "0";
+    // Identity of this exact build (release version plus the executable's size and write time), folded into every disk key so no build serves another build's images.
+    private static readonly string ThumbnailDiskVersion = BuildIdentity();
 
-    // Thumbnails are fixed-size 24-bpp BMPs, so a stored file of any other length is damaged.
+    private static string BuildIdentity()
+    {
+        var version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(LightingProvider).Assembly)?.InformationalVersion
+            ?? typeof(LightingProvider).Assembly.GetName().Version?.ToString()
+            ?? "0";
+        try
+        {
+            if (Environment.ProcessPath is { } exe)
+            {
+                var info = new System.IO.FileInfo(exe);
+                return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{version}|{info.Length}|{info.LastWriteTimeUtc.Ticks}");
+            }
+        }
+        catch
+        {
+        }
+        return version;
+    }
+
+    // Thumbnails are fixed-size BMPs, so a stored file of any other length is damaged.
     private const int ThumbnailWidth = 160;
     private const int ThumbnailHeight = 90;
     private const int ThumbnailBmpBytes = 54 + (ThumbnailWidth * 3 + (4 - ThumbnailWidth * 3 % 4) % 4) * ThumbnailHeight;
     private const long ThumbnailDiskCapBytes = 64L * 1024 * 1024;
 
-    // Rendered thumbnails survive a restart, so repeat visits skip the compile + render.
-    private readonly Engine.Gpu.DiskBlobCache _thumbnailDisk = new(
-        System.IO.Path.Combine(Nexus.Service.Persistence.NexusDataPaths.NexusRoot(), "cache", "lighting-thumbnails"),
-        ThumbnailDiskCapBytes);
+    // Rendered thumbnails survive a restart. Shared by every provider and created on first use, which starts its background init.
+    private static readonly Lazy<Engine.Gpu.DiskBlobCache> ThumbnailDiskLazy = new(() => new Engine.Gpu.DiskBlobCache(
+        System.IO.Path.Combine(Engine.Gpu.BlobCacheKey.CacheRoot(), "lighting-thumbnails"),
+        ThumbnailDiskCapBytes, "lighting-thumbnails", Engine.Gpu.BlobCacheKey.Get));
 
     private (byte[] Bytes, string Tag)? CaptureAnimateThumbnailCore(string key, int slot, bool skipCache, bool frozen)
     {
@@ -658,20 +674,19 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         {
             return (cached.Bytes, tag);
         }
-        var diskName = Engine.Gpu.DiskBlobCache.ThumbnailName(name, slot, frozen, tag, ThumbnailDiskVersion);
-        if (!skipCache && _thumbnailDisk.TryGet(diskName) is { Length: ThumbnailBmpBytes } onDisk)
-        {
-            _thumbnailCache[cacheKey] = (tag, onDisk);
-            Engine.Gpu.GpuContext.Log($"[thumb] {cacheKey} disk {sw.Elapsed.TotalMilliseconds:0}ms");
-            return (onDisk, tag);
-        }
-
         // Shader thumbnails are GPU-rendered; with no usable GPU the render is a
         // no-op and the frame stays black, so skip it and let the caller 404 -
         // the UI shows a placeholder instead of a grid of black tiles.
         if (!_gpu.Available)
         {
             return null;
+        }
+        var diskName = Engine.Gpu.DiskBlobCache.ThumbnailName(name, slot, frozen, tag, ThumbnailDiskVersion);
+        if (!skipCache && ThumbnailDiskLazy.Value.TryGet(diskName) is { Length: ThumbnailBmpBytes } onDisk)
+        {
+            _thumbnailCache[cacheKey] = (tag, onDisk);
+            Engine.Gpu.GpuContext.Log($"[thumb] {cacheKey} disk {sw.Elapsed.TotalMilliseconds:0}ms");
+            return (onDisk, tag);
         }
 
         var canvas = new Engine.CanvasBuffer(ThumbnailWidth, ThumbnailHeight);
@@ -701,7 +716,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         // A failed compile or a lost context leaves a black frame: serve it, but never persist it.
         if (_gpu.Available && _gpu.Generation == generation && effect is not ShaderEffect { HasFailed: true })
         {
-            _thumbnailDisk.Put(diskName, bytes);
+            ThumbnailDiskLazy.Value.Put(diskName, bytes);
         }
         Engine.Gpu.GpuContext.Log($"[thumb] {cacheKey} render {sw.Elapsed.TotalMilliseconds:0}ms");
         return (bytes, tag);
