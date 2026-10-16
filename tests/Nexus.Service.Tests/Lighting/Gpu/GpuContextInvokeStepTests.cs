@@ -11,8 +11,15 @@ namespace Nexus.Service.Tests.Lighting.Gpu;
 /// <summary>Models the cold lighting page: many background compiles in flight against a steady stream of live jobs. The init body is substituted; no GL runs.</summary>
 public class GpuContextInvokeStepTests
 {
-    private static async Task<bool> CompletedWithin(Task task, TimeSpan timeout) =>
-        await Task.WhenAny(task, Task.Delay(timeout)) == task;
+    private static async Task<bool> CompletedWithin(Task task, TimeSpan timeout)
+    {
+        if (await Task.WhenAny(task, Task.Delay(timeout)) != task)
+        {
+            return false;
+        }
+        await task;
+        return true;
+    }
 
     private static GpuContext Started()
     {
@@ -138,15 +145,56 @@ public class GpuContextInvokeStepTests
 
         Assert.True(maxInFlight <= GpuContext.MaxBackgroundCompiles, $"in flight {maxInFlight}");
         Assert.NotEmpty(deltas);
-        // The sampler can be descheduled between reading the count and queuing, and then it sees every background run
-        // in that gap. That is noise on a loaded machine, so judge the typical sample and a generous share of outliers;
-        // a live job stuck behind the backlog sees dozens of background runs on nearly every sample.
+        // A stress sample of the steady state. The sampler can be descheduled between reading the count and queuing, so
+        // judge the typical sample and a share of outliers. Queue order itself is asserted deterministically by
+        // A_live_job_queued_behind_a_background_backlog_runs_first.
         var sorted = deltas.OrderBy(d => d).ToArray();
         Assert.True(sorted[sorted.Length / 2] <= 2, $"median live job ran behind {sorted[sorted.Length / 2]} background jobs");
         var behind = deltas.Count(d => d > 2);
-        Assert.True(behind * 5 <= deltas.Count, $"{behind} of {deltas.Count} live jobs ran behind more than one background job");
+        Assert.True(behind * 5 <= deltas.Count, $"{behind} of {deltas.Count} live jobs ran behind more than two background jobs");
         // Measured on the GL thread, so thread-pool pressure on the callers does not count. Every step here returns at once.
         Assert.True(gpu.MaxLiveWaitMs < 250, $"live max wait {gpu.MaxLiveWaitMs:0.0}ms");
+    }
+
+    [Fact]
+    public async Task A_live_job_queued_behind_a_background_backlog_runs_first()
+    {
+        using var gpu = Started();
+        using var held = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var gate = Task.Factory.StartNew(() => gpu.Invoke(() =>
+        {
+            held.Set();
+            release.Wait();
+        }), TaskCreationOptions.LongRunning);
+        Assert.True(held.Wait(TimeSpan.FromSeconds(30)));
+
+        // The GL thread is busy, so everything queued now waits for the release. A caller blocks inside InvokeStep, so
+        // the backlog is built from threads; the settle only has to let them enqueue, and a late one cannot fail the test.
+        const int Backlog = 40;
+        var backgroundRuns = 0;
+        var backlog = new List<Task>();
+        for (var i = 0; i < Backlog; i++)
+        {
+            backlog.Add(Task.Factory.StartNew(() =>
+            {
+                using var bg = GpuContext.BeginBackground();
+                gpu.InvokeStep(() =>
+                {
+                    Interlocked.Increment(ref backgroundRuns);
+                    return StepState.Done;
+                });
+            }, TaskCreationOptions.LongRunning));
+        }
+        Thread.Sleep(500);
+
+        var behind = -1;
+        var live = Task.Factory.StartNew(() => gpu.Invoke(() => behind = Volatile.Read(ref backgroundRuns)), TaskCreationOptions.LongRunning);
+        Thread.Sleep(200);
+        release.Set();
+
+        Assert.True(await CompletedWithin(Task.WhenAll(backlog.Append(live).Append(gate)), TimeSpan.FromSeconds(60)));
+        Assert.True(behind <= 1, $"the live job ran after {behind} of {Backlog} background jobs");
     }
 
     [Fact]
