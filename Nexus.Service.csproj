@@ -339,9 +339,16 @@
     <_NexusFirmwareDir Condition="'$(_NexusFirmwareDir)' == '' AND Exists('$(MSBuildThisFileDirectory)..\..\firmware')">$(MSBuildThisFileDirectory)..\..\firmware</_NexusFirmwareDir>
   </PropertyGroup>
   <ItemGroup Condition="'$(_NexusFirmwareDir)' != ''">
-    <EmbeddedResource Include="$(_NexusFirmwareDir)\**\*.hex">
+    <!-- y70-truly ships the same bytes as y70-infinite; BundledFirmwareCatalog
+         serves it from that one resource. -->
+    <EmbeddedResource Include="$(_NexusFirmwareDir)\**\*.hex" Exclude="$(_NexusFirmwareDir)\y70-truly\*.hex">
       <LogicalName>firmware/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
+  </ItemGroup>
+  <!-- Release flashes only the newest image per device (FirmwareFlasher), so the
+       older np50 image is embedded for the dev-tools downgrade picker alone. -->
+  <ItemGroup Condition="'$(DevTools)' != 'true'">
+    <EmbeddedResource Remove="$(_NexusFirmwareDir)\np50\2.0.3.1.hex" />
   </ItemGroup>
 
   <Target Name="ReportFirmwareBundle" BeforeTargets="CoreCompile" Condition="'$(DesignTimeBuild)' != 'true'">
