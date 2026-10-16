@@ -9,8 +9,15 @@ namespace Nexus.Service.Tests.Lighting.Gpu;
 /// <summary>A lost context frees its thread, releases every parked caller and re-creates through the normal init path. The init body is substituted: a real GL init is host-dependent.</summary>
 public class GpuContextLossTests
 {
-    private static async Task<bool> CompletedWithin(Task task, TimeSpan timeout) =>
-        await Task.WhenAny(task, Task.Delay(timeout)) == task;
+    private static async Task<bool> CompletedWithin(Task task, TimeSpan timeout)
+    {
+        if (await Task.WhenAny(task, Task.Delay(timeout)) != task)
+        {
+            return false;
+        }
+        await task;
+        return true;
+    }
 
     private static GpuContext Started(out int[] inits)
     {
@@ -26,7 +33,7 @@ public class GpuContextLossTests
     }
 
     [Fact]
-    public async Task Loss_raises_the_event_after_the_thread_exits_and_a_rearm_brings_a_new_generation()
+    public void Loss_raises_the_event_after_the_thread_exits_and_a_rearm_brings_a_new_generation()
     {
         var gpu = Started(out var inits);
         var generation = gpu.Generation;
