@@ -341,6 +341,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Models.Displays.DisplayVcpParams))]
 [JsonSerializable(typeof(Nexus.Service.Models.Displays.DisplayListResponse))]
 [JsonSerializable(typeof(Nexus.Service.Models.Displays.RawDisplayInfo))]
+[JsonSerializable(typeof(Nexus.Service.Models.Displays.DisplayFingerprint))]
 [JsonSerializable(typeof(List<Nexus.Service.Models.Displays.RawDisplayInfo>))]
 [JsonSerializable(typeof(Nexus.Service.Models.Displays.DisplayBoundsDto))]
 [JsonSerializable(typeof(Nexus.Service.Models.Displays.DisplaySizeDto))]
