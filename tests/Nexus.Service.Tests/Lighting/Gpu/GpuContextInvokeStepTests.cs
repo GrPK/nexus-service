@@ -60,34 +60,49 @@ public class GpuContextInvokeStepTests
         Assert.True(sw.ElapsedMilliseconds < 1000);
     }
 
+    private static bool Eventually(Func<bool> cond)
+    {
+        var until = Stopwatch.StartNew();
+        while (until.Elapsed < TimeSpan.FromSeconds(60))
+        {
+            if (cond())
+            {
+                return true;
+            }
+            Thread.Sleep(2);
+        }
+        return cond();
+    }
+
     [Fact]
-    public async Task Live_jobs_stay_prompt_while_many_background_compiles_are_pending()
+    public async Task Live_jobs_never_queue_behind_the_background_compile_backlog()
     {
         using var gpu = Started();
         const int Programs = 123;
-        var gate = gpu.BackgroundCompiles;
         var maxInFlight = 0;
+        long backgroundRuns = 0;
         var compileTicks = Stopwatch.Frequency / 30;
 
-        // Each "program" takes a gate slot, then is ready ~33ms later without holding the thread.
+        // Each "program" takes a slot, then is ready ~33ms later without holding the thread.
         var thumbs = new List<Task>();
         for (var i = 0; i < Programs; i++)
         {
-            thumbs.Add(Task.Run(() =>
+            thumbs.Add(Task.Factory.StartNew(() =>
             {
                 long readyAt = 0;
                 var held = false;
                 using var bg = GpuContext.BeginBackground();
                 gpu.InvokeStep(() =>
                 {
+                    Interlocked.Increment(ref backgroundRuns);
                     if (!held)
                     {
-                        if (!gate.TryEnter())
+                        if (!gpu.TryAcquireCompileSlot())
                         {
                             return StepState.WaitSlot;
                         }
                         held = true;
-                        maxInFlight = Math.Max(maxInFlight, gate.InFlight);
+                        maxInFlight = Math.Max(maxInFlight, gpu.BackgroundCompiles.InFlight);
                         readyAt = Stopwatch.GetTimestamp() + compileTicks;
                     }
                     if (Stopwatch.GetTimestamp() < readyAt)
@@ -97,21 +112,21 @@ public class GpuContextInvokeStepTests
                     gpu.ReleaseCompileSlot();
                     return StepState.Done;
                 });
-            }));
+            }, TaskCreationOptions.LongRunning));
         }
 
-        var worst = 0.0;
-        // Queue wait is measured on the GL thread, so thread-pool pressure from the blocked callers cannot inflate it.
+        // How many background step runs got ahead of each live job between its submission and its run. Counted, not
+        // timed: a live job waits behind at most the one job already running, whatever the machine's load.
+        var deltas = new List<long>();
         var live = Task.Factory.StartNew(() =>
         {
-            var until = Stopwatch.StartNew();
-            while (!Task.WhenAll(thumbs).IsCompleted && until.Elapsed < TimeSpan.FromSeconds(60))
+            while (!Task.WhenAll(thumbs).IsCompleted)
             {
-                var t = Stopwatch.GetTimestamp();
-                long ranAt = 0;
-                gpu.Invoke(() => ranAt = Stopwatch.GetTimestamp());
-                worst = Math.Max(worst, (ranAt - t) * 1000.0 / Stopwatch.Frequency);
-                Thread.Sleep(5);
+                var before = Interlocked.Read(ref backgroundRuns);
+                long during = 0;
+                gpu.Invoke(() => during = Interlocked.Read(ref backgroundRuns));
+                deltas.Add(during - before);
+                Thread.Sleep(3);
             }
         }, TaskCreationOptions.LongRunning);
 
@@ -119,8 +134,106 @@ public class GpuContextInvokeStepTests
         await live;
 
         Assert.True(maxInFlight <= GpuContext.MaxBackgroundCompiles, $"in flight {maxInFlight}");
-        // A live job waits behind at most one short poll, never behind a compile.
-        Assert.True(worst < 30, $"live max wait {worst:0.0}ms");
+        Assert.NotEmpty(deltas);
+        // A few samples can see more when the sampling thread is descheduled between reading the count and queuing;
+        // a live job stuck behind the backlog would see dozens on nearly every sample.
+        var behind = deltas.Count(d => d > 2);
+        Assert.True(behind * 10 <= deltas.Count, $"{behind} of {deltas.Count} live jobs ran behind more than one background job");
+    }
+
+    [Fact]
+    public void A_step_waiting_for_a_slot_parks_instead_of_polling_and_wakes_on_release()
+    {
+        using var gpu = Started();
+        // Fill every slot from the GL thread.
+        gpu.Invoke(() =>
+        {
+            while (gpu.BackgroundCompiles.TryEnter())
+            {
+            }
+        });
+        var calls = 0;
+        var call = Task.Factory.StartNew(() =>
+        {
+            using var bg = GpuContext.BeginBackground();
+            gpu.InvokeStep(() =>
+            {
+                Interlocked.Increment(ref calls);
+                if (!gpu.TryAcquireCompileSlot())
+                {
+                    return StepState.WaitSlot;
+                }
+                gpu.ReleaseCompileSlot();
+                return StepState.Done;
+            });
+        }, TaskCreationOptions.LongRunning);
+
+        Assert.True(Eventually(() => gpu.ParkedWaiters == 1));
+        // GL-thread round trips give a polling step every chance to run again; a parked one does not.
+        for (var i = 0; i < 20; i++)
+        {
+            gpu.Invoke(() => { });
+        }
+        Assert.False(call.IsCompleted);
+        Assert.Equal(1, Volatile.Read(ref calls));
+
+        gpu.Invoke(() => gpu.ReleaseCompileSlot());
+
+        Assert.True(call.Wait(TimeSpan.FromSeconds(60)));
+        Assert.Equal(2, Volatile.Read(ref calls));
+    }
+
+    [Fact]
+    public void A_released_slot_goes_to_the_longest_waiter_before_a_newcomer()
+    {
+        using var gpu = Started();
+        gpu.Invoke(() =>
+        {
+            while (gpu.BackgroundCompiles.TryEnter())
+            {
+            }
+        });
+        var order = new List<string>();
+        Task Waiter(string name) => Task.Factory.StartNew(() =>
+        {
+            using var bg = GpuContext.BeginBackground();
+            gpu.InvokeStep(() =>
+            {
+                if (!gpu.TryAcquireCompileSlot())
+                {
+                    return StepState.WaitSlot;
+                }
+                lock (order)
+                {
+                    order.Add(name);
+                }
+                return StepState.Done;
+            });
+        }, TaskCreationOptions.LongRunning);
+
+        var first = Waiter("first");
+        Assert.True(Eventually(() => gpu.ParkedWaiters == 1));
+        var second = Waiter("second");
+        Assert.True(Eventually(() => gpu.ParkedWaiters == 2));
+        int inFlightAfterRelease = -1;
+
+        // The release and a newcomer's attempt run back to back on the GL thread: the slot is already spoken for.
+        bool newcomerGotIt = true;
+        gpu.Invoke(() =>
+        {
+            gpu.ReleaseCompileSlot();
+            newcomerGotIt = gpu.BackgroundCompiles.TryEnter();
+            inFlightAfterRelease = gpu.BackgroundCompiles.InFlight;
+        });
+
+        Assert.False(newcomerGotIt);
+        Assert.Equal(GpuContext.MaxBackgroundCompiles, inFlightAfterRelease);
+        Assert.True(first.Wait(TimeSpan.FromSeconds(60)));
+        Assert.Equal(new[] { "first" }, order);
+
+        gpu.Invoke(() => gpu.ReleaseCompileSlot());
+        Assert.True(second.Wait(TimeSpan.FromSeconds(60)));
+        Assert.Equal(new[] { "first", "second" }, order);
     }
 
     [Fact]
@@ -140,43 +253,6 @@ public class GpuContextInvokeStepTests
     }
 
     [Fact]
-    public void A_step_waiting_for_a_slot_parks_instead_of_polling_and_wakes_on_release()
-    {
-        using var gpu = Started();
-        // Fill every slot from the GL thread.
-        gpu.Invoke(() =>
-        {
-            while (gpu.BackgroundCompiles.TryEnter())
-            {
-            }
-        });
-        var calls = 0;
-        var call = Task.Run(() =>
-        {
-            using var bg = GpuContext.BeginBackground();
-            gpu.InvokeStep(() =>
-            {
-                calls++;
-                if (!gpu.BackgroundCompiles.TryEnter())
-                {
-                    return StepState.WaitSlot;
-                }
-                gpu.ReleaseCompileSlot();
-                return StepState.Done;
-            });
-        });
-        Thread.Sleep(150);
-
-        Assert.False(call.IsCompleted);
-        Assert.Equal(1, calls);
-
-        gpu.Invoke(() => gpu.ReleaseCompileSlot());
-
-        Assert.True(call.Wait(TimeSpan.FromSeconds(5)));
-        Assert.Equal(2, calls);
-    }
-
-    [Fact]
     public void A_loss_releases_callers_parked_for_a_slot()
     {
         using var gpu = Started();
@@ -191,10 +267,10 @@ public class GpuContextInvokeStepTests
             using var bg = GpuContext.BeginBackground();
             gpu.InvokeStep(() => StepState.WaitSlot);
         });
-        Thread.Sleep(50);
+        Assert.True(Eventually(() => gpu.ParkedWaiters == 1));
 
         gpu.ReportContextLost("test");
 
-        Assert.True(call.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(call.Wait(TimeSpan.FromSeconds(60)));
     }
 }

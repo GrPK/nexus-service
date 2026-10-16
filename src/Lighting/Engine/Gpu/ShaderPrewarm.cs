@@ -17,7 +17,7 @@ internal sealed class ShaderPrewarmPlan
     /// <summary>Settling time after the live effect's program lands before the first program.</summary>
     public static readonly TimeSpan Settle = TimeSpan.FromSeconds(2);
 
-    /// <summary>Longest wait for a live program (a static colour never builds one) before starting anyway.</summary>
+    /// <summary>Longest wait for a live program (a static color never builds one) before starting anyway.</summary>
     public static readonly TimeSpan LiveProgramWait = TimeSpan.FromMinutes(2);
 
     /// <summary>A warm-up only pays off when the compiled programs persist and compiling does not block the GL thread.</summary>

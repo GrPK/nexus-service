@@ -693,32 +693,64 @@ public sealed class GpuContext : IDisposable
     internal CompileGate BackgroundCompiles { get; } = new(MaxBackgroundCompiles);
 
     // Background steps waiting for a compile slot, in arrival order; GL thread only. A freed slot wakes the first.
-    private readonly System.Collections.Generic.Queue<(Action Job, GlWorkQueue Queue)> _slotWaiters = new();
+    private sealed class SlotWaiter
+    {
+        public Action Job = null!;
+        public GlWorkQueue Queue = null!;
+        // The slot was handed to this waiter when it was woken; its next run owns it.
+        public bool Handed;
+    }
 
-    /// <summary>Free a background compile slot and wake the longest-waiting step. GL thread only.</summary>
+    private readonly System.Collections.Generic.Queue<SlotWaiter> _slotWaiters = new();
+
+    // Set for the duration of a step run that was handed a slot; TryAcquireCompileSlot consumes it.
+    private bool _handedSlot;
+
+    /// <summary>Take a background compile slot: the one handed to this run if any, else a free one. GL thread only.</summary>
+    internal bool TryAcquireCompileSlot()
+    {
+        if (_handedSlot)
+        {
+            _handedSlot = false;
+            return true;
+        }
+        return BackgroundCompiles.TryEnter();
+    }
+
+    /// <summary>
+    /// Free a background compile slot. With steps waiting, the slot passes straight to the
+    /// longest-waiting one (no free moment for a newcomer to take it), otherwise it is freed. GL thread only.
+    /// </summary>
     internal void ReleaseCompileSlot()
     {
-        BackgroundCompiles.Exit();
-        if (_slotWaiters.Count > 0)
+        if (_slotWaiters.Count == 0)
         {
-            var (job, queue) = _slotWaiters.Dequeue();
-            try
-            { queue.Add(job, true); }
-            catch (InvalidOperationException)
-            {
-                // The queue was completed; run the step so its caller is released.
-                job();
-            }
+            BackgroundCompiles.Exit();
+            return;
+        }
+        var waiter = _slotWaiters.Dequeue();
+        waiter.Handed = true;
+        try
+        { waiter.Queue.Add(waiter.Job, true); }
+        catch (InvalidOperationException)
+        {
+            // The queue was completed; run the step so its caller is released (it hands the slot on).
+            waiter.Job();
         }
     }
+
+    /// <summary>Steps parked for a compile slot.</summary>
+    internal int ParkedWaiters => Volatile.Read(ref _parked);
+    private int _parked;
 
     private void DrainSlotWaiters()
     {
         while (_slotWaiters.Count > 0)
         {
-            var (job, _) = _slotWaiters.Dequeue();
+            var waiter = _slotWaiters.Dequeue();
+            Interlocked.Decrement(ref _parked);
             try
-            { job(); }
+            { waiter.Job(); }
             catch (Exception) { }
         }
     }
@@ -768,19 +800,34 @@ public sealed class GpuContext : IDisposable
         var done = _invokeDone.Value!;
         done.Reset();
         Action? job = null;
+        var waiter = new SlotWaiter { Queue = queue };
         job = () =>
         {
             var state = StepState.Done;
+            if (waiter.Handed)
+            {
+                waiter.Handed = false;
+                _handedSlot = true;
+                Interlocked.Decrement(ref _parked);
+            }
             try
             { state = step(); }
             catch (Exception ex) { caught = ex; }
+            if (_handedSlot)
+            {
+                // The step finished without using the slot it was handed; pass it on.
+                _handedSlot = false;
+                ReleaseCompileSlot();
+            }
             if (state != StepState.Done && background && caught is null)
             {
                 if (state == StepState.WaitSlot)
                 {
                     if (!queue.IsCompleted)
                     {
-                        _slotWaiters.Enqueue((job!, queue));
+                        waiter.Job = job!;
+                        _slotWaiters.Enqueue(waiter);
+                        Interlocked.Increment(ref _parked);
                         return;
                     }
                 }

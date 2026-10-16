@@ -24,7 +24,9 @@ public class AsyncCompileSwitchTests
         return gpu;
     }
 
-    private static ShaderEffect Shader(GpuContext gpu, string name, byte r, byte g, byte b, int landsAfterCalls, Action? onCall = null)
+    /// <summary>A shader whose program lands after a number of frames, or, with a gate, when the gate opens.</summary>
+    private static ShaderEffect Shader(GpuContext gpu, string name, byte r, byte g, byte b, int landsAfterCalls, Action? onCall = null,
+        ManualResetEventSlim? gate = null)
     {
         var calls = 0;
         return new ShaderEffect(name, gpu, "")
@@ -33,7 +35,7 @@ public class AsyncCompileSwitchTests
             {
                 calls++;
                 onCall?.Invoke();
-                if (calls <= landsAfterCalls)
+                if (gate is not null ? !gate.IsSet : calls <= landsAfterCalls)
                 {
                     return false;
                 }
@@ -54,9 +56,9 @@ public class AsyncCompileSwitchTests
     {
         using var gpu = Context();
         var old = Shader(gpu, "old", 255, 0, 0, 0);
-        old.MarkCompiledForTest();
         var incoming = Shader(gpu, "new", 0, 255, 0, 3);
         var canvas = new CanvasBuffer(16, 9);
+        old.RenderFrame(canvas, 0);
 
         Assert.True(incoming.AdoptPredecessor(old));
 
@@ -85,10 +87,10 @@ public class AsyncCompileSwitchTests
     {
         using var gpu = Context();
         var first = Shader(gpu, "a", 255, 0, 0, 0);
-        first.MarkCompiledForTest();
         var second = Shader(gpu, "b", 0, 255, 0, 100);
         var third = Shader(gpu, "c", 0, 0, 255, 100);
         var canvas = new CanvasBuffer(16, 9);
+        first.RenderFrame(canvas, 0);
 
         Assert.True(second.AdoptPredecessor(first));
         Assert.True(third.AdoptPredecessor(second));
@@ -99,12 +101,42 @@ public class AsyncCompileSwitchTests
         Assert.Equal(0, first.DisposeCount);
     }
 
+    private static async Task<bool> Eventually(Func<bool> cond)
+    {
+        var until = System.Diagnostics.Stopwatch.StartNew();
+        while (until.Elapsed < TimeSpan.FromSeconds(60))
+        {
+            if (cond())
+            {
+                return true;
+            }
+            await Task.Delay(5);
+        }
+        return cond();
+    }
+
+    private static Task Frames(LightingEngine engine, int count)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = 0;
+        void Handler()
+        {
+            if (Interlocked.Increment(ref seen) >= count)
+            {
+                done.TrySetResult();
+            }
+        }
+        engine.FramePublished += Handler;
+        return done.Task.WaitAsync(TimeSpan.FromSeconds(60)).ContinueWith(_ => engine.FramePublished -= Handler);
+    }
+
     [Fact]
     public async Task A_frozen_shader_that_is_still_compiling_is_polled_until_it_renders()
     {
         using var gpu = Context();
         var calls = 0;
-        var shader = Shader(gpu, "static", 0, 255, 0, 5, () => Interlocked.Increment(ref calls));
+        using var gate = new ManualResetEventSlim(false);
+        var shader = Shader(gpu, "static", 0, 255, 0, 0, () => Interlocked.Increment(ref calls), gate);
         using var engine = new LightingEngine { FrameIntervalMs = 10 };
         var dev = new DeviceFrame(0, "dev-a", 4, x: 100, y: 100, w: 100, h: 100);
         engine.UpdateDevices(new[] { dev });
@@ -112,16 +144,14 @@ public class AsyncCompileSwitchTests
         engine.SetEffect(shader);
         engine.SetFrozen(true);
 
-        for (var i = 0; i < 300 && Volatile.Read(ref calls) <= 5; i++)
-        {
-            await Task.Delay(10);
-        }
-        Assert.True(Volatile.Read(ref calls) > 5);
-        await Task.Delay(50);
-        Assert.False(shader.IsRenderPending);
-        // Rendered once it landed: a frozen effect then stops rendering.
+        // Polled on every tick while it compiles: the old behavior asked once and never again.
+        Assert.True(await Eventually(() => Volatile.Read(ref calls) >= 5));
+        gate.Set();
+        Assert.True(await Eventually(() => !shader.IsRenderPending));
+        await Frames(engine, 5);
         var settled = Volatile.Read(ref calls);
-        await Task.Delay(100);
+        await Frames(engine, 5);
+        // Rendered once it landed: a frozen effect then stops rendering.
         Assert.Equal(settled, Volatile.Read(ref calls));
     }
 
@@ -131,7 +161,8 @@ public class AsyncCompileSwitchTests
         using var gpu = Context();
         var pins = new DevicePinTracker();
         pins.Set("dev-a", new DevicePin { Kind = DevicePinKinds.Animate, Effect = "pinned" });
-        var pinShader = Shader(gpu, "pinned", 255, 0, 0, 10, () => { });
+        using var gate = new ManualResetEventSlim(false);
+        var pinShader = Shader(gpu, "pinned", 255, 0, 0, 0, null, gate);
         using var engine = new LightingEngine
         {
             Pins = pins,
@@ -143,25 +174,65 @@ public class AsyncCompileSwitchTests
         engine.UpdateDevices(new[] { dev });
         engine.SetEffect(new SolidEffect(0, 255, 0));
 
-        // While the pin compiles the device shows the global green, never the pin's blank canvas.
-        byte[] first = Array.Empty<byte>();
-        for (var i = 0; i < 300; i++)
-        {
-            first = dev.LedBytes.ToArray();
-            if (first.Length > 0 && (first[1] == 255 || first[0] == 255))
-            {
-                break;
-            }
-            await Task.Delay(5);
-        }
-        Assert.Equal(255, first[1]);
-        Assert.Equal(0, first[0]);
+        // The pin cannot land until the gate opens, so the device can only show the global green meanwhile.
+        Assert.True(await Eventually(() => dev.LedBytes.ToArray() is { Length: > 1 } l && l[1] == 255));
+        await Frames(engine, 5);
+        var during = dev.LedBytes.ToArray();
+        Assert.Equal(255, during[1]);
+        Assert.Equal(0, during[0]);
 
-        for (var i = 0; i < 300 && dev.LedBytes.ToArray()[0] != 255; i++)
+        gate.Set();
+        Assert.True(await Eventually(() => dev.LedBytes.ToArray()[0] == 255));
+    }
+
+    [Fact]
+    public async Task Switching_shaders_while_the_previous_one_lands_never_blanks_or_double_disposes()
+    {
+        for (var round = 0; round < 10; round++)
         {
-            await Task.Delay(10);
+            using var gpu = Context();
+            using var gateB = new ManualResetEventSlim(false);
+            using var gateC = new ManualResetEventSlim(false);
+            var aDraws = 0;
+            var a = Shader(gpu, "a", 255, 0, 0, 0, () => Interlocked.Increment(ref aDraws));
+            var b = Shader(gpu, "b", 0, 255, 0, 0, null, gateB);
+            var c = Shader(gpu, "c", 0, 0, 255, 0, null, gateC);
+            using var engine = new LightingEngine { FrameIntervalMs = 5 };
+            var dev = new DeviceFrame(0, "dev-a", 4, x: 100, y: 100, w: 100, h: 100);
+            engine.UpdateDevices(new[] { dev });
+            var blank = 0;
+            engine.FramePublished += () =>
+            {
+                var l = dev.LedBytes.ToArray();
+                if (l.Length > 2 && l[0] == 0 && l[1] == 0 && l[2] == 0 && Volatile.Read(ref aDraws) > 0)
+                {
+                    Interlocked.Increment(ref blank);
+                }
+            };
+
+            engine.SetEffect(a);
+            Assert.True(await Eventually(() => dev.LedBytes.ToArray()[0] == 255));
+
+            engine.SetEffect(b);
+            var seen = Volatile.Read(ref aDraws);
+            Assert.True(await Eventually(() => Volatile.Read(ref aDraws) > seen + 3));
+
+            // B lands while C is switched in from another thread.
+            var race = Task.Run(() => engine.SetEffect(c));
+            gateB.Set();
+            await race;
+            Assert.True(await Eventually(() => dev.LedBytes.ToArray()[0] != 0 || dev.LedBytes.ToArray()[1] != 0));
+
+            gateC.Set();
+            Assert.True(await Eventually(() => dev.LedBytes.ToArray()[2] == 255));
+            Assert.True(await Eventually(() => a.DisposeCount == 1 && b.DisposeCount == 1));
+            await Frames(engine, 3);
+
+            Assert.Equal(1, a.DisposeCount);
+            Assert.Equal(1, b.DisposeCount);
+            Assert.Equal(0, c.DisposeCount);
+            Assert.Equal(0, Volatile.Read(ref blank));
         }
-        Assert.Equal(255, dev.LedBytes.ToArray()[0]);
     }
 
     private sealed class SolidEffect : IEffect

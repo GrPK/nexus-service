@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Silk.NET.OpenGL;
 
 namespace Nexus.Service.Lighting.Engine.Gpu;
@@ -65,7 +66,8 @@ public sealed class ShaderEffect : IEffect
     // In-flight non-blocking compile, GL thread only. Null on the synchronous path and once the program is built.
     private readonly BuildHolder _build = new();
     private volatile bool _renderPending;
-    private volatile bool _disposed;
+    private int _disposedFlag;
+    private bool _disposed => Volatile.Read(ref _disposedFlag) != 0;
     private volatile bool _pendingBackground;
     // The effect this one replaced, drawn in its place until this program is built.
     private ShaderEffect? _predecessor;
@@ -93,10 +95,10 @@ public sealed class ShaderEffect : IEffect
     public float Contrast { get; set; } = 1f;
     /// <summary>True once compiling or rendering failed; the canvas then keeps whatever the caller left.</summary>
     public bool HasFailed => _failed;
-    /// <summary>The last frame did not draw this effect's own program, and nothing stood in for it.</summary>
+    /// <summary>This effect is standing on an outgoing one, which draws its frames until this program lands.</summary>
     internal bool HasPredecessor => _predecessor is not null;
     /// <summary>The canvas shows this effect, or the outgoing one it is standing in for; false while a first compile leaves it empty.</summary>
-    internal bool CanPaint => !_renderPending || _predecessor is not null;
+    internal bool CanPaint => !_failed && (!_renderPending || _predecessor is not null);
     internal int DisposeCount;
     internal void MarkCompiledForTest() => _compiled = true;
     /// <summary>Test seam: replaces the GL render. Returns true once the program has landed.</summary>
@@ -162,6 +164,7 @@ public sealed class ShaderEffect : IEffect
         {
             GpuContext.Log($"[gpu/{Name}] RenderFrame threw: {ex}");
             _failed = true;
+            _renderPending = false;
         }
     }
 
@@ -170,6 +173,7 @@ public sealed class ShaderEffect : IEffect
         if (TestRender is { } test)
         {
             _renderPending = !test(canvas, tickMs);
+            _compiled = !_renderPending;
             return;
         }
         if (!_ctx.Available)
@@ -235,6 +239,7 @@ public sealed class ShaderEffect : IEffect
                 {
                     case BuildPhase.Failed:
                         _failed = true;
+                        _renderPending = false;
                         return StepState.Done;
                     case BuildPhase.Succeeded:
                         break;
@@ -499,7 +504,7 @@ public sealed class ShaderEffect : IEffect
     {
         if (holder.Build is null)
         {
-            if (background && !ctx.BackgroundCompiles.TryEnter())
+            if (background && !ctx.TryAcquireCompileSlot())
             {
                 return BuildPhase.Idle;
             }
@@ -582,7 +587,9 @@ public sealed class ShaderEffect : IEffect
     /// </summary>
     internal bool AdoptPredecessor(ShaderEffect old)
     {
-        if (ReferenceEquals(old, this) || _compiled || _failed || !_ctx.UseAsyncCompile || !ReferenceEquals(old._ctx, _ctx))
+        // A stand-in from another generation would compile again from cold itself.
+        if (ReferenceEquals(old, this) || _compiled || _failed || !_ctx.UseAsyncCompile || !ReferenceEquals(old._ctx, _ctx)
+            || old._generation != _ctx.Generation)
         {
             return false;
         }
@@ -906,12 +913,11 @@ public sealed class ShaderEffect : IEffect
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposedFlag, 1) != 0)
         {
             return;
         }
-        _disposed = true;
-        DisposeCount++;
+        Interlocked.Increment(ref DisposeCount);
         DropPredecessor();
         if (_ctx.Available && _generation == _ctx.Generation && (_program != 0 || _build.Build is not null))
         {
