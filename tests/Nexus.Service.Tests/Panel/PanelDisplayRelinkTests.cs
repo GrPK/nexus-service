@@ -157,51 +157,11 @@ public class PanelDisplayRelinkTests
     }
 
     [Fact]
-    public void Legacy_orphan_with_pnp_format_id_is_a_weak_move()
+    public void Record_without_fingerprint_is_never_an_orphan_to_move()
     {
         var plan = PanelDisplayRelink.Plan(
             new[] { Rec("p1", "DEL41B7-5-abc-0-UID1", null) },
             new[] { Disp("DEL41B7-5-def-0-UID9", Fp(123)) });
-
-        var move = Assert.Single(plan.Moves);
-        Assert.True(move.Weak);
-    }
-
-    [Theory]
-    [InlineData(@"\\.\DISPLAY3")]
-    [InlineData("display3")]
-    [InlineData("mac-0610-a032-00000001")]
-    [InlineData("display-unknown")]
-    public void Legacy_orphan_with_a_fallback_id_never_relinks(string storedId)
-    {
-        var plan = PanelDisplayRelink.Plan(
-            new[] { Rec("p1", storedId, null) },
-            new[] { Disp("DEL41B7-5-def-0-UID9", Fp(123)) });
-
-        Assert.Empty(plan.Moves);
-    }
-
-    [Fact]
-    public void Legacy_pnp_orphan_relinks_after_two_scans()
-    {
-        var store = new InMemoryConfigStore();
-        var clock = 0L;
-        var registry = new PanelDeviceRegistry(store) { ClockMs = () => clock };
-        var (record, _) = registry.AllocateForDisplay("DEL41B7-5-abc-0-UID1", null, null);
-        var scan = new[] { Disp("DEL41B7-5-def-0-UID9", Fp(123)) };
-
-        Assert.Empty(registry.ReconcileDisplayFingerprints(scan).Applied);
-        clock = 5000;
-        Assert.Single(registry.ReconcileDisplayFingerprints(scan).Applied);
-        Assert.Equal("DEL41B7-5-def-0-UID9", store.Load().PanelDevices[record.Id].DisplayId);
-    }
-
-    [Fact]
-    public void Legacy_pnp_orphan_of_another_model_never_relinks()
-    {
-        var plan = PanelDisplayRelink.Plan(
-            new[] { Rec("p1", "DEL41B7-5-abc-0-UID1", null) },
-            new[] { Disp("AOC2790-1", Fp(5, mfg: "AOC", product: "2790")) });
 
         Assert.Empty(plan.Moves);
     }
@@ -599,16 +559,6 @@ public class PanelDisplayRelinkTests
         var plan = PanelDisplayRelink.Plan(
             new[] { Rec("p1", "old", Fp(0)) },
             new[] { new RelinkDisplay("new", Fp(0), IsPrimary: true) });
-
-        Assert.Empty(plan.Moves);
-    }
-
-    [Fact]
-    public void Legacy_orphan_whose_only_candidate_is_primary_is_a_no_op()
-    {
-        var plan = PanelDisplayRelink.Plan(
-            new[] { Rec("p1", "DEL41B7-5-abc-0-UID1", null) },
-            new[] { new RelinkDisplay("DEL41B7-5-def-0-UID9", Fp(123), IsPrimary: true) });
 
         Assert.Empty(plan.Moves);
     }

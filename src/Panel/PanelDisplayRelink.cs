@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using Nexus.Service.Models.Displays;
 
 namespace Nexus.Service.Panel;
@@ -28,14 +27,10 @@ internal sealed class RelinkPlan
 /// Decides which display-bound panel records follow their monitor to a new
 /// OS display id. Pure: callers apply the plan.
 /// </summary>
-internal static partial class PanelDisplayRelink
+internal static class PanelDisplayRelink
 {
     internal const int MaxSiblings = 16;
     private const long PlaceholderSerial = 0x01010101;
-
-    // The PnP-derived id: EISA letters + hex product, optionally behind the old DISPLAY\ prefix.
-    [GeneratedRegex(@"^(?:DISPLAY[\\#])?(?<mfg>[A-Z]{3})(?<prod>[0-9A-F]{4})(?:[-\\#]|$)")]
-    private static partial Regex PnpIdPattern();
 
     public static RelinkPlan Plan(IReadOnlyList<RelinkRecord> records, IReadOnlyList<RelinkDisplay> displays)
     {
@@ -63,8 +58,7 @@ internal static partial class PanelDisplayRelink
                 if (merged is not null) plan.SiblingUpdates.Add((r.RecordId, merged));
                 continue;
             }
-            var fingerprint = r.Fingerprint ?? FromStoredId(r.DisplayId);
-            if (fingerprint is not null) orphans.Add(r with { Fingerprint = fingerprint });
+            if (r.Fingerprint is not null) orphans.Add(r);
         }
 
         var unclaimed = attached
@@ -101,15 +95,6 @@ internal static partial class PanelDisplayRelink
             Move(plan, orphan, candidates[0], weak: true);
         }
         return plan;
-    }
-
-    /// <summary>Weak fingerprint from the manufacturer and product embedded in a PnP-format display id; null for fallback ids.</summary>
-    internal static DisplayFingerprint? FromStoredId(string displayId)
-    {
-        var m = PnpIdPattern().Match(displayId);
-        return m.Success
-            ? new DisplayFingerprint { Manufacturer = m.Groups["mfg"].Value, Product = m.Groups["prod"].Value }
-            : null;
     }
 
     /// <summary>Strong fingerprints shared by several attached monitors (placeholder serial text) identify none of them.</summary>
