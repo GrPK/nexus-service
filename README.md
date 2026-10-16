@@ -143,7 +143,7 @@ dotnet publish -c Release -r linux-x64 -o publish-linux
   at build time: `bash scripts/fetch-ffmpeg.sh all` (or `mac | win | linux`)
   produces it once per RID.
 - `Bundled/win-x64/angle/` holds the ANGLE `libEGL.dll` and `libGLESv2.dll`
-  (unmodified, from the Electron v43.7.7 win32-x64 release; license in
+  (a Direct3D 11 only build, recipe in `BUILD.md`; licenses in
   `ANGLE-LICENSE.txt`) and publishes to `<publish>/angle/`. They are the default
   Windows lighting renderer (`Lighting.RenderBackend` = `angle`, OpenGL ES 3 on
   Direct3D 11); `wgl` remains as a fallback and win-arm64 uses `wgl`.
