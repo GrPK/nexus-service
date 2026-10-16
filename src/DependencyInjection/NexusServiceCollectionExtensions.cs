@@ -1228,6 +1228,17 @@ public static class NexusServiceCollectionExtensions
                     sp => sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>());
                 services.AddHostedService<Nexus.Service.Lighting.Galahad2LcdLightingFrameWriter>();
             }
+            else if (jpegPanelModel == Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.HydroShiftLcd)
+            {
+                // The 360R's fan LEDs ride the panel's handle; the provider and writer gate to that product.
+                services.AddSingleton(new Nexus.Service.Peripherals.JpegPanels.HydroShiftFanLeds(jpegPanelHub));
+                services.AddSingleton<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>();
+                services.AddSingleton<Nexus.Service.Lighting.ILightingFrameContributor>(
+                    sp => sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>());
+                services.AddSingleton<Nexus.Service.Lighting.Zones.IDeviceStructureSource>(
+                    sp => sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>());
+                services.AddHostedService<Nexus.Service.Lighting.HydroShiftLcdLightingFrameWriter>();
+            }
         }
 
         // The wired TL LCD puts one HID device per fan screen on the bus, so one worker holds a
@@ -1412,6 +1423,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2LightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
+                sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Peripherals.LianLiTl.TlFanHub>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Smart.SmartLightProvider>(),
@@ -1439,6 +1451,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2LightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
+                sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Peripherals.LianLiTl.TlFanHub>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Smart.SmartLightProvider>(),

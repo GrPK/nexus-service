@@ -26,6 +26,20 @@ public static class LianLiAioProtocol
     /// </summary>
     public const byte CmdSetPumpLight = 0x83;
 
+    /// <summary>The fan LEDs' firmware effect; the per-LED path below is primed with it before the first write.</summary>
+    public const byte CmdSetFanLight = 0x85;
+
+    /// <summary>
+    /// B-command carrying per-LED colours on the HydroShift LCD 360R: a selector byte, then RGB bytes
+    /// for each LED in fan order. Rides the same sequenced header as a frame chunk.
+    /// </summary>
+    public const byte CmdSetPerLed = 0x14;
+
+    private const byte PerLedSelector = 0x01;
+
+    /// <summary>Three fans of eight LEDs; the reference driver's zone size for the 360R.</summary>
+    public const int HydroShiftFanLedCount = 24;
+
     private const byte PumpSourceHost = 0x00;
 
     private const byte LightScopeBoth = 2;
@@ -87,6 +101,45 @@ public static class LianLiAioProtocol
         }
         payload[18] = LightSourceHost;
         FillACommand(report, CmdSetPumpLight, payload);
+    }
+
+    /// <summary>
+    /// The two prime payloads the 360R's per-LED path is brought up with (static mode, full
+    /// brightness, no colour, then a shifted variant), each sent as <see cref="CmdSetFanLight"/>
+    /// and then <see cref="CmdSetPumpLight"/>.
+    /// </summary>
+    private static readonly byte[] PrimeA =
+    {
+        0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32,
+    };
+
+    private static readonly byte[] PrimeB =
+    {
+        0x00, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+
+    /// <summary>Prime packets in the order they go out: A then B under each command.</summary>
+    public const int PrimePacketCount = 4;
+
+    public static void FillFanLedPrime(Span<byte> report, int index)
+    {
+        var payload = (index & 1) == 0 ? PrimeA : PrimeB;
+        FillACommand(report, index < 2 ? CmdSetFanLight : CmdSetPumpLight, payload);
+    }
+
+    /// <summary>
+    /// One per-LED colour set: <paramref name="rgb"/> is <see cref="HydroShiftFanLedCount"/> RGB triples
+    /// in fan order. The sequenced header's total and chunk length both count selector plus colours.
+    /// </summary>
+    public static void FillPerLed(Span<byte> report, ReadOnlySpan<byte> rgb)
+    {
+        Span<byte> payload = stackalloc byte[1 + (HydroShiftFanLedCount * 3)];
+        payload.Clear();
+        payload[0] = PerLedSelector;
+        rgb[..Math.Min(rgb.Length, payload.Length - 1)].CopyTo(payload[1..]);
+        JpegPanelProtocol.FillChunk(report, JpegPanelHeaderStyle.LianLiSequenced, CmdSetPerLed, payload, 0, 0);
     }
 
     /// <summary>The PWM that runs the pump at <paramref name="rpm"/>, interpolated and clamped to the table.</summary>
