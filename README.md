@@ -203,7 +203,8 @@ the release flavour; dev-tools-only routes appear only when regenerated with
 - **macOS**: `Bundled/macos/build-app.sh` wraps the publish output into
   `Nexus.app`; `Bundled/macos/sign-notarize.sh` deep-signs it, packages
   `Nexus.dmg`, notarizes and staples. `NEXUS_SKIP_CAMERA_EXTENSION=1` omits the
-  camera system extension (CI cannot provision it headlessly). For a local
+  camera system extension and its helper and activator (CI cannot provision
+  the extension headlessly; the other two do nothing without it). For a local
   build, `Bundled/macos/sign-local.sh <Nexus.app> <identity>` seals the bundle
   with a stable identity so macOS privacy grants (Input Monitoring for touch
   routing, Screen Recording) survive rebuilds.

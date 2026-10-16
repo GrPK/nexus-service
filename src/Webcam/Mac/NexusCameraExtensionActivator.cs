@@ -49,7 +49,8 @@ internal sealed partial class NexusCameraExtensionActivator : ICameraExtensionAc
         if (!File.Exists(BundledDylibPath))
         {
             throw new InvalidOperationException(
-                $"camera activator dylib missing at {BundledDylibPath}; rebuild the app bundle (Bundled/macos/build-app.sh)");
+                $"camera activator dylib missing at {BundledDylibPath}; this build omits the camera extension "
+                + "(NEXUS_SKIP_CAMERA_EXTENSION), so the virtual camera is unavailable");
         }
     }
 
