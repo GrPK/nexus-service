@@ -90,6 +90,18 @@ internal static unsafe partial class AngleContext
     // Displays whose callbacks are installed: ANGLE accepts them once per display.
     private static readonly System.Collections.Generic.HashSet<nint> BlobCacheDisplays = new();
 
+    /// <summary>The blob cache callbacks are installed and the cache directory is allowed, so compiled programs persist.</summary>
+    internal static bool ProgramCacheActive
+    {
+        get
+        {
+            lock (BlobCacheDisplays)
+            {
+                return BlobCacheDisplays.Count > 0 && BlobCachePolicy.Allowed();
+            }
+        }
+    }
+
     private static string Short(string hex) => hex.Length > 8 ? hex[..8] : hex;
 
     [System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]

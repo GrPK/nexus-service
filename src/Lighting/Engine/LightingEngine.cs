@@ -609,6 +609,8 @@ public sealed partial class LightingEngine : IDisposable
         lock (_lock)
         {
             var old = _currentEffect;
+            // Queued before the new effect is published, so the render thread never sees it without its handover.
+            var retired = RetireOutgoing(effect, old);
             _currentEffect = effect;
             _paused = false;
             _frozen = false;
@@ -616,11 +618,9 @@ public sealed partial class LightingEngine : IDisposable
             // never lands: it always ends in a lit device, never a dark one.
             ReleaseBlackoutState();
             Interlocked.Increment(ref _frozenEpoch);
-            // A shader still compiling keeps drawing the outgoing one meanwhile, so the switch has no frozen frame.
-            var handedOver = effect is Gpu.ShaderEffect incoming && old is Gpu.ShaderEffect outgoing && incoming.AdoptPredecessor(outgoing);
             try
             {
-                if (!handedOver)
+                if (!retired)
                 {
                     old?.Dispose();
                 }
@@ -654,13 +654,74 @@ public sealed partial class LightingEngine : IDisposable
             {
                 return false;
             }
+            var retired = RetireOutgoing(replacement, expected);
             _currentEffect = replacement;
             try
-            { expected.Dispose(); }
+            {
+                if (!retired)
+                {
+                    expected.Dispose();
+                }
+            }
             catch { }
         }
         OnEffectChanged?.Invoke();
         return true;
+    }
+
+    // Shader effects leaving the stage, with the effect replacing each. The render thread settles these at the top of a
+    // tick: the incoming shader takes over drawing the outgoing one until its own program lands (shader to shader, so a
+    // switch or a custom-shader save keeps animating), otherwise the outgoing one is disposed. Doing it there, not on the
+    // calling thread, keeps adoption ordered against the frames that read both effects. An outgoing effect that is not a
+    // shader is disposed at once: the incoming shader holds the canvas's last frame until it lands, because such an
+    // effect may own capture sources that stop with the switch.
+    private readonly Queue<(IEffect Incoming, Gpu.ShaderEffect Outgoing)> _handovers = new();
+
+    private bool RetireOutgoing(IEffect incoming, IEffect? outgoing)
+    {
+        if (outgoing is not Gpu.ShaderEffect shader)
+        {
+            return false;
+        }
+        lock (_handovers)
+        {
+            _handovers.Enqueue((incoming, shader));
+        }
+        return true;
+    }
+
+    private bool HandoversPending
+    {
+        get
+        {
+            lock (_handovers)
+            {
+                return _handovers.Count > 0;
+            }
+        }
+    }
+
+    private void SettleHandovers()
+    {
+        while (true)
+        {
+            (IEffect Incoming, Gpu.ShaderEffect Outgoing) item;
+            lock (_handovers)
+            {
+                if (!_handovers.TryDequeue(out item))
+                {
+                    return;
+                }
+            }
+            try
+            {
+                if (!(item.Incoming is Gpu.ShaderEffect incoming && incoming.AdoptPredecessor(item.Outgoing)))
+                {
+                    item.Outgoing.Dispose();
+                }
+            }
+            catch { }
+        }
     }
 
     public void Stop()
@@ -677,6 +738,15 @@ public sealed partial class LightingEngine : IDisposable
             try
             { old?.Dispose(); }
             catch { }
+            lock (_handovers)
+            {
+                while (_handovers.TryDequeue(out var pending))
+                {
+                    try
+                    { pending.Outgoing.Dispose(); }
+                    catch { }
+                }
+            }
             _canvas.Clear();
             foreach (var dev in _devices)
             {
@@ -704,7 +774,13 @@ public sealed partial class LightingEngine : IDisposable
         {
             while (!ct.IsCancellationRequested)
             {
+                SettleHandovers();
                 var effect = _currentEffect;
+                // A switch that landed between the settle and the read has its handover queued already.
+                if (HandoversPending)
+                {
+                    SettleHandovers();
+                }
                 DeviceFrame[]? aheadDevices = null;
                 if (effect is null)
                 {
@@ -739,7 +815,11 @@ public sealed partial class LightingEngine : IDisposable
                             _lastRenderMs = nowMs;
                             _lastRenderEffect = effect;
                             effect.RenderFrame(_canvas, _lastRenderMs);
-                            Volatile.Write(ref _frozenRenderedEpoch, epoch);
+                            // A shader still compiling drew nothing of its own: keep asking until it does.
+                            if (effect is not Gpu.ShaderEffect { IsRenderPending: true })
+                            {
+                                Volatile.Write(ref _frozenRenderedEpoch, epoch);
+                            }
                         }
                         // One snapshot for the sample, the game pass and the
                         // publish: UpdateDevices swaps the array lock-free,
@@ -1024,7 +1104,9 @@ public sealed partial class LightingEngine : IDisposable
                     try
                     {
                         render.Effect.RenderFrame(render.Canvas, nowMs);
-                        render.Rendered = true;
+                        // Still compiling with nothing to stand in: leave the devices on the global canvas instead of a blank one.
+                        // A shader that failed outright stays pinned (black), as before, rather than recompiling every retry.
+                        render.Rendered = render.Effect is not Gpu.ShaderEffect { IsRenderPending: true, CanPaint: false };
                     }
                     catch (Exception ex)
                     {
@@ -1086,7 +1168,12 @@ public sealed partial class LightingEngine : IDisposable
             var built = factory(key, previous);
             if (!ReferenceEquals(built, render.Effect))
             {
-                try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+                // A shader that has to compile keeps the pin showing the outgoing look until it lands.
+                var handedOver = built is Gpu.ShaderEffect incoming && render.Effect is Gpu.ShaderEffect outgoing && incoming.AdoptPredecessor(outgoing);
+                if (!handedOver)
+                {
+                    try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+                }
             }
             render.Effect = built;
             render.Tag = tag;

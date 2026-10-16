@@ -47,7 +47,7 @@ public class ShaderPrewarmPlanTests
     public void Pacing_constants_keep_the_warmup_a_trickle()
     {
         Assert.True(ShaderPrewarmPlan.Spacing >= System.TimeSpan.FromMilliseconds(100));
-        Assert.True(ShaderPrewarmPlan.InitialDelay >= System.TimeSpan.FromSeconds(3));
+        Assert.True(ShaderPrewarmPlan.Settle >= System.TimeSpan.FromSeconds(1));
         Assert.Equal(2, GpuContextBounds.MaxBackgroundCompiles);
     }
 }

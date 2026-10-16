@@ -107,6 +107,8 @@ public sealed class GpuContext : IDisposable
     /// <summary>Allow compile and link to run in the driver's worker threads (KHR_parallel_shader_compile) when the context offers it. A caller that must have a finished render from its first frame sets this false.</summary>
     public bool AsyncCompile { get; set; } = true;
 
+    internal void SetParallelCompileForTest(bool on) => _parallelCompile = on;
+
     /// <summary>Shader programs compile and link without blocking the GL thread: the extension is present on the bound context and <see cref="AsyncCompile"/> is on.</summary>
     public bool UseAsyncCompile => AsyncCompile && _parallelCompile;
 
@@ -444,7 +446,7 @@ public sealed class GpuContext : IDisposable
             GlJob job;
             try
             { job = queue.Take(); }
-            catch (InvalidOperationException) { return; }
+            catch (InvalidOperationException) { break; }
             var started = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             { job.Work(); }
@@ -466,6 +468,7 @@ public sealed class GpuContext : IDisposable
             { pending.Work(); }
             catch (Exception) { }
         }
+        DrainSlotWaiters();
     }
 
     /// <summary>
@@ -680,14 +683,92 @@ public sealed class GpuContext : IDisposable
 
     /// <summary>
     /// Most background programs (thumbnails, validation, warm-up) compiling in the
-    /// driver at once. Two keeps a cold lighting page to at most two of ANGLE's
-    /// worker threads busy, so a game or the rest of the PC never sees a
-    /// burst, while still overlapping one compile's HLSL pass with the next.
+    /// driver at once. Small enough that a cold lighting page keeps only a couple
+    /// of ANGLE's worker threads busy, so a game or the rest of the PC never sees
+    /// a burst, while still overlapping one compile's HLSL pass with the next.
     /// </summary>
     internal const int MaxBackgroundCompiles = 2;
 
     /// <summary>GL thread only.</summary>
     internal CompileGate BackgroundCompiles { get; } = new(MaxBackgroundCompiles);
+
+    // Background steps waiting for a compile slot, in arrival order; GL thread only. A freed slot wakes the first.
+    private sealed class SlotWaiter
+    {
+        public Action Job = null!;
+        public GlWorkQueue Queue = null!;
+        // The slot was handed to this waiter when it was woken; its next run owns it.
+        public bool Handed;
+    }
+
+    private readonly System.Collections.Generic.Queue<SlotWaiter> _slotWaiters = new();
+
+    // Set for the duration of a step run that was handed a slot; TryAcquireCompileSlot consumes it.
+    private bool _handedSlot;
+
+    /// <summary>Take a background compile slot: the one handed to this run if any, else a free one. GL thread only.</summary>
+    internal bool TryAcquireCompileSlot()
+    {
+        if (_handedSlot)
+        {
+            _handedSlot = false;
+            return true;
+        }
+        return BackgroundCompiles.TryEnter();
+    }
+
+    /// <summary>
+    /// Free a background compile slot. With steps waiting, the slot passes straight to the
+    /// longest-waiting one (no free moment for a newcomer to take it), otherwise it is freed. GL thread only.
+    /// </summary>
+    internal void ReleaseCompileSlot()
+    {
+        if (_slotWaiters.Count == 0)
+        {
+            BackgroundCompiles.Exit();
+            return;
+        }
+        var waiter = _slotWaiters.Dequeue();
+        waiter.Handed = true;
+        try
+        { waiter.Queue.Add(waiter.Job, true); }
+        catch (InvalidOperationException)
+        {
+            // The queue was completed; run the step so its caller is released (it hands the slot on).
+            waiter.Job();
+        }
+    }
+
+    /// <summary>Steps parked for a compile slot.</summary>
+    internal int ParkedWaiters => Volatile.Read(ref _parked);
+    private int _parked;
+
+    private void DrainSlotWaiters()
+    {
+        while (_slotWaiters.Count > 0)
+        {
+            var waiter = _slotWaiters.Dequeue();
+            Interlocked.Decrement(ref _parked);
+            try
+            { waiter.Job(); }
+            catch (Exception) { }
+        }
+    }
+
+    private readonly ManualResetEventSlim _liveProgramLanded = new(false);
+
+    /// <summary>A live effect's program finished building, so the render path is past its own first-compile cost.</summary>
+    internal void NoteLiveProgramLanded() => _liveProgramLanded.Set();
+
+    internal bool WaitForLiveProgram(TimeSpan timeout) => _liveProgramLanded.Wait(timeout);
+
+    /// <summary>The ANGLE program cache is on disk and usable, so a compile now is not repeated next boot.</summary>
+    internal bool ProgramCacheActive =>
+#if WINDOWS
+        IsEs && AngleContext.ProgramCacheActive;
+#else
+        false;
+#endif
 
     internal static bool InBackground => _backgroundDepth > 0;
 
@@ -696,13 +777,13 @@ public sealed class GpuContext : IDisposable
 
     /// <summary>
     /// Like <see cref="Invoke"/> for work that may not be finishable yet (a
-    /// program still compiling). <paramref name="step"/> returns true when done.
-    /// On the background lane a false return re-queues the step behind a short
-    /// delay, freeing the GL thread meanwhile, and the caller keeps waiting for
-    /// the final run. On the live lane a false return completes the call at
-    /// once: the frame is skipped, never waited for.
+    /// program still compiling). On the background lane <see cref="StepState.Poll"/>
+    /// re-queues the step behind a short delay and <see cref="StepState.WaitSlot"/>
+    /// parks it until a compile slot frees; the GL thread is free meanwhile and
+    /// the caller keeps waiting for the final run. On the live lane anything but
+    /// Done completes the call at once: the frame is skipped, never waited for.
     /// </summary>
-    public void InvokeStep(Func<bool> step)
+    public void InvokeStep(Func<StepState> step)
     {
         if (!Available || _glThread is null)
         {
@@ -719,20 +800,46 @@ public sealed class GpuContext : IDisposable
         var done = _invokeDone.Value!;
         done.Reset();
         Action? job = null;
+        var waiter = new SlotWaiter { Queue = queue };
         job = () =>
         {
-            var finished = true;
-            try
-            { finished = step(); }
-            catch (Exception ex) { caught = ex; }
-            if (!finished && background && caught is null)
+            var state = StepState.Done;
+            if (waiter.Handed)
             {
-                try
+                waiter.Handed = false;
+                _handedSlot = true;
+                Interlocked.Decrement(ref _parked);
+            }
+            try
+            { state = step(); }
+            catch (Exception ex) { caught = ex; }
+            if (_handedSlot)
+            {
+                // The step finished without using the slot it was handed; pass it on.
+                _handedSlot = false;
+                ReleaseCompileSlot();
+            }
+            if (state != StepState.Done && background && caught is null)
+            {
+                if (state == StepState.WaitSlot)
                 {
-                    queue.AddDeferred(job!, StepPollInterval);
-                    return;
+                    if (!queue.IsCompleted)
+                    {
+                        waiter.Job = job!;
+                        _slotWaiters.Enqueue(waiter);
+                        Interlocked.Increment(ref _parked);
+                        return;
+                    }
                 }
-                catch (InvalidOperationException) { }
+                else
+                {
+                    try
+                    {
+                        queue.AddDeferred(job!, StepPollInterval);
+                        return;
+                    }
+                    catch (InvalidOperationException) { }
+                }
             }
             done.Set();
         };

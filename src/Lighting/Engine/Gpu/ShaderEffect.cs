@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Silk.NET.OpenGL;
 
 namespace Nexus.Service.Lighting.Engine.Gpu;
@@ -65,6 +66,8 @@ public sealed class ShaderEffect : IEffect
     // In-flight non-blocking compile, GL thread only. Null on the synchronous path and once the program is built.
     private readonly BuildHolder _build = new();
     private volatile bool _renderPending;
+    private int _disposedFlag;
+    private bool _disposed => Volatile.Read(ref _disposedFlag) != 0;
     private volatile bool _pendingBackground;
     // The effect this one replaced, drawn in its place until this program is built.
     private ShaderEffect? _predecessor;
@@ -81,7 +84,7 @@ public sealed class ShaderEffect : IEffect
     private CanvasBuffer? _pendingCanvas;
     private double _pendingTick;
     private Action? _cachedRenderDelegate;
-    private Func<bool>? _cachedStepDelegate;
+    private Func<StepState>? _cachedStepDelegate;
 
     public string Name { get; }
     public float Speed { get; set; } = 1f;
@@ -92,6 +95,14 @@ public sealed class ShaderEffect : IEffect
     public float Contrast { get; set; } = 1f;
     /// <summary>True once compiling or rendering failed; the canvas then keeps whatever the caller left.</summary>
     public bool HasFailed => _failed;
+    /// <summary>This effect is standing on an outgoing one, which draws its frames until this program lands.</summary>
+    internal bool HasPredecessor => _predecessor is not null;
+    /// <summary>The canvas shows this effect, or the outgoing one it is standing in for; false while a first compile leaves it empty.</summary>
+    internal bool CanPaint => !_failed && (!_renderPending || _predecessor is not null);
+    internal int DisposeCount;
+    internal void MarkCompiledForTest() => _compiled = true;
+    /// <summary>Test seam: replaces the GL render. Returns true once the program has landed.</summary>
+    internal Func<CanvasBuffer, double, bool>? TestRender;
     /// <summary>True while the last frame was skipped because the program is still compiling; the canvas then holds whatever the caller left.</summary>
     public bool IsRenderPending => _renderPending;
     /// <summary>True once the compiled program reads a live audio uniform, so a frame depends on more than time.</summary>
@@ -153,11 +164,18 @@ public sealed class ShaderEffect : IEffect
         {
             GpuContext.Log($"[gpu/{Name}] RenderFrame threw: {ex}");
             _failed = true;
+            _renderPending = false;
         }
     }
 
     private void RenderFrameInternal(CanvasBuffer canvas, double tickMs)
     {
+        if (TestRender is { } test)
+        {
+            _renderPending = !test(canvas, tickMs);
+            _compiled = !_renderPending;
+            return;
+        }
         if (!_ctx.Available)
         {
             // Backstop for a context the warmup never started, gated so an init
@@ -196,7 +214,7 @@ public sealed class ShaderEffect : IEffect
 
     private void RenderPending() => RenderOnGlThread(_pendingCanvas!, _pendingTick);
 
-    private bool RenderPendingStep() => RenderOnGlThread(_pendingCanvas!, _pendingTick);
+    private StepState RenderPendingStep() => RenderOnGlThread(_pendingCanvas!, _pendingTick);
 
     // Parsed once per instance (GL thread only, no concurrent access) rather
     // than every frame; RenderFrame is only ever invoked from the engine loop.
@@ -205,10 +223,14 @@ public sealed class ShaderEffect : IEffect
     private float ClampBase(string uniformName, float value) =>
         Specs.TryGetValue(uniformName, out var spec) ? ShaderParamSpec.Clamp(spec, value) : value;
 
-    /// <summary>Returns false when the frame was skipped because the program is still compiling.</summary>
-    private bool RenderOnGlThread(CanvasBuffer canvas, double tickMs)
+    /// <summary>Done unless the frame was skipped because the program is still compiling or waiting for a compile slot.</summary>
+    private StepState RenderOnGlThread(CanvasBuffer canvas, double tickMs)
     {
         {
+            if (_disposed)
+            {
+                return StepState.Done;
+            }
             var gl = _ctx.Gl;
 
             if (!_compiled && _ctx.UseAsyncCompile)
@@ -217,12 +239,16 @@ public sealed class ShaderEffect : IEffect
                 {
                     case BuildPhase.Failed:
                         _failed = true;
-                        return true;
+                        _renderPending = false;
+                        return StepState.Done;
                     case BuildPhase.Succeeded:
                         break;
+                    case BuildPhase.Idle:
+                        _renderPending = true;
+                        return StepState.WaitSlot;
                     default:
                         _renderPending = true;
-                        return false;
+                        return StepState.Poll;
                 }
             }
             _renderPending = false;
@@ -239,7 +265,7 @@ public sealed class ShaderEffect : IEffect
                 {
                     GpuContext.Log($"[gpu/{Name}] shader compile failed: {ex}");
                     _failed = true;
-                    return true;
+                    return StepState.Done;
                 }
             }
 
@@ -421,7 +447,7 @@ public sealed class ShaderEffect : IEffect
             if (es && _ctx.CheckContextLost())
             {
                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-                return true;
+                return StepState.Done;
             }
 
             // GL origin is bottom-left - flip rows into the top-left convention the
@@ -453,7 +479,7 @@ public sealed class ShaderEffect : IEffect
             // Canvas resized outside what we rendered: drop this frame silently.
 
             gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-            return true;
+            return StepState.Done;
         }
     }
 
@@ -478,20 +504,52 @@ public sealed class ShaderEffect : IEffect
     {
         if (holder.Build is null)
         {
-            if (background && !ctx.BackgroundCompiles.TryEnter())
+            if (background && !ctx.TryAcquireCompileSlot())
             {
                 return BuildPhase.Idle;
             }
+            try
+            { holder.Build = NewBuild(ctx.Gl, fragSource); }
+            catch (Exception)
+            {
+                if (background)
+                {
+                    ctx.ReleaseCompileSlot();
+                }
+                throw;
+            }
             holder.Held = background;
-            holder.Build = NewBuild(ctx.Gl, fragSource);
         }
-        var phase = holder.Build.Poll();
-        if (phase is BuildPhase.Succeeded or BuildPhase.Failed && holder.Held)
+        BuildPhase phase;
+        try
+        { phase = holder.Build.Poll(); }
+        catch (Exception)
         {
-            ctx.BackgroundCompiles.Exit();
-            holder.Held = false;
+            ReleaseHeld(ctx, holder);
+            holder.Build = null;
+            throw;
+        }
+        if (phase is BuildPhase.Succeeded or BuildPhase.Failed)
+        {
+            ReleaseHeld(ctx, holder);
         }
         return phase;
+    }
+
+    private static StepState StepOf(BuildPhase phase) => phase switch
+    {
+        BuildPhase.Succeeded or BuildPhase.Failed => StepState.Done,
+        BuildPhase.Idle => StepState.WaitSlot,
+        _ => StepState.Poll,
+    };
+
+    private static void ReleaseHeld(GpuContext ctx, BuildHolder holder)
+    {
+        if (holder.Held)
+        {
+            holder.Held = false;
+            ctx.ReleaseCompileSlot();
+        }
     }
 
     private BuildPhase AdvanceAsyncCompile(GL gl, bool background)
@@ -509,6 +567,10 @@ public sealed class ShaderEffect : IEffect
                 GpuContext.Log("[gpu] shader compiled for ES only after widening integer literals to floats");
             }
             _build.Build = null;
+            if (!background)
+            {
+                _ctx.NoteLiveProgramLanded();
+            }
         }
         else if (phase == BuildPhase.Failed)
         {
@@ -525,7 +587,9 @@ public sealed class ShaderEffect : IEffect
     /// </summary>
     internal bool AdoptPredecessor(ShaderEffect old)
     {
-        if (ReferenceEquals(old, this) || _compiled || _failed || !_ctx.UseAsyncCompile || !ReferenceEquals(old._ctx, _ctx))
+        // A stand-in from another generation would compile again from cold itself.
+        if (ReferenceEquals(old, this) || _compiled || _failed || !_ctx.UseAsyncCompile || !ReferenceEquals(old._ctx, _ctx)
+            || old._generation != _ctx.Generation)
         {
             return false;
         }
@@ -548,6 +612,9 @@ public sealed class ShaderEffect : IEffect
         {
             return false;
         }
+        // The adopted effect belongs to the live generation; this one has no GL objects yet, so it starts there too
+        // rather than at zero, where its first frame would run the reset and drop the predecessor.
+        _generation = _ctx.Generation;
         _predecessor = source;
         return true;
     }
@@ -580,7 +647,7 @@ public sealed class ShaderEffect : IEffect
         {
             if (_ctx.Generation != generation || !_ctx.Available)
             {
-                return true;
+                return StepState.Done;
             }
             var gl = _ctx.Gl;
             if (!_ctx.UseAsyncCompile)
@@ -592,7 +659,7 @@ public sealed class ShaderEffect : IEffect
                     ok = true;
                 }
                 catch (InvalidOperationException ex) { GpuContext.Log($"[gpu/{Name}] prewarm compile failed: {ex.Message}"); }
-                return true;
+                return StepState.Done;
             }
             var phase = PollBuild(_ctx, holder, _fragSource, true);
             if (phase == BuildPhase.Succeeded)
@@ -601,7 +668,7 @@ public sealed class ShaderEffect : IEffect
                 ok = true;
                 GpuContext.Log($"[gpu/{Name}] prewarm compile {holder.Build.LatencyMs:0.0}ms");
             }
-            return phase is BuildPhase.Succeeded or BuildPhase.Failed;
+            return StepOf(phase);
         });
         return ok;
     }
@@ -660,7 +727,7 @@ public sealed class ShaderEffect : IEffect
                 {
                     error = holder.Build!.Error ?? "shader failed to compile";
                 }
-                return phase is BuildPhase.Succeeded or BuildPhase.Failed;
+                return StepOf(phase);
             });
             return error;
         }
@@ -846,32 +913,33 @@ public sealed class ShaderEffect : IEffect
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposedFlag, 1) != 0)
+        {
+            return;
+        }
+        Interlocked.Increment(ref DisposeCount);
         DropPredecessor();
-        if (_build.Build is { IsPending: true } pending && _ctx.Available && _generation == _ctx.Generation)
+        if (_ctx.Available && _generation == _ctx.Generation && (_program != 0 || _build.Build is not null))
         {
             try
             {
+                // On the GL thread, so it is ordered against any frame step already queued (which sees _disposed and draws nothing).
                 _ctx.Invoke(() =>
                 {
-                    pending.Abandon();
-                    if (_build.Held)
+                    if (_build.Build is { IsPending: true } pending)
                     {
-                        _ctx.BackgroundCompiles.Exit();
-                        _build.Held = false;
+                        pending.Abandon();
+                    }
+                    ReleaseHeld(_ctx, _build);
+                    _build.Build = null;
+                    if (_program != 0)
+                    {
+                        _ctx.Gl.DeleteProgram(_program);
+                        _program = 0;
                     }
                 });
             }
             catch { }
-        }
-        _build.Build = null;
-        if (_program != 0 && _ctx.Available && _generation == _ctx.Generation)
-        {
-            try
-            {
-                _ctx.Invoke(() => _ctx.Gl.DeleteProgram(_program));
-            }
-            catch { }
-            _program = 0;
         }
     }
 }
