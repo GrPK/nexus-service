@@ -88,7 +88,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 {
                     _cached.FeaturesOnboardingCompleted = true;
                     Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.KeepMiceOn(_cached);
-                    _cached.Lighting.GameSyncRemovedNotice = true;
+                    _cached.GameSyncRemovedNotice = true;
                     pinsMigrated = true;
                 }
                 if (_cached.SchemaVersion < NexusSettings.CurrentSchemaVersion)
@@ -327,12 +327,8 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         }
         if (doc.SchemaVersion < 23)
         {
-            if (doc.Lighting is { } lighting)
-            {
-                Nexus.Service.Lighting.RemovedSyncModes.Apply(lighting);
-                // Migrate never runs on a fresh install, so this reaches only an upgrade.
-                lighting.GameSyncRemovedNotice = true;
-            }
+            Nexus.Service.Lighting.RemovedSyncModes.Apply(doc.Lighting);
+            doc.GameSyncRemovedNotice = true;
         }
         doc.SchemaVersion = NexusSettings.CurrentSchemaVersion;
     }

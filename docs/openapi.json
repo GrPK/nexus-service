@@ -16709,6 +16709,9 @@
           "paused": {
             "type": "boolean"
           },
+          "gameSyncRemovedNotice": {
+            "type": "boolean"
+          },
           "error": {
             "type": "boolean"
           },

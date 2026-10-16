@@ -860,10 +860,7 @@ public sealed partial class ProfileManager : IDisposable
         _store.Update(s =>
         {
             Nexus.Service.Lighting.PinMigration.Apply(data);
-            // The removed-mode notice belongs to the install, not to a profile.
-            var removedNotice = s.Lighting.GameSyncRemovedNotice;
             s.Lighting = data.Lighting ?? new LightingSettings { FreeRotationLayouts = true };
-            s.Lighting.GameSyncRemovedNotice = removedNotice;
             // Pre-v10 profile files (local, imported, or cloud-synced) carry
             // fully materialized template dicts and dense activation states;
             // re-prune both on apply so they don't re-inflate settings.json
@@ -975,15 +972,6 @@ public sealed partial class ProfileManager : IDisposable
         WriteAtomic(path, json);
     }
 
-
-    /// <summary>Runs a change that may swap the whole lighting block: keeps the install-scoped removed-mode notice and drops a removed sync mode a profile file may carry.</summary>
-    private static void SwapLighting(NexusSettings s, Action change)
-    {
-        var notice = s.Lighting.GameSyncRemovedNotice;
-        change();
-        s.Lighting.GameSyncRemovedNotice = notice;
-        Nexus.Service.Lighting.RemovedSyncModes.Apply(s.Lighting);
-    }
 
     private NexusSettings CloneSettings(NexusSettings source)
     {
@@ -1111,7 +1099,8 @@ public sealed partial class ProfileManager : IDisposable
                     {
                         _store.Update(s =>
                         {
-                            SwapLighting(s, () => ProfileSharing.ApplyCategory(s, primaryData, normalized));
+                            ProfileSharing.ApplyCategory(s, primaryData, normalized);
+                            Nexus.Service.Lighting.RemovedSyncModes.Apply(s.Lighting);
                             // ReadProfileFile bypasses JsonConfigStore.Migrate, so a
                             // pre-v11 primary can carry legacy marketplace: widget
                             // types into live settings; rewrite them (idempotent).
@@ -1164,14 +1153,14 @@ public sealed partial class ProfileManager : IDisposable
                 // step in FlushActiveProfile writes the reset to every
                 // profile's JSON. Effectively a global reset for that
                 // category.
-                _store.Update(s => SwapLighting(s, () => ProfileSharing.ResetCategory(s, normalized)));
+                _store.Update(s => ProfileSharing.ResetCategory(s, normalized));
                 FlushActiveProfile();
             }
             else
             {
                 if (profileId == _manifest.ActiveProfileId)
                 {
-                    _store.Update(s => SwapLighting(s, () => ProfileSharing.ResetCategory(s, normalized)));
+                    _store.Update(s => ProfileSharing.ResetCategory(s, normalized));
                 }
                 else
                 {
@@ -1209,13 +1198,10 @@ public sealed partial class ProfileManager : IDisposable
             {
                 _store.Update(s =>
                 {
-                    SwapLighting(s, () =>
+                    foreach (var cat in perProfileCats)
                     {
-                        foreach (var cat in perProfileCats)
-                        {
-                            ProfileSharing.ResetCategory(s, cat);
-                        }
-                    });
+                        ProfileSharing.ResetCategory(s, cat);
+                    }
                 });
             }
             else

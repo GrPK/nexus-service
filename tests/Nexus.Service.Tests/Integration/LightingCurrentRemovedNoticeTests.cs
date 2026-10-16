@@ -33,7 +33,7 @@ public sealed class LightingCurrentRemovedNoticeTests : IClassFixture<StubDevice
     {
         Assert.False(await NoticeFlag());
 
-        _factory.Services.GetRequiredService<IConfigStore>().Update(s => s.Lighting.GameSyncRemovedNotice = true);
+        _factory.Services.GetRequiredService<IConfigStore>().Update(s => s.GameSyncRemovedNotice = true);
 
         Assert.True(await NoticeFlag());
     }

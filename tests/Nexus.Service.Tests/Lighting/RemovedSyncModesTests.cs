@@ -56,7 +56,7 @@ public sealed class RemovedSyncModesTests : IDisposable
         Assert.Null(lighting.LayoutPresets[2].Look);
         Assert.Equal("stripes", lighting.Static.Effect);
         Assert.Equal("#112233", lighting.Static.Color);
-        Assert.True(lighting.GameSyncRemovedNotice);
+        Assert.True(store.Load().GameSyncRemovedNotice);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public sealed class RemovedSyncModesTests : IDisposable
         using var store = new JsonConfigStore(SettingsPath);
 
         Assert.Equal("rainbow", store.Load().Lighting.Sync);
-        Assert.True(store.Load().Lighting.GameSyncRemovedNotice);
+        Assert.True(store.Load().GameSyncRemovedNotice);
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public sealed class RemovedSyncModesTests : IDisposable
     {
         using var store = new JsonConfigStore(SettingsPath);
 
-        Assert.False(store.Load().Lighting.GameSyncRemovedNotice);
+        Assert.False(store.Load().GameSyncRemovedNotice);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class RemovedSyncModesTests : IDisposable
         using var store = new JsonConfigStore(SettingsPath);
 
         Assert.Equal("static", store.Load().Lighting.Sync);
-        Assert.False(store.Load().Lighting.GameSyncRemovedNotice);
+        Assert.False(store.Load().GameSyncRemovedNotice);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public sealed class RemovedSyncModesTests : IDisposable
 
         using var reloaded = new JsonConfigStore(SettingsPath);
         Assert.Equal("static", reloaded.Load().Lighting.Sync);
-        Assert.True(reloaded.Load().Lighting.GameSyncRemovedNotice);
+        Assert.True(reloaded.Load().GameSyncRemovedNotice);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public sealed class RemovedSyncModesTests : IDisposable
         var lighting = store.Load().Lighting;
         Assert.Equal("static", lighting.Sync);
         Assert.Equal("static", lighting.LayoutPresets[0].Look!.Sync);
-        Assert.True(lighting.GameSyncRemovedNotice);
+        Assert.True(store.Load().GameSyncRemovedNotice);
     }
 
     [Theory]
