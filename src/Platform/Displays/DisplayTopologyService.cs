@@ -295,7 +295,7 @@ public sealed class DisplayTopologyService : IDisposable
             foreach (var info in raw)
             {
                 if (IsY70Display(info.RawHardwareId)) continue;
-                attached.Add(new RelinkDisplay(info.Id, info.Fingerprint));
+                attached.Add(new RelinkDisplay(info.Id, info.Fingerprint, info.IsPrimary));
             }
             var (applied, pending) = _panelRegistry.ReconcileDisplayFingerprints(attached);
             if (applied.Count > 0)

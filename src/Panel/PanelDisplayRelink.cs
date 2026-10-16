@@ -12,7 +12,7 @@ internal readonly record struct RelinkRecord(
     DisplayFingerprint? Fingerprint,
     IReadOnlyList<string>? Siblings = null);
 
-internal readonly record struct RelinkDisplay(string Id, DisplayFingerprint? Fingerprint);
+internal readonly record struct RelinkDisplay(string Id, DisplayFingerprint? Fingerprint, bool IsPrimary = false);
 
 /// <param name="Weak">The match rests on model alone (a serial is missing or placeholder on a side); such moves need confirmation across scans.</param>
 internal readonly record struct RelinkMove(string RecordId, string OldDisplayId, string NewDisplayId, DisplayFingerprint Fingerprint, bool Weak);
@@ -42,9 +42,12 @@ internal static partial class PanelDisplayRelink
         var plan = new RelinkPlan();
         var shown = Demote(displays);
         var attached = new Dictionary<string, DisplayFingerprint?>(StringComparer.Ordinal);
+        var primary = new HashSet<string>(StringComparer.Ordinal);
         foreach (var d in shown)
         {
-            if (!string.IsNullOrEmpty(d.Id)) attached.TryAdd(d.Id, d.Fingerprint);
+            if (string.IsNullOrEmpty(d.Id)) continue;
+            attached.TryAdd(d.Id, d.Fingerprint);
+            if (d.IsPrimary) primary.Add(d.Id);
         }
         var claimed = new HashSet<string>(records.Select(r => r.DisplayId), StringComparer.Ordinal);
 
@@ -87,10 +90,11 @@ internal static partial class PanelDisplayRelink
         {
             if (group.Count() != 1) continue;
             var orphan = group.First();
-            // Two strong serials that differ are two physical monitors.
+            // Two strong serials that differ are two physical monitors; the primary display is never guessed.
             var candidates = unclaimed
                 .Where(d => Eligible(orphan, d)
                     && ModelKey(d.Fingerprint!) == group.Key
+                    && !primary.Contains(d.Id)
                     && !(IsStrong(orphan.Fingerprint!) && IsStrong(d.Fingerprint!)))
                 .ToList();
             if (candidates.Count != 1) continue;
@@ -120,20 +124,26 @@ internal static partial class PanelDisplayRelink
             {
                 f = new DisplayFingerprint { Manufacturer = f.Manufacturer, Product = f.Product };
             }
-            result.Add(new RelinkDisplay(d.Id, f));
+            result.Add(d with { Fingerprint = f });
         }
         return result;
     }
 
+    /// <summary>
+    /// Newest last: ids attached in this scan move to the end, the oldest others
+    /// are trimmed from the front, and an id attached now is never evicted (the
+    /// list may exceed the cap for that scan). Null when the sequence is unchanged.
+    /// </summary>
     private static List<string>? MergeSiblings(IReadOnlyList<string>? stored, IEnumerable<string> attachedIds, string ownId)
     {
         var current = stored ?? Array.Empty<string>();
-        var merged = new List<string>(current);
-        foreach (var id in attachedIds)
-        {
-            if (id != ownId && !merged.Contains(id, StringComparer.Ordinal)) merged.Add(id);
-        }
-        if (merged.Count > MaxSiblings) merged.RemoveRange(0, merged.Count - MaxSiblings);
+        var now = new HashSet<string>(attachedIds.Where(id => id != ownId), StringComparer.Ordinal);
+        var merged = current.Where(id => !now.Contains(id)).ToList();
+        var keep = merged.Count;
+        merged.AddRange(current.Where(now.Contains));
+        merged.AddRange(now.Where(id => !current.Contains(id, StringComparer.Ordinal)));
+        var excess = merged.Count - MaxSiblings;
+        if (excess > 0) merged.RemoveRange(0, Math.Min(excess, keep));
         return merged.SequenceEqual(current, StringComparer.Ordinal) ? null : merged;
     }
 

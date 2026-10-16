@@ -555,4 +555,72 @@ public class PanelDisplayRelinkTests
 
         Assert.Equal("SN9", EdidFingerprint.FromEdid(edid)!.SerialText);
     }
+
+    [Fact]
+    public void Sibling_order_is_newest_last()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "A", Fp(1), new[] { "X", "B", "Y" }) },
+            new[] { Disp("A", Fp(1)), Disp("N", null), Disp("B", null) });
+
+        Assert.Equal(new[] { "X", "Y", "B", "N" }, Assert.Single(plan.SiblingUpdates).Siblings);
+    }
+
+    [Fact]
+    public void Attached_twin_survives_sixteen_churned_ids()
+    {
+        var siblings = new List<string> { "TWIN" };
+        for (var i = 0; i < 20; i++)
+        {
+            var scan = new[] { Disp("A", Fp(1)), Disp("TWIN", null), Disp($"CHURN{i}", null) };
+            var update = PanelDisplayRelink.Plan(new[] { Rec("p1", "A", Fp(1), siblings) }, scan).SiblingUpdates;
+            if (update.Count > 0) siblings = update[0].Siblings;
+        }
+
+        Assert.Contains("TWIN", siblings);
+        Assert.Equal(PanelDisplayRelink.MaxSiblings, siblings.Count);
+        Assert.Equal("CHURN19", siblings[^1]);
+    }
+
+    [Fact]
+    public void Attached_ids_are_never_evicted_when_they_exceed_the_cap()
+    {
+        var many = Enumerable.Range(0, 20).Select(i => Disp($"S{i}", null)).Append(Disp("A", Fp(1))).ToArray();
+
+        var first = Assert.Single(PanelDisplayRelink.Plan(new[] { Rec("p1", "A", Fp(1)) }, many).SiblingUpdates).Siblings;
+
+        Assert.Equal(20, first.Count);
+        Assert.Empty(PanelDisplayRelink.Plan(new[] { Rec("p1", "A", Fp(1), first) }, many).SiblingUpdates);
+    }
+
+    [Fact]
+    public void Weak_move_to_a_primary_display_is_a_no_op()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "old", Fp(0)) },
+            new[] { new RelinkDisplay("new", Fp(0), IsPrimary: true) });
+
+        Assert.Empty(plan.Moves);
+    }
+
+    [Fact]
+    public void Legacy_orphan_whose_only_candidate_is_primary_is_a_no_op()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "DEL41B7-5-abc-0-UID1", null) },
+            new[] { new RelinkDisplay("DEL41B7-5-def-0-UID9", Fp(123), IsPrimary: true) });
+
+        Assert.Empty(plan.Moves);
+    }
+
+    [Fact]
+    public void Strong_move_to_a_primary_display_still_applies()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "old", Fp(5)) },
+            new[] { new RelinkDisplay("new", Fp(5), IsPrimary: true) });
+
+        var move = Assert.Single(plan.Moves);
+        Assert.False(move.Weak);
+    }
 }
