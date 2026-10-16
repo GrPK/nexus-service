@@ -97,6 +97,14 @@ public class RenderGpuBody
     public string Value { get; set; } = "auto";
 }
 
+/// <summary>GET response for /lighting/render-gpu.</summary>
+public class RenderGpuInfo
+{
+    public string Value { get; set; } = "auto";
+    /// <summary>True when "software" (CPU rendering) is a valid Value, i.e. the ANGLE backend is in use.</summary>
+    public bool SoftwareRenderingAvailable { get; set; }
+}
+
 public class SpeedScale
 {
     public Dictionary<string, int> Scale { get; set; } = new();

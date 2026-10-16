@@ -800,7 +800,12 @@ public sealed class GpuContext : IDisposable
         }
         var sw = System.Diagnostics.Stopwatch.StartNew();
         AngleTarget target;
-        if (UseWarp)
+        var forcedSoftware = GpuBackend.IsSoftwareChoice(_store?.Load().Lighting.RenderGpu);
+        if (forcedSoftware)
+        {
+            GpuBackend.SoftwareForced = true;
+        }
+        if (UseWarp || forcedSoftware)
         {
             target = AngleTarget.WarpTarget;
         }

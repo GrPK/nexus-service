@@ -35,6 +35,11 @@ internal static class AngleAdapterSelector
     /// </summary>
     public static AngleTarget? Choose(IReadOnlyList<GpuAdapterLuids.Adapter> adapters, string? renderGpu, int? adapterClass)
     {
+        // "software" never resolves to hardware, whichever init path asks.
+        if (GpuBackend.IsSoftwareChoice(renderGpu))
+        {
+            return AngleTarget.WarpTarget;
+        }
         var usable = new List<GpuAdapterLuids.Adapter>(adapters.Count);
         foreach (var a in adapters)
         {

@@ -210,6 +210,7 @@ public static class LightingRoutes
                 GpuCanSwitch = MultiGpuCache.Value(sp),
                 GpuRenderer = gpu is { Available: true } ? gpu.Renderer ?? "" : "",
                 GpuSoftware = gpu is { Available: true, IsWarp: true },
+                GpuSoftwareForced = gpu is { Available: true, IsWarp: true } && GpuBackend.SoftwareForced,
             };
         }).AllowPanel();
         // Master brightness slider: caps every LED channel before it leaves the
@@ -317,11 +318,27 @@ public static class LightingRoutes
         // persists + writes the OS preference; applying it needs a service restart
         // (POST /service/restart), since the GL context is created once at boot.
         app.MapGet("/lighting/render-gpu", (Nexus.Service.Persistence.IConfigStore store) =>
-            new Models.Lighting.RenderGpuBody { Value = store.Load().Lighting.RenderGpu }).LocalhostOnly();
+        {
+            var lighting = store.Load().Lighting;
+            return new Models.Lighting.RenderGpuInfo
+            {
+                Value = lighting.RenderGpu,
+                SoftwareRenderingAvailable = GpuBackend.SoftwareRenderingAvailable(
+                    lighting.RenderBackend, GpuBackend.AngleAvailable()),
+            };
+        }).LocalhostOnly();
         app.MapPost("/lighting/render-gpu", (Models.Lighting.RenderGpuBody body,
             Nexus.Service.Persistence.IConfigStore store, Nexus.Service.Sensors.ISensorProvider sensors) =>
         {
             var value = string.IsNullOrWhiteSpace(body.Value) ? "auto" : body.Value.Trim();
+            if (GpuBackend.IsSoftwareChoice(value))
+            {
+                if (!GpuBackend.SoftwareRenderingAvailable(store.Load().Lighting.RenderBackend, GpuBackend.AngleAvailable()))
+                {
+                    return Results.BadRequest(ApiResponse.Fail("software rendering needs the ANGLE backend"));
+                }
+                value = GpuBackend.SoftwareChoice;
+            }
             store.Update(s => s.Lighting.RenderGpu = value);
             GpuRenderPreference.Apply(value, sensors.GetGpus());
 #if WINDOWS
@@ -329,7 +346,7 @@ public static class LightingRoutes
             // re-probes (recovers from a persisted "off" where no card worked).
             GpuRenderSelect.ClearState();
 #endif
-            return ApiResponse.Ok();
+            return Results.Ok(ApiResponse.Ok());
         }).LocalhostOnly();
         // The GL backend Windows creates the lighting context with. No UI: it is
         // the escape (wgl, glfw) if a driver ever refuses ANGLE, and support

@@ -46,6 +46,21 @@ internal static class AppBootstrap
                     Nexus.Service.Lighting.Engine.Gpu.GpuRenderSelect.Backend =
                         app.Services.GetService<Nexus.Service.Persistence.IConfigStore>()
                             ?.Load().Lighting.RenderBackend ?? "";
+                    var software = Nexus.Service.Lighting.Engine.Gpu.GpuBackend.IsSoftwareChoice(choice);
+                    if (software && !Nexus.Service.Lighting.Engine.Gpu.GpuBackend.IsAngle(
+                            Nexus.Service.Lighting.Engine.Gpu.GpuRenderSelect.Backend))
+                    {
+                        GpuContext.Log("[gpu] warmup: software rendering needs the ANGLE backend; using auto selection");
+                        software = false;
+                        choice = "auto";
+                    }
+                    if (software)
+                    {
+                        // ANGLE WARP directly: no probe, no hardware upgrade attempts, no off latch.
+                        Nexus.Service.Lighting.Engine.Gpu.GpuBackend.SoftwareForced = true;
+                        gpu.UseWarp = true;
+                        GpuContext.Log("[gpu] warmup: software rendering chosen by the user; using ANGLE WARP");
+                    }
                     if (string.Equals(choice, "auto", StringComparison.OrdinalIgnoreCase))
                     {
                         app.Lifetime.ApplicationStopping.Register(
