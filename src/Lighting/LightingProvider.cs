@@ -93,7 +93,12 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         _engine.PinLookTag = PinTag;
         _engine.PinEffectFactory = BuildPinnedEffect;
         _sharedSource = frameSource is null ? null : new SharedScreenFrameSource(frameSource);
-        _previewStreamer = previewHub is null || _sharedSource is null ? null : new ScreenPreviewStreamer(previewHub, ScreenSource, () => _mirrorMonitor, _screenPP);
+        if (previewHub is not null && _sharedSource is not null)
+        {
+            var shared = _sharedSource;
+            previewHub.IsAvailable = () => shared.Available;
+            _previewStreamer = new ScreenPreviewStreamer(previewHub, shared.CreateObserver, () => _mirrorMonitor, _screenPP);
+        }
         _hub = hub;
         _rgb = rgb;
         _gpu = gpu;
