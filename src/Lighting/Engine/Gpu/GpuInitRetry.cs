@@ -5,7 +5,7 @@ namespace Nexus.Service.Lighting.Engine.Gpu;
 /// <summary>
 /// In-process retry budget for a GL init that threw, sized for a driver whose
 /// context creation is intermittent rather than dead. Only a TERMINATED attempt
-/// qualifies: an abandoned one leaves its thread parked in native GLFW.
+/// qualifies: an abandoned one leaves its thread parked in native GL code.
 /// </summary>
 internal static class GpuInitRetry
 {

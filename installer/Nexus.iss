@@ -396,7 +396,7 @@ begin
   //      DETACHES its own daemon - net stop does not reap it. That daemon (and
   //      any transient adb client) keeps the whole {app}\tools\adb folder locked
   //      (its own image, the sibling DLLs it LoadLibrary'd - AdbWinApi/
-  //      AdbWinUsbApi/libwinpthread - and a CWD lock, since the service pins
+  //      AdbWinUsbApi - and a CWD lock, since the service pins
   //      WorkingDirectory there), so [Files] fails to replace adb.exe with
   //      "DeleteFile ... Access is denied". Kill ONLY the adb whose image is our
   //      bundled copy (matched by exact ExecutablePath, -ieq since Windows paths

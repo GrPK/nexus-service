@@ -11,11 +11,11 @@ public class GpuBackendTests
     [InlineData("angle", true, "angle")]
     [InlineData("ANGLE", true, "angle")]
     [InlineData("wgl", true, "wgl")]
-    [InlineData("glfw", true, "glfw")]
+    [InlineData("glfw", true, "angle")]
     [InlineData("nonsense", true, "angle")]
     [InlineData(null, false, "wgl")]
     [InlineData("angle", false, "wgl")]
-    [InlineData("glfw", false, "glfw")]
+    [InlineData("glfw", false, "wgl")]
     public void Resolve_honors_explicit_fallbacks_and_defaults_to_angle_only_where_it_ships(
         string? requested, bool angleAvailable, string expected)
     {
@@ -38,7 +38,7 @@ public class GpuBackendTests
     [InlineData(null, true, true)]
     [InlineData("angle", true, true)]
     [InlineData("wgl", true, false)]
-    [InlineData("glfw", true, false)]
+    [InlineData("glfw", true, true)]
     [InlineData(null, false, false)]
     [InlineData("angle", false, false)]
     public void SoftwareRenderingAvailable_needs_the_angle_backend(

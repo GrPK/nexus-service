@@ -6,8 +6,8 @@ namespace Nexus.Service.Lighting.Engine.Gpu;
 
 /// <summary>
 /// Which API creates the Windows lighting context. "angle" (OpenGL ES 3 on
-/// Direct3D 11) is the default where the bundled ANGLE binaries exist; "wgl" and
-/// "glfw" stay selectable as fallbacks. Every caller that must agree on the
+/// Direct3D 11) is the default where the bundled ANGLE binaries exist; "wgl" stays
+/// selectable as a fallback. Every caller that must agree on the
 /// backend (the engine, the probe child, the selection) goes through
 /// <see cref="Resolve"/> so they cannot disagree.
 /// </summary>
@@ -15,7 +15,6 @@ internal static class GpuBackend
 {
     public const string Angle = "angle";
     public const string Wgl = "wgl";
-    public const string Glfw = "glfw";
 
     /// <summary>Folder under the exe that holds libEGL and libGLESv2. Loaded by full path only.</summary>
     public static string AngleDirectory => Path.Combine(AppContext.BaseDirectory, "angle");
@@ -39,17 +38,13 @@ internal static class GpuBackend
 #endif
     }
 
-    /// <summary>The backend actually used for <paramref name="requested"/>: an explicit "wgl" or "glfw" is honored, anything else (including unset) is ANGLE when it is available and WGL otherwise.</summary>
+    /// <summary>The backend actually used for <paramref name="requested"/>: an explicit "wgl" is honored, anything else (including unset or a retired "glfw") is ANGLE when it is available and WGL otherwise.</summary>
     public static string Resolve(string? requested, bool angleAvailable)
     {
         var r = requested?.Trim();
         if (string.Equals(r, Wgl, StringComparison.OrdinalIgnoreCase))
         {
             return Wgl;
-        }
-        if (string.Equals(r, Glfw, StringComparison.OrdinalIgnoreCase))
-        {
-            return Glfw;
         }
         return angleAvailable ? Angle : Wgl;
     }

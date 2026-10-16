@@ -84,15 +84,9 @@ internal static class GpuProbe
             // "does this card hang?", and an inconclusive verdict condemns
             // nothing (GpuProbeExit.Verdict). GpuRenderSelect.ProbeWait outlasts
             // it. A healthy context takes tens of milliseconds.
-            // Sized to the backend under test: WGL lands in tens of
-            // milliseconds, while GLFW's own init is the slow thing the WGL
-            // path exists to avoid, and a budget below it would time out every
-            // probe and answer nothing.
             // ANGLE brings up a D3D11 device and a shader compiler stack, which a cold
             // driver takes seconds over; its own budget, still under the parent's wait.
-            var budget = string.Equals(backend, "glfw", StringComparison.OrdinalIgnoreCase)
-                ? TimeSpan.FromSeconds(35)
-                : angle ? TimeSpan.FromSeconds(20) : TimeSpan.FromSeconds(6);
+            var budget = angle ? TimeSpan.FromSeconds(20) : TimeSpan.FromSeconds(6);
             var gpu = new Nexus.Service.Lighting.Engine.Gpu.GpuContext(160, 90)
             {
                 InitTimeout = budget,

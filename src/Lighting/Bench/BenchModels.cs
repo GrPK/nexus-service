@@ -158,7 +158,7 @@ internal partial class BenchJsonContext : JsonSerializerContext;
 /// <summary>Parsed command line for the parent (<c>--lighting-bench</c>) and its child.</summary>
 internal sealed class BenchOptions
 {
-    public static readonly string[] KnownBackends = { "angle", "wgl", "glfw" };
+    public static readonly string[] KnownBackends = { "angle", "wgl" };
     public static readonly string[] KnownAdapters = { "auto", "integrated", "dedicated", "warp" };
 
     public string OutPath { get; set; } = "";

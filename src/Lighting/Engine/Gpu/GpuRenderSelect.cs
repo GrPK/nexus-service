@@ -38,9 +38,7 @@ internal static class GpuRenderSelect
     // child pins on itself (see GpuProbe) so a working-but-slow card finishes on
     // its own and the parent only kills a truly wedged child.
     private static TimeSpan ProbeWait =>
-        string.Equals(Backend, "glfw", StringComparison.OrdinalIgnoreCase)
-            ? TimeSpan.FromSeconds(45)
-            : UsesAngle ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(15);
+        UsesAngle ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(15);
 
     // A card slower than every budget still has to be remembered, or later boots
     // re-pay the probe for a card that works.
@@ -386,7 +384,7 @@ internal static class GpuRenderSelect
     }
 
     // In-process retry for an init that THREW. An abandoned attempt is excluded
-    // upstream: its thread is still parked in native GLFW.
+    // upstream: its thread is still parked in native GL code.
     private static void ScheduleRetry(GpuContext gpu, Stopwatch sw, string card, int cls, int attempt)
     {
         var delay = GpuInitRetry.DelayFor(attempt);
@@ -637,7 +635,7 @@ internal static class GpuRenderSelect
     // Spawn `Nexus.exe --gpu-probe --set-pref <cls>` and wait; kill on timeout (a
     // wedged driver). Both output streams are drained concurrently so a chatty
     // child can't fill a pipe buffer and deadlock. WorkingDirectory is pinned to
-    // the exe dir so the bundled GLFW native libs resolve (same loader-search
+    // the exe dir so the bundled native libs resolve (same loader-search
     // gotcha as the bundled adb).
     private static GpuProbeVerdict ProbeCard(int cls)
     {
@@ -658,7 +656,7 @@ internal static class GpuRenderSelect
             psi.ArgumentList.Add("--set-pref");
             psi.ArgumentList.Add(cls.ToString());
             // The child has no config store, so the engine's backend is handed
-            // to it; probing WGL for an engine pinned to GLFW answers nothing.
+            // to it; probing WGL for an engine pinned to ANGLE answers nothing.
             if (Backend.Length > 0)
             {
                 psi.ArgumentList.Add("--backend");

@@ -146,7 +146,7 @@ dotnet publish -c Release -r linux-x64 -o publish-linux
   (unmodified, from the Electron v43.7.7 win32-x64 release; license in
   `ANGLE-LICENSE.txt`) and publishes to `<publish>/angle/`. They are the default
   Windows lighting renderer (`Lighting.RenderBackend` = `angle`, OpenGL ES 3 on
-  Direct3D 11); `wgl` and `glfw` remain as fallbacks and win-arm64 uses `wgl`.
+  Direct3D 11); `wgl` remains as a fallback and win-arm64 uses `wgl`.
   Setting `Lighting.RenderGpu` to `software` (ANGLE only) renders shaders on the
   CPU through ANGLE WARP, with no hardware probe; it applies after a restart.
 - `Bundled/<rid>/skia/libSkiaSharp` is a raster-only Skia build with HarfBuzz
@@ -183,8 +183,10 @@ it whenever a route is added, removed or renamed:
 dotnet run -- --emit-openapi docs/openapi.json
 ```
 
-The flag starts the host only far enough to register endpoints. A `DEBUG`
-build also serves the document at `/openapi/v1.json`. The committed copy is
+The flag starts the host only far enough to register endpoints. The
+generator exists only in `Debug` builds (the default for `dotnet run`); a
+release build neither accepts `--emit-openapi` nor ships the OpenAPI packages.
+A `DEBUG` build also serves the document at `/openapi/v1.json`. The committed copy is
 the release flavour; dev-tools-only routes appear only when regenerated with
 `-p:DevTools=true`.
 
@@ -201,7 +203,8 @@ the release flavour; dev-tools-only routes appear only when regenerated with
 - **macOS**: `Bundled/macos/build-app.sh` wraps the publish output into
   `Nexus.app`; `Bundled/macos/sign-notarize.sh` deep-signs it, packages
   `Nexus.dmg`, notarizes and staples. `NEXUS_SKIP_CAMERA_EXTENSION=1` omits the
-  camera system extension (CI cannot provision it headlessly). For a local
+  camera system extension and its helper and activator (CI cannot provision
+  the extension headlessly; the other two do nothing without it). For a local
   build, `Bundled/macos/sign-local.sh <Nexus.app> <identity>` seals the bundle
   with a stable identity so macOS privacy grants (Input Monitoring for touch
   routing, Screen Recording) survive rebuilds.
