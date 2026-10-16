@@ -11,6 +11,9 @@ namespace Nexus.Service.Tests.Lighting.Gpu;
 /// <summary>Models the cold lighting page: many background compiles in flight against a steady stream of live jobs. The init body is substituted; no GL runs.</summary>
 public class GpuContextInvokeStepTests
 {
+    private static async Task<bool> CompletedWithin(Task task, TimeSpan timeout) =>
+        await Task.WhenAny(task, Task.Delay(timeout)) == task;
+
     private static GpuContext Started()
     {
         var gpu = new GpuContext(160, 90, null, () => { });
@@ -145,7 +148,7 @@ public class GpuContextInvokeStepTests
     }
 
     [Fact]
-    public void A_step_waiting_for_a_slot_parks_instead_of_polling_and_wakes_on_release()
+    public async Task A_step_waiting_for_a_slot_parks_instead_of_polling_and_wakes_on_release()
     {
         using var gpu = Started();
         // Fill every slot from the GL thread.
@@ -182,12 +185,12 @@ public class GpuContextInvokeStepTests
 
         gpu.Invoke(() => gpu.ReleaseCompileSlot());
 
-        Assert.True(call.Wait(TimeSpan.FromSeconds(60)));
+        Assert.True(await CompletedWithin(call, TimeSpan.FromSeconds(60)));
         Assert.Equal(2, Volatile.Read(ref calls));
     }
 
     [Fact]
-    public void A_released_slot_goes_to_the_longest_waiter_before_a_newcomer()
+    public async Task A_released_slot_goes_to_the_longest_waiter_before_a_newcomer()
     {
         using var gpu = Started();
         gpu.Invoke(() =>
@@ -231,11 +234,11 @@ public class GpuContextInvokeStepTests
 
         Assert.False(newcomerGotIt);
         Assert.Equal(GpuContext.MaxBackgroundCompiles, inFlightAfterRelease);
-        Assert.True(first.Wait(TimeSpan.FromSeconds(60)));
+        Assert.True(await CompletedWithin(first, TimeSpan.FromSeconds(60)));
         Assert.Equal(new[] { "first" }, order);
 
         gpu.Invoke(() => gpu.ReleaseCompileSlot());
-        Assert.True(second.Wait(TimeSpan.FromSeconds(60)));
+        Assert.True(await CompletedWithin(second, TimeSpan.FromSeconds(60)));
         Assert.Equal(new[] { "first", "second" }, order);
     }
 
@@ -262,7 +265,7 @@ public class GpuContextInvokeStepTests
     }
 
     [Fact]
-    public void A_loss_releases_a_caller_parked_on_a_pending_step()
+    public async Task A_loss_releases_a_caller_parked_on_a_pending_step()
     {
         using var gpu = Started();
         using var started = new ManualResetEventSlim(false);
@@ -279,11 +282,11 @@ public class GpuContextInvokeStepTests
 
         gpu.ReportContextLost("test");
 
-        Assert.True(call.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(await CompletedWithin(call, TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
-    public void A_loss_releases_callers_parked_for_a_slot()
+    public async Task A_loss_releases_callers_parked_for_a_slot()
     {
         using var gpu = Started();
         gpu.Invoke(() =>
@@ -301,6 +304,6 @@ public class GpuContextInvokeStepTests
 
         gpu.ReportContextLost("test");
 
-        Assert.True(call.Wait(TimeSpan.FromSeconds(60)));
+        Assert.True(await CompletedWithin(call, TimeSpan.FromSeconds(60)));
     }
 }
