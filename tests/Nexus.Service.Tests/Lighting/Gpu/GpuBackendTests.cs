@@ -46,4 +46,15 @@ public class GpuBackendTests
     {
         Assert.Equal(expected, GpuBackend.SoftwareRenderingAvailable(backend, angleAvailable));
     }
+
+    [Theory]
+    [InlineData("software")]
+    [InlineData("Software")]
+    public void Choose_resolves_software_to_warp_even_with_hardware_present(string choice)
+    {
+        var adapters = new[] { new Nexus.Service.Sensors.GpuAdapterLuids.Adapter("0:1", "Discrete GPU", 0x10DE, 8192) };
+        var target = AngleAdapterSelector.Choose(adapters, choice, null);
+        Assert.True(target is { Warp: true });
+        Assert.True(AngleAdapterSelector.Choose(System.Array.Empty<Nexus.Service.Sensors.GpuAdapterLuids.Adapter>(), choice, null) is { Warp: true });
+    }
 }

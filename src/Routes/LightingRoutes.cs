@@ -318,12 +318,15 @@ public static class LightingRoutes
         // persists + writes the OS preference; applying it needs a service restart
         // (POST /service/restart), since the GL context is created once at boot.
         app.MapGet("/lighting/render-gpu", (Nexus.Service.Persistence.IConfigStore store) =>
-            new Models.Lighting.RenderGpuBody
+        {
+            var lighting = store.Load().Lighting;
+            return new Models.Lighting.RenderGpuInfo
             {
-                Value = store.Load().Lighting.RenderGpu,
+                Value = lighting.RenderGpu,
                 SoftwareRenderingAvailable = GpuBackend.SoftwareRenderingAvailable(
-                    store.Load().Lighting.RenderBackend, GpuBackend.AngleAvailable()),
-            }).LocalhostOnly();
+                    lighting.RenderBackend, GpuBackend.AngleAvailable()),
+            };
+        }).LocalhostOnly();
         app.MapPost("/lighting/render-gpu", (Models.Lighting.RenderGpuBody body,
             Nexus.Service.Persistence.IConfigStore store, Nexus.Service.Sensors.ISensorProvider sensors) =>
         {
