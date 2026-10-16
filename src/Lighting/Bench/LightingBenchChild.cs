@@ -168,6 +168,8 @@ internal static partial class LightingBench
         {
             InitTimeout = TimeSpan.FromSeconds(60),
             BackendOverride = o.Backend,
+            // The first frame is timed as compile plus link and must come back rendered.
+            AsyncCompile = false,
         };
         var initSw = Stopwatch.StartNew();
         lock (ctx.Lock)

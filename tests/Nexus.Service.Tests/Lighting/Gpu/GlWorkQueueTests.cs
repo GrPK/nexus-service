@@ -126,4 +126,37 @@ public class GlWorkQueueTests
         Assert.Contains("background jobs 1", line);
         Assert.Null(stats.Record(live, t0 + freq * 4, t0 + freq * 4 + 1));
     }
+
+    [Fact]
+    public void A_deferred_job_is_not_taken_before_its_delay()
+    {
+        var q = new GlWorkQueue();
+        var ran = new List<string>();
+        q.AddDeferred(() => ran.Add("later"), TimeSpan.FromMilliseconds(80));
+        q.Add(() => ran.Add("live"), background: false);
+
+        Assert.True(q.TryTake(out var first));
+        first.Work();
+        Assert.False(q.TryTake(out _));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        q.Take().Work();
+
+        Assert.True(sw.ElapsedMilliseconds >= 60);
+        Assert.Equal(new[] { "live", "later" }, ran);
+    }
+
+    [Fact]
+    public void Completing_the_queue_releases_deferred_jobs_for_the_drain()
+    {
+        var q = new GlWorkQueue();
+        var ran = new List<string>();
+        q.AddDeferred(() => ran.Add("deferred"), TimeSpan.FromSeconds(30));
+
+        q.CompleteAdding();
+        Drain(q);
+
+        Assert.Equal(new[] { "deferred" }, ran);
+        Assert.Throws<InvalidOperationException>(() => q.AddDeferred(() => { }, TimeSpan.Zero));
+    }
 }

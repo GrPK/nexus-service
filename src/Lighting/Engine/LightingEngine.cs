@@ -616,8 +616,15 @@ public sealed partial class LightingEngine : IDisposable
             // never lands: it always ends in a lit device, never a dark one.
             ReleaseBlackoutState();
             Interlocked.Increment(ref _frozenEpoch);
+            // A shader still compiling keeps drawing the outgoing one meanwhile, so the switch has no frozen frame.
+            var handedOver = effect is Gpu.ShaderEffect incoming && old is Gpu.ShaderEffect outgoing && incoming.AdoptPredecessor(outgoing);
             try
-            { old?.Dispose(); }
+            {
+                if (!handedOver)
+                {
+                    old?.Dispose();
+                }
+            }
             catch { }
             if (_loopTask is null || _loopTask.IsCompleted)
             {
@@ -1465,7 +1472,7 @@ public sealed partial class LightingEngine : IDisposable
                     _aheadCanvas.Clear();
                 }
                 var failed = RenderAheadPins(effect, shadow, req.TickMs[req.NextFrame])
-                    || (req.NeedsGlobal && effect is Gpu.ShaderEffect { HasFailed: true });
+                    || (req.NeedsGlobal && effect is Gpu.ShaderEffect { HasFailed: true } or Gpu.ShaderEffect { IsRenderPending: true });
                 if (failed)
                 {
                     // A shader that failed mid-window left a stale canvas; ship nothing rather than those frames.
@@ -1555,7 +1562,7 @@ public sealed partial class LightingEngine : IDisposable
             if (_aheadPinRendered.Add(key))
             {
                 fx.RenderFrame(canvas, tickMs);
-                failed |= fx is Gpu.ShaderEffect { HasFailed: true };
+                failed |= fx is Gpu.ShaderEffect { HasFailed: true } or Gpu.ShaderEffect { IsRenderPending: true };
             }
             _aheadPinned[dev.Id] = canvas;
             if (sweep) _aheadPinFullFrame.Add(dev.Id);
