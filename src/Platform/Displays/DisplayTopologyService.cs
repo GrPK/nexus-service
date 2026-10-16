@@ -15,7 +15,7 @@ namespace Nexus.Service.Platform.Displays;
 /// assignments). Also keeps a short-lived attached-id cache so record
 /// serialization can stamp displayAttached without a helper RPC per request.
 /// </summary>
-public sealed class DisplayTopologyService
+public sealed class DisplayTopologyService : IDisposable
 {
     /// <summary>Kiosk hosting: nexus-overlay on Windows, the overlay-helper
     /// sidecar on macOS, a user-session Chromium kiosk on Linux.</summary>
@@ -246,16 +246,28 @@ public sealed class DisplayTopologyService
     private readonly object _recheckLock = new();
     private System.Threading.Timer? _recheckTimer;
     private int _relinkRechecks;
+    private bool _disposed;
+
+    public void Dispose()
+    {
+        lock (_recheckLock)
+        {
+            _disposed = true;
+            _recheckTimer?.Dispose();
+            _recheckTimer = null;
+        }
+    }
 
     /// <summary>
     /// A model-only relink waits for a second matching scan, but topology scans
-    /// only fire on display events, so one rescan is scheduled to confirm it.
+    /// only fire on display events, so a rescan is scheduled while one is
+    /// pending (capped, and reset once nothing is pending).
     /// </summary>
     private void ScheduleRelinkRecheck()
     {
         lock (_recheckLock)
         {
-            if (_recheckTimer is not null || _relinkRechecks >= RelinkRecheckMax) return;
+            if (_disposed || _recheckTimer is not null || _relinkRechecks >= RelinkRecheckMax) return;
             _relinkRechecks++;
             _recheckTimer = new System.Threading.Timer(_ =>
             {
@@ -289,7 +301,7 @@ public sealed class DisplayTopologyService
             if (applied.Count > 0)
                 PromotedPanelCapabilitiesChanged?.Invoke(applied.Select(a => a.RecordId).ToList());
             if (pending) ScheduleRelinkRecheck();
-            else _relinkRechecks = 0;
+            else lock (_recheckLock) _relinkRechecks = 0;
         }
         catch (Exception ex)
         {

@@ -175,10 +175,11 @@ public sealed class PanelDeviceRegistry
         static List<RelinkRecord> Snapshot(IEnumerable<PanelDeviceRecord> records)
             => records
                 .Where(r => !string.IsNullOrEmpty(r.DisplayId))
-                .Select(r => new RelinkRecord(r.Id, r.DisplayId!, r.DisplayFingerprint))
+                .Select(r => new RelinkRecord(r.Id, r.DisplayId!, r.DisplayFingerprint, r.SiblingDisplayIds?.ToList()))
                 .ToList();
 
-        var precheck = PanelDisplayRelink.Plan(Snapshot(_store.Load().PanelDevices.Values), attached);
+        RelinkPlan precheck = null!;
+        _store.Read(s => precheck = PanelDisplayRelink.Plan(Snapshot(s.PanelDevices.Values), attached));
         var allowed = new HashSet<(string, string)>();
         bool pending;
         lock (_pendingLock)
@@ -206,7 +207,7 @@ public sealed class PanelDeviceRegistry
             _pendingWeak = next;
             pending = next.Count > 0;
         }
-        if (precheck.Backfills.Count == 0 && allowed.Count == 0)
+        if (precheck.Backfills.Count == 0 && precheck.SiblingUpdates.Count == 0 && allowed.Count == 0)
             return (Array.Empty<(string, string, string)>(), pending);
 
         var applied = new List<(string RecordId, string OldDisplayId, string NewDisplayId)>();
@@ -216,6 +217,10 @@ public sealed class PanelDeviceRegistry
             foreach (var (recordId, fingerprint) in plan.Backfills)
             {
                 if (s.PanelDevices.TryGetValue(recordId, out var record)) record.DisplayFingerprint = fingerprint;
+            }
+            foreach (var (recordId, siblings) in plan.SiblingUpdates)
+            {
+                if (s.PanelDevices.TryGetValue(recordId, out var record)) record.SiblingDisplayIds = siblings;
             }
             foreach (var move in plan.Moves)
             {
@@ -1078,6 +1083,7 @@ public sealed class PanelDeviceRegistry
         return copy;
     }
 
+    // The response clone: DisplayFingerprint and SiblingDisplayIds stay in the store, off the wire.
     private static PanelDeviceRecord Clone(PanelDeviceRecord r)
     {
         return new PanelDeviceRecord
@@ -1122,7 +1128,6 @@ public sealed class PanelDeviceRegistry
             LastSeenAt = r.LastSeenAt,
             Capabilities = r.Capabilities,
             DisplayId = r.DisplayId,
-            DisplayFingerprint = r.DisplayFingerprint,
             ReserveMonitor = r.ReserveMonitor,
             AutoOrient = r.AutoOrient,
             KeepCursorOff = r.KeepCursorOff,

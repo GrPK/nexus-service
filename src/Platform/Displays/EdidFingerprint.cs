@@ -31,7 +31,7 @@ public static class EdidFingerprint
         for (var offset = 54; offset <= 108; offset += 18)
         {
             if (edid[offset] != 0 || edid[offset + 1] != 0 || edid[offset + 2] != 0 || edid[offset + 3] != 0xFF) continue;
-            var text = Encoding.ASCII.GetString(edid.Slice(offset + 5, 13)).Split('\n')[0].Trim();
+            var text = Encoding.ASCII.GetString(edid.Slice(offset + 5, 13)).Split('\n', '\0')[0].Trim();
             if (text.Length > 0) serialText = text;
             break;
         }

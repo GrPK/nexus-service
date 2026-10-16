@@ -13,7 +13,7 @@ public class PanelDisplayRelinkTests
     private static DisplayFingerprint Fp(long serial = 0, string? text = null, string mfg = "DEL", string product = "41B7")
         => new() { Manufacturer = mfg, Product = product, Serial = serial, SerialText = text };
 
-    private static RelinkRecord Rec(string id, string displayId, DisplayFingerprint? fp) => new(id, displayId, fp);
+    private static RelinkRecord Rec(string id, string displayId, DisplayFingerprint? fp, IReadOnlyList<string>? siblings = null) => new(id, displayId, fp, siblings);
 
     private static RelinkDisplay Disp(string id, DisplayFingerprint? fp) => new(id, fp);
 
@@ -157,11 +157,51 @@ public class PanelDisplayRelinkTests
     }
 
     [Fact]
-    public void Record_without_fingerprint_is_never_an_orphan_to_move()
+    public void Legacy_orphan_with_pnp_format_id_is_a_weak_move()
     {
         var plan = PanelDisplayRelink.Plan(
-            new[] { Rec("p1", "gone", null) },
-            new[] { Disp("new", Fp(3)) });
+            new[] { Rec("p1", "DEL41B7-5-abc-0-UID1", null) },
+            new[] { Disp("DEL41B7-5-def-0-UID9", Fp(123)) });
+
+        var move = Assert.Single(plan.Moves);
+        Assert.True(move.Weak);
+    }
+
+    [Theory]
+    [InlineData(@"\\.\DISPLAY3")]
+    [InlineData("display3")]
+    [InlineData("mac-0610-a032-00000001")]
+    [InlineData("display-unknown")]
+    public void Legacy_orphan_with_a_fallback_id_never_relinks(string storedId)
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", storedId, null) },
+            new[] { Disp("DEL41B7-5-def-0-UID9", Fp(123)) });
+
+        Assert.Empty(plan.Moves);
+    }
+
+    [Fact]
+    public void Legacy_pnp_orphan_relinks_after_two_scans()
+    {
+        var store = new InMemoryConfigStore();
+        var clock = 0L;
+        var registry = new PanelDeviceRegistry(store) { ClockMs = () => clock };
+        var (record, _) = registry.AllocateForDisplay("DEL41B7-5-abc-0-UID1", null, null);
+        var scan = new[] { Disp("DEL41B7-5-def-0-UID9", Fp(123)) };
+
+        Assert.Empty(registry.ReconcileDisplayFingerprints(scan).Applied);
+        clock = 5000;
+        Assert.Single(registry.ReconcileDisplayFingerprints(scan).Applied);
+        Assert.Equal("DEL41B7-5-def-0-UID9", store.Load().PanelDevices[record.Id].DisplayId);
+    }
+
+    [Fact]
+    public void Legacy_pnp_orphan_of_another_model_never_relinks()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "DEL41B7-5-abc-0-UID1", null) },
+            new[] { Disp("AOC2790-1", Fp(5, mfg: "AOC", product: "2790")) });
 
         Assert.Empty(plan.Moves);
     }
@@ -371,5 +411,148 @@ public class PanelDisplayRelinkTests
         Assert.Single(result.Applied);
         Assert.False(result.PendingWeak);
         Assert.Equal("new-id", store.Load().PanelDevices[record.Id].DisplayId);
+    }
+
+    private static void LookalikeScenario(DisplayFingerprint a, DisplayFingerprint b)
+    {
+        var store = new InMemoryConfigStore();
+        var clock = 0L;
+        var registry = new PanelDeviceRegistry(store) { ClockMs = () => clock };
+        var (record, _) = registry.AllocateForDisplay("A", null, null);
+
+        registry.ReconcileDisplayFingerprints(new[] { Disp("A", a), Disp("B", b) });
+        Assert.Contains("B", store.Load().PanelDevices[record.Id].SiblingDisplayIds!);
+
+        // A is off or unplugged; B is an unclaimed lookalike.
+        for (var i = 0; i < 4; i++)
+        {
+            clock += 6000;
+            Assert.Empty(registry.ReconcileDisplayFingerprints(new[] { Disp("B", b) }).Applied);
+        }
+        Assert.Equal("A", store.Load().PanelDevices[record.Id].DisplayId);
+    }
+
+    [Fact]
+    public void Lookalike_seen_beside_the_panel_monitor_is_never_a_target()
+        => LookalikeScenario(Fp(0), Fp(0));
+
+    [Fact]
+    public void Lookalike_with_duplicated_placeholder_serial_text_is_never_a_target()
+        => LookalikeScenario(Fp(0, "0000000000000"), Fp(0, "0000000000000"));
+
+    [Fact]
+    public void Sibling_exclusion_blocks_the_strong_rule_too()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "A", Fp(5), new[] { "B" }) },
+            new[] { Disp("B", Fp(5)) });
+
+        Assert.Empty(plan.Moves);
+    }
+
+    [Fact]
+    public void Genuine_id_change_still_relinks_and_keeps_the_sibling_list()
+    {
+        var store = new InMemoryConfigStore();
+        var registry = new PanelDeviceRegistry(store) { ClockMs = () => 0 };
+        var (record, _) = registry.AllocateForDisplay("A", null, null);
+        registry.ReconcileDisplayFingerprints(new[] { Disp("A", Fp(5)), Disp("C", Fp(9, mfg: "AOC", product: "2790")) });
+
+        registry.ReconcileDisplayFingerprints(new[] { Disp("A2", Fp(5)), Disp("C", Fp(9, mfg: "AOC", product: "2790")) });
+
+        var stored = store.Load().PanelDevices[record.Id];
+        Assert.Equal("A2", stored.DisplayId);
+        Assert.Contains("C", stored.SiblingDisplayIds!);
+    }
+
+    [Fact]
+    public void Sibling_list_drops_the_oldest_at_the_cap_and_writes_only_on_change()
+    {
+        var full = Enumerable.Range(0, PanelDisplayRelink.MaxSiblings).Select(i => $"S{i}").ToList();
+        var scan = new[] { Disp("A", Fp(1)), Disp("S3", null), Disp("NEW", null) };
+
+        var plan = PanelDisplayRelink.Plan(new[] { Rec("p1", "A", Fp(1), full) }, scan);
+        var siblings = Assert.Single(plan.SiblingUpdates).Siblings;
+
+        Assert.Equal(PanelDisplayRelink.MaxSiblings, siblings.Count);
+        Assert.DoesNotContain("S0", siblings);
+        Assert.Equal("NEW", siblings[^1]);
+        Assert.Equal(siblings.Count, siblings.Distinct().Count());
+        Assert.Empty(PanelDisplayRelink.Plan(new[] { Rec("p1", "A", Fp(1), siblings) }, scan).SiblingUpdates);
+    }
+
+    [Fact]
+    public void Weak_stored_fingerprint_is_upgraded_when_the_live_one_is_stronger()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "A", Fp(0)) },
+            new[] { Disp("A", Fp(77, "SN1")) });
+
+        var upgrade = Assert.Single(plan.Backfills);
+        Assert.Equal(77, upgrade.Fingerprint.Serial);
+    }
+
+    [Fact]
+    public void Equal_or_weaker_live_fingerprint_does_not_overwrite()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "A", Fp(77, "SN1")) },
+            new[] { Disp("A", Fp(0)) });
+
+        Assert.Empty(plan.Backfills);
+    }
+
+    [Fact]
+    public void Duplicate_strong_fingerprints_in_one_scan_are_treated_as_weak()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "A", null), Rec("p2", "B", null) },
+            new[] { Disp("A", Fp(0, "SAME")), Disp("B", Fp(0, "SAME")) });
+
+        Assert.All(plan.Backfills, b => Assert.Equal(0, b.Fingerprint.Serial + (b.Fingerprint.SerialText?.Length ?? 0)));
+    }
+
+    [Fact]
+    public void Duplicate_strong_candidate_cannot_take_the_strong_path()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "gone", Fp(0, "SAME")) },
+            new[] { Disp("X", Fp(0, "SAME")), Disp("Y", Fp(0, "SAME")) });
+
+        Assert.Empty(plan.Moves);
+    }
+
+    [Fact]
+    public void Client_responses_carry_neither_fingerprint_nor_sibling_list()
+    {
+        var store = new InMemoryConfigStore();
+        var registry = new PanelDeviceRegistry(store) { ClockMs = () => 0 };
+        var (record, _) = registry.AllocateForDisplay("A", null, null);
+        registry.ReconcileDisplayFingerprints(new[] { Disp("A", Fp(5)), Disp("B", Fp(6)) });
+        var stored = store.Load().PanelDevices[record.Id];
+        Assert.NotNull(stored.DisplayFingerprint);
+        Assert.NotNull(stored.SiblingDisplayIds);
+
+        foreach (var response in new[] { registry.Get(record.Id)!, registry.List().Single(), registry.FindByDisplayId("A")! })
+        {
+            Assert.Null(response.DisplayFingerprint);
+            Assert.Null(response.SiblingDisplayIds);
+            var json = System.Text.Json.JsonSerializer.Serialize(response, Nexus.Service.Serialization.AppJsonContext.Default.PanelDeviceRecord);
+            Assert.DoesNotContain("isplayFingerprint", json);
+            Assert.DoesNotContain("iblingDisplayIds", json);
+        }
+    }
+
+    [Fact]
+    public void Edid_serial_text_is_trimmed_of_nul_padding()
+    {
+        var edid = new byte[128];
+        edid[1] = edid[2] = edid[3] = edid[4] = edid[5] = edid[6] = 0xFF;
+        edid[75] = 0xFF;
+        var text = new byte[13];
+        System.Text.Encoding.ASCII.GetBytes("SN9").CopyTo(text, 0);
+        text.CopyTo(edid, 77);
+
+        Assert.Equal("SN9", EdidFingerprint.FromEdid(edid)!.SerialText);
     }
 }
