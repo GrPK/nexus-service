@@ -619,8 +619,16 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
-    // Bump when the thumbnail render pipeline changes so old disk entries are not served.
-    private const int ThumbnailDiskVersion = 1;
+    // Build identity folded into every disk key, so a render change in any release never serves an older image.
+    private static readonly string ThumbnailDiskVersion =
+        System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(LightingProvider).Assembly)?.InformationalVersion
+        ?? typeof(LightingProvider).Assembly.GetName().Version?.ToString()
+        ?? "0";
+
+    // Thumbnails are fixed-size 24-bpp BMPs, so a stored file of any other length is damaged.
+    private const int ThumbnailWidth = 160;
+    private const int ThumbnailHeight = 90;
+    private const int ThumbnailBmpBytes = 54 + (ThumbnailWidth * 3 + (4 - ThumbnailWidth * 3 % 4) % 4) * ThumbnailHeight;
     private const long ThumbnailDiskCapBytes = 64L * 1024 * 1024;
 
     // Rendered thumbnails survive a restart, so repeat visits skip the compile + render.
@@ -651,7 +659,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             return (cached.Bytes, tag);
         }
         var diskName = Engine.Gpu.DiskBlobCache.ThumbnailName(name, slot, frozen, tag, ThumbnailDiskVersion);
-        if (!skipCache && _thumbnailDisk.TryGet(diskName) is { } onDisk)
+        if (!skipCache && _thumbnailDisk.TryGet(diskName) is { Length: ThumbnailBmpBytes } onDisk)
         {
             _thumbnailCache[cacheKey] = (tag, onDisk);
             Engine.Gpu.GpuContext.Log($"[thumb] {cacheKey} disk {sw.Elapsed.TotalMilliseconds:0}ms");
@@ -666,7 +674,8 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             return null;
         }
 
-        var canvas = new Engine.CanvasBuffer(160, 90);
+        var canvas = new Engine.CanvasBuffer(ThumbnailWidth, ThumbnailHeight);
+        var generation = _gpu.Generation;
         var effect = BuildThumbnailEffect(name, defaults, state, frozen);
         // Thumbnails ride the GL thread's background lane so a page full of them cannot stall the live frame.
         using var background = Engine.Gpu.GpuContext.BeginBackground();
@@ -690,7 +699,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         var bytes = BmpEncoder.Encode(canvas.Pixels, canvas.Width, canvas.Height);
         _thumbnailCache[cacheKey] = (tag, bytes);
         // A failed compile or a lost context leaves a black frame: serve it, but never persist it.
-        if (_gpu.Available && effect is not ShaderEffect { HasFailed: true })
+        if (_gpu.Available && _gpu.Generation == generation && effect is not ShaderEffect { HasFailed: true })
         {
             _thumbnailDisk.Put(diskName, bytes);
         }

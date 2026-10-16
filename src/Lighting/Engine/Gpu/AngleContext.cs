@@ -82,8 +82,15 @@ internal static unsafe partial class AngleContext
     private static readonly DiskBlobCache ProgramCache = new(
         Path.Combine(Nexus.Service.Persistence.NexusDataPaths.NexusRoot(), "cache", "angle-programs"),
         ProgramCacheCapBytes);
+    // ANGLE may link on its own worker threads, so the size-query/copy memo is per thread.
+    [ThreadStatic]
     private static string? _lastGetName;
+    [ThreadStatic]
     private static byte[]? _lastGetBytes;
+    // Displays whose callbacks are installed: ANGLE accepts them once per display.
+    private static readonly System.Collections.Generic.HashSet<nint> BlobCacheDisplays = new();
+
+    private static string Short(string hex) => hex.Length > 8 ? hex[..8] : hex;
 
     [System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     private static void BlobSet(void* key, nint keySize, void* value, nint valueSize)
@@ -96,7 +103,7 @@ internal static unsafe partial class AngleContext
             }
             var name = DiskBlobCache.HexName(new ReadOnlySpan<byte>(key, (int)keySize));
             ProgramCache.Put(name, new ReadOnlySpan<byte>(value, (int)valueSize));
-            GpuContext.Log($"[gpu] program cache store {name[..8]} {valueSize} bytes");
+            GpuContext.Log($"[gpu] program cache store {Short(name)} {valueSize} bytes");
         }
         catch
         {
@@ -131,7 +138,7 @@ internal static unsafe partial class AngleContext
             if (value != null && valueSize >= bytes.Length)
             {
                 bytes.AsSpan().CopyTo(new Span<byte>(value, bytes.Length));
-                GpuContext.Log($"[gpu] program cache hit {name[..8]} {bytes.Length} bytes");
+                GpuContext.Log($"[gpu] program cache hit {Short(name)} {bytes.Length} bytes");
                 _lastGetName = null;
                 _lastGetBytes = null;
             }
@@ -148,6 +155,13 @@ internal static unsafe partial class AngleContext
     {
         try
         {
+            lock (BlobCacheDisplays)
+            {
+                if (BlobCacheDisplays.Contains((nint)display))
+                {
+                    return;
+                }
+            }
             var extensions = Str(_eglQueryString(display, EglExtensions));
             if (!extensions.Contains("EGL_ANDROID_blob_cache", StringComparison.Ordinal))
             {
@@ -164,9 +178,20 @@ internal static unsafe partial class AngleContext
                 GpuContext.Log("[gpu] program cache: eglSetBlobCacheFuncsANDROID missing");
                 return;
             }
+            _eglGetError();
             ((delegate* unmanaged[Cdecl]<void*, delegate* unmanaged[Cdecl]<void*, nint, void*, nint, void>, delegate* unmanaged[Cdecl]<void*, nint, void*, nint, nint>, void>)setter)(
                 display, &BlobSet, &BlobGet);
-            GpuContext.Log($"[gpu] program cache: EGL_ANDROID_blob_cache on, dir '{ProgramCache.Directory}'");
+            var err = _eglGetError();
+            if (err != 0x3000)
+            {
+                GpuContext.Log($"[gpu] program cache: eglSetBlobCacheFuncsANDROID failed (EGL 0x{err.ToString("X", CultureInfo.InvariantCulture)})");
+                return;
+            }
+            lock (BlobCacheDisplays)
+            {
+                BlobCacheDisplays.Add((nint)display);
+            }
+            GpuContext.Log($"[gpu] program cache: EGL_ANDROID_blob_cache installed, dir '{ProgramCache.Directory}'");
         }
         catch (Exception ex)
         {

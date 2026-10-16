@@ -9,10 +9,12 @@ internal readonly record struct GlJob(Action Work, bool Background, long Enqueue
 
 /// <summary>
 /// Two-lane work queue for the single GL thread. Live frames (the engine's
-/// main canvas, pins, look-ahead) go in the live lane and are always taken
-/// first; thumbnails, validation and benchmark kernels go in the background
-/// lane. A backlog of background jobs therefore delays a live frame by at most
-/// the one job already running. Completion mirrors BlockingCollection: after
+/// main canvas, pins, look-ahead) go in the live lane and are taken first;
+/// thumbnails, validation and benchmark kernels go in the background lane. A
+/// backlog of background jobs delays a live frame by at most the one job
+/// already running. To keep background callers (who block without a timeout)
+/// from starving when live jobs never let up, one background job runs after
+/// every <see cref="MaxLiveStreak"/> consecutive live jobs. After
 /// <see cref="CompleteAdding"/> a later Add throws InvalidOperationException
 /// and Take drains what is queued, then throws.
 /// </summary>
@@ -22,6 +24,10 @@ internal sealed class GlWorkQueue
     private readonly Queue<GlJob> _live = new();
     private readonly Queue<GlJob> _background = new();
     private bool _completed;
+    private int _liveStreak;
+
+    /// <summary>Consecutive live jobs after which a waiting background job runs.</summary>
+    public const int MaxLiveStreak = 8;
 
     public void Add(Action work, bool background)
     {
@@ -36,20 +42,16 @@ internal sealed class GlWorkQueue
         }
     }
 
-    /// <summary>Block for the next job, live lane first. Throws InvalidOperationException once completed and empty.</summary>
+    /// <summary>Block for the next job. Throws InvalidOperationException once completed and empty.</summary>
     public GlJob Take()
     {
         lock (_gate)
         {
             while (true)
             {
-                if (_live.Count > 0)
+                if (TryDequeueLocked(out var job))
                 {
-                    return _live.Dequeue();
-                }
-                if (_background.Count > 0)
-                {
-                    return _background.Dequeue();
+                    return job;
                 }
                 if (_completed)
                 {
@@ -64,19 +66,27 @@ internal sealed class GlWorkQueue
     {
         lock (_gate)
         {
-            if (_live.Count > 0)
-            {
-                job = _live.Dequeue();
-                return true;
-            }
-            if (_background.Count > 0)
-            {
-                job = _background.Dequeue();
-                return true;
-            }
-            job = default;
-            return false;
+            return TryDequeueLocked(out job);
         }
+    }
+
+    // Live first, except a background job is due after MaxLiveStreak consecutive live ones.
+    private bool TryDequeueLocked(out GlJob job)
+    {
+        if (_live.Count > 0 && !(_background.Count > 0 && _liveStreak >= MaxLiveStreak))
+        {
+            _liveStreak++;
+            job = _live.Dequeue();
+            return true;
+        }
+        if (_background.Count > 0)
+        {
+            _liveStreak = 0;
+            job = _background.Dequeue();
+            return true;
+        }
+        job = default;
+        return false;
     }
 
     public void CompleteAdding()

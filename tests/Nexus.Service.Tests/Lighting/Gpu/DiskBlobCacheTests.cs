@@ -20,7 +20,7 @@ public sealed class DiskBlobCacheTests : IDisposable
     [Fact]
     public void Round_trips_and_misses_cleanly()
     {
-        var c = new DiskBlobCache(_dir, 1024);
+        var c = new DiskBlobCache(_dir, 1024, secure: false);
 
         Assert.Null(c.TryGet("aa"));
         c.Put("aa", new byte[] { 1, 2, 3 });
@@ -31,7 +31,7 @@ public sealed class DiskBlobCacheTests : IDisposable
     [Fact]
     public void Oversize_and_empty_values_are_not_stored()
     {
-        var c = new DiskBlobCache(_dir, 8);
+        var c = new DiskBlobCache(_dir, 8, secure: false);
 
         c.Put("big", new byte[9]);
         c.Put("empty", ReadOnlySpan<byte>.Empty);
@@ -43,17 +43,18 @@ public sealed class DiskBlobCacheTests : IDisposable
     [Fact]
     public void Exceeding_the_cap_evicts_least_recently_used_first()
     {
-        var c = new DiskBlobCache(_dir, 30);
+        var c = new DiskBlobCache(_dir, 30, secure: false);
         c.Put("old", new byte[10]);
-        File.SetLastWriteTimeUtc(Path.Combine(_dir, "old"), DateTime.UtcNow.AddMinutes(-10));
         c.Put("mid", new byte[10]);
-        File.SetLastWriteTimeUtc(Path.Combine(_dir, "mid"), DateTime.UtcNow.AddMinutes(-5));
         c.Put("new", new byte[10]);
+        c.Flush();
+        Assert.NotNull(c.TryGet("old"));
 
         c.Put("extra", new byte[10]);
+        c.Flush();
 
-        Assert.Null(c.TryGet("old"));
-        Assert.NotNull(c.TryGet("mid"));
+        Assert.Null(c.TryGet("mid"));
+        Assert.NotNull(c.TryGet("old"));
         Assert.NotNull(c.TryGet("new"));
         Assert.NotNull(c.TryGet("extra"));
         Assert.True(new DirectoryInfo(_dir).EnumerateFiles().Sum(f => f.Length) <= 30);
@@ -62,14 +63,40 @@ public sealed class DiskBlobCacheTests : IDisposable
     [Fact]
     public void Overwriting_a_name_does_not_double_count_its_size()
     {
-        var c = new DiskBlobCache(_dir, 25);
+        var c = new DiskBlobCache(_dir, 25, secure: false);
 
         for (var i = 0; i < 5; i++)
         {
             c.Put("same", new byte[20]);
+            c.Flush();
         }
 
         Assert.NotNull(c.TryGet("same"));
+    }
+
+    [Fact]
+    public void A_queued_write_is_readable_before_it_reaches_disk_and_survives_a_new_instance()
+    {
+        var c = new DiskBlobCache(_dir, 1024, secure: false);
+        c.Put("k", new byte[] { 9 });
+        Assert.Equal(new byte[] { 9 }, c.TryGet("k"));
+        c.Flush();
+
+        var again = new DiskBlobCache(_dir, 1024, secure: false);
+
+        Assert.Equal(new byte[] { 9 }, again.TryGet("k"));
+    }
+
+    [Fact]
+    public void Leftover_temp_files_are_removed_and_never_served()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllBytes(Path.Combine(_dir, "x.abc.tmp"), new byte[5]);
+
+        var c = new DiskBlobCache(_dir, 1024, secure: false);
+
+        Assert.Null(c.TryGet("x.abc.tmp"));
+        Assert.False(File.Exists(Path.Combine(_dir, "x.abc.tmp")));
     }
 
     [Fact]
@@ -79,15 +106,15 @@ public sealed class DiskBlobCacheTests : IDisposable
     }
 
     [Theory]
-    [InlineData("fire", 0, false, "t", 1, "fire", 0, false, "t", 1, true)]
-    [InlineData("fire", 0, false, "t", 1, "fire", 1, false, "t", 1, false)]
-    [InlineData("fire", 0, false, "t", 1, "fire", 0, true, "t", 1, false)]
-    [InlineData("fire", 0, false, "t", 1, "plasma", 0, false, "t", 1, false)]
-    [InlineData("fire", 0, false, "t", 1, "fire", 0, false, "u", 1, false)]
-    [InlineData("fire", 0, false, "t", 1, "fire", 0, false, "t", 2, false)]
+    [InlineData("fire", 0, false, "t", "1", "fire", 0, false, "t", "1", true)]
+    [InlineData("fire", 0, false, "t", "1", "fire", 1, false, "t", "1", false)]
+    [InlineData("fire", 0, false, "t", "1", "fire", 0, true, "t", "1", false)]
+    [InlineData("fire", 0, false, "t", "1", "plasma", 0, false, "t", "1", false)]
+    [InlineData("fire", 0, false, "t", "1", "fire", 0, false, "u", "1", false)]
+    [InlineData("fire", 0, false, "t", "1", "fire", 0, false, "t", "2", false)]
     public void Thumbnail_name_changes_with_every_input(
-        string e1, int s1, bool f1, string t1, int v1,
-        string e2, int s2, bool f2, string t2, int v2, bool same)
+        string e1, int s1, bool f1, string t1, string v1,
+        string e2, int s2, bool f2, string t2, string v2, bool same)
     {
         var a = DiskBlobCache.ThumbnailName(e1, s1, f1, t1, v1);
         var b = DiskBlobCache.ThumbnailName(e2, s2, f2, t2, v2);

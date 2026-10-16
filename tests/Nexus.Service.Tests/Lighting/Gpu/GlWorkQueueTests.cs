@@ -63,6 +63,23 @@ public class GlWorkQueueTests
     }
 
     [Fact]
+    public void A_background_job_runs_after_a_streak_of_live_jobs()
+    {
+        var q = new GlWorkQueue();
+        var ran = new List<string>();
+        q.Add(() => ran.Add("bg"), background: true);
+        for (var i = 0; i < GlWorkQueue.MaxLiveStreak + 2; i++)
+        {
+            q.Add(() => ran.Add("live"), background: false);
+        }
+
+        Drain(q);
+
+        Assert.Equal("bg", ran[GlWorkQueue.MaxLiveStreak]);
+        Assert.Equal(GlWorkQueue.MaxLiveStreak + 3, ran.Count);
+    }
+
+    [Fact]
     public void Completed_queue_refuses_adds_drains_then_throws()
     {
         var q = new GlWorkQueue();
