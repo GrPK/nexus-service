@@ -28,6 +28,9 @@ public sealed class CloudAccountsResponse : ApiResponse
 public sealed class CloudFailureResponse : ApiResponse
 {
     public string? RetryAt { get; set; }
+
+    /// <summary>Address the unverified account signs in with; lets the dashboard offer a resend after a username sign-in.</summary>
+    public string? Email { get; set; }
 }
 
 public sealed class CloudRegisterBody

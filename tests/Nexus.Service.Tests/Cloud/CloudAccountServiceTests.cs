@@ -61,6 +61,18 @@ public sealed class CloudAccountServiceTests
     }
 
     [Fact]
+    public async Task LoginAsync_carries_the_email_from_an_unverified_error()
+    {
+        var (svc, api, _) = Make();
+        api.OnLogin = _ => CloudApiResult<CloudAuthSession>.Fail(403, "email_unverified", "Verify your email first.", email: "nicola@example.com");
+
+        var (result, _) = await svc.LoginAsync("nicola", "password1", CancellationToken.None);
+
+        Assert.Equal("email_unverified", result.ErrorCode);
+        Assert.Equal("nicola@example.com", result.ErrorEmail);
+    }
+
+    [Fact]
     public async Task First_login_fires_activated_only_second_account_fires_switching_then_activated()
     {
         var (svc, api, _) = Make();

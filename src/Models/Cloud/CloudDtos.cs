@@ -213,4 +213,7 @@ public sealed class CloudErrorBody
     public string? Code { get; set; }
     public string? Message { get; set; }
     public string? RetryAt { get; set; }
+
+    /// <summary>Set only on email_unverified after a correct password, so a username sign-in can offer a resend.</summary>
+    public string? Email { get; set; }
 }

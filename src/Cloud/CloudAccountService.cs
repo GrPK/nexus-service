@@ -22,6 +22,7 @@ public sealed class CloudActionResult
 
     /// <summary>ISO timestamp from the upstream error body's retryAt field (e.g. username_cooldown). Null unless the server sent one.</summary>
     public string? ErrorRetryAt { get; init; }
+    public string? ErrorEmail { get; init; }
     public bool Offline { get; init; }
 
     public static CloudActionResult Ok() => new() { Success = true, StatusCode = 200 };
@@ -36,6 +37,7 @@ public sealed class CloudActionResult
         ErrorCode = result.ErrorCode,
         ErrorMessage = result.ErrorMessage,
         ErrorRetryAt = result.ErrorRetryAt,
+        ErrorEmail = result.ErrorEmail,
         Offline = result.Offline,
     };
 }
