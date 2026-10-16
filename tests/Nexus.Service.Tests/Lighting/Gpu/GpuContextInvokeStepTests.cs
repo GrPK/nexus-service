@@ -35,7 +35,7 @@ public class GpuContextInvokeStepTests
             gpu.InvokeStep(() =>
             {
                 calls++;
-                return Stopwatch.GetTimestamp() >= readyAt;
+                return Stopwatch.GetTimestamp() >= readyAt ? StepState.Done : StepState.Poll;
             });
         }
 
@@ -53,7 +53,7 @@ public class GpuContextInvokeStepTests
         gpu.InvokeStep(() =>
         {
             calls++;
-            return false;
+            return StepState.Poll;
         });
 
         Assert.Equal(1, calls);
@@ -65,7 +65,7 @@ public class GpuContextInvokeStepTests
     {
         using var gpu = Started();
         const int Programs = 123;
-        var gate = new CompileGate(GpuContext.MaxBackgroundCompiles);
+        var gate = gpu.BackgroundCompiles;
         var maxInFlight = 0;
         var compileTicks = Stopwatch.Frequency / 30;
 
@@ -84,7 +84,7 @@ public class GpuContextInvokeStepTests
                     {
                         if (!gate.TryEnter())
                         {
-                            return false;
+                            return StepState.WaitSlot;
                         }
                         held = true;
                         maxInFlight = Math.Max(maxInFlight, gate.InFlight);
@@ -92,26 +92,28 @@ public class GpuContextInvokeStepTests
                     }
                     if (Stopwatch.GetTimestamp() < readyAt)
                     {
-                        return false;
+                        return StepState.Poll;
                     }
-                    gate.Exit();
-                    return true;
+                    gpu.ReleaseCompileSlot();
+                    return StepState.Done;
                 });
             }));
         }
 
         var worst = 0.0;
-        var live = Task.Run(() =>
+        // Queue wait is measured on the GL thread, so thread-pool pressure from the blocked callers cannot inflate it.
+        var live = Task.Factory.StartNew(() =>
         {
             var until = Stopwatch.StartNew();
             while (!Task.WhenAll(thumbs).IsCompleted && until.Elapsed < TimeSpan.FromSeconds(60))
             {
                 var t = Stopwatch.GetTimestamp();
-                gpu.Invoke(() => { });
-                worst = Math.Max(worst, (Stopwatch.GetTimestamp() - t) * 1000.0 / Stopwatch.Frequency);
+                long ranAt = 0;
+                gpu.Invoke(() => ranAt = Stopwatch.GetTimestamp());
+                worst = Math.Max(worst, (ranAt - t) * 1000.0 / Stopwatch.Frequency);
                 Thread.Sleep(5);
             }
-        });
+        }, TaskCreationOptions.LongRunning);
 
         await Task.WhenAll(thumbs);
         await live;
@@ -128,7 +130,66 @@ public class GpuContextInvokeStepTests
         var call = Task.Run(() =>
         {
             using var bg = GpuContext.BeginBackground();
-            gpu.InvokeStep(() => false);
+            gpu.InvokeStep(() => StepState.Poll);
+        });
+        Thread.Sleep(50);
+
+        gpu.ReportContextLost("test");
+
+        Assert.True(call.Wait(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public void A_step_waiting_for_a_slot_parks_instead_of_polling_and_wakes_on_release()
+    {
+        using var gpu = Started();
+        // Fill every slot from the GL thread.
+        gpu.Invoke(() =>
+        {
+            while (gpu.BackgroundCompiles.TryEnter())
+            {
+            }
+        });
+        var calls = 0;
+        var call = Task.Run(() =>
+        {
+            using var bg = GpuContext.BeginBackground();
+            gpu.InvokeStep(() =>
+            {
+                calls++;
+                if (!gpu.BackgroundCompiles.TryEnter())
+                {
+                    return StepState.WaitSlot;
+                }
+                gpu.ReleaseCompileSlot();
+                return StepState.Done;
+            });
+        });
+        Thread.Sleep(150);
+
+        Assert.False(call.IsCompleted);
+        Assert.Equal(1, calls);
+
+        gpu.Invoke(() => gpu.ReleaseCompileSlot());
+
+        Assert.True(call.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public void A_loss_releases_callers_parked_for_a_slot()
+    {
+        using var gpu = Started();
+        gpu.Invoke(() =>
+        {
+            while (gpu.BackgroundCompiles.TryEnter())
+            {
+            }
+        });
+        var call = Task.Run(() =>
+        {
+            using var bg = GpuContext.BeginBackground();
+            gpu.InvokeStep(() => StepState.WaitSlot);
         });
         Thread.Sleep(50);
 

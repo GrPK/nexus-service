@@ -44,6 +44,9 @@ internal sealed class BuildHolder
     public bool Held;
 }
 
+/// <summary>What a step run through <see cref="GpuContext.InvokeStep"/> needs next.</summary>
+public enum StepState { Done, Poll, WaitSlot }
+
 internal enum BuildPhase { Idle, Compiling, Linking, Succeeded, Failed }
 
 /// <summary>Shader objects whose compile has been submitted and not yet read back.</summary>

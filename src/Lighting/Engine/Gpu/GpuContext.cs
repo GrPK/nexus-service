@@ -107,6 +107,8 @@ public sealed class GpuContext : IDisposable
     /// <summary>Allow compile and link to run in the driver's worker threads (KHR_parallel_shader_compile) when the context offers it. A caller that must have a finished render from its first frame sets this false.</summary>
     public bool AsyncCompile { get; set; } = true;
 
+    internal void SetParallelCompileForTest(bool on) => _parallelCompile = on;
+
     /// <summary>Shader programs compile and link without blocking the GL thread: the extension is present on the bound context and <see cref="AsyncCompile"/> is on.</summary>
     public bool UseAsyncCompile => AsyncCompile && _parallelCompile;
 
@@ -444,7 +446,7 @@ public sealed class GpuContext : IDisposable
             GlJob job;
             try
             { job = queue.Take(); }
-            catch (InvalidOperationException) { return; }
+            catch (InvalidOperationException) { break; }
             var started = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             { job.Work(); }
@@ -466,6 +468,7 @@ public sealed class GpuContext : IDisposable
             { pending.Work(); }
             catch (Exception) { }
         }
+        DrainSlotWaiters();
     }
 
     /// <summary>
@@ -680,14 +683,60 @@ public sealed class GpuContext : IDisposable
 
     /// <summary>
     /// Most background programs (thumbnails, validation, warm-up) compiling in the
-    /// driver at once. Two keeps a cold lighting page to at most two of ANGLE's
-    /// worker threads busy, so a game or the rest of the PC never sees a
-    /// burst, while still overlapping one compile's HLSL pass with the next.
+    /// driver at once. Small enough that a cold lighting page keeps only a couple
+    /// of ANGLE's worker threads busy, so a game or the rest of the PC never sees
+    /// a burst, while still overlapping one compile's HLSL pass with the next.
     /// </summary>
     internal const int MaxBackgroundCompiles = 2;
 
     /// <summary>GL thread only.</summary>
     internal CompileGate BackgroundCompiles { get; } = new(MaxBackgroundCompiles);
+
+    // Background steps waiting for a compile slot, in arrival order; GL thread only. A freed slot wakes the first.
+    private readonly System.Collections.Generic.Queue<(Action Job, GlWorkQueue Queue)> _slotWaiters = new();
+
+    /// <summary>Free a background compile slot and wake the longest-waiting step. GL thread only.</summary>
+    internal void ReleaseCompileSlot()
+    {
+        BackgroundCompiles.Exit();
+        if (_slotWaiters.Count > 0)
+        {
+            var (job, queue) = _slotWaiters.Dequeue();
+            try
+            { queue.Add(job, true); }
+            catch (InvalidOperationException)
+            {
+                // The queue was completed; run the step so its caller is released.
+                job();
+            }
+        }
+    }
+
+    private void DrainSlotWaiters()
+    {
+        while (_slotWaiters.Count > 0)
+        {
+            var (job, _) = _slotWaiters.Dequeue();
+            try
+            { job(); }
+            catch (Exception) { }
+        }
+    }
+
+    private readonly ManualResetEventSlim _liveProgramLanded = new(false);
+
+    /// <summary>A live effect's program finished building, so the render path is past its own first-compile cost.</summary>
+    internal void NoteLiveProgramLanded() => _liveProgramLanded.Set();
+
+    internal bool WaitForLiveProgram(TimeSpan timeout) => _liveProgramLanded.Wait(timeout);
+
+    /// <summary>The ANGLE program cache is on disk and usable, so a compile now is not repeated next boot.</summary>
+    internal bool ProgramCacheActive =>
+#if WINDOWS
+        IsEs && AngleContext.ProgramCacheActive;
+#else
+        false;
+#endif
 
     internal static bool InBackground => _backgroundDepth > 0;
 
@@ -696,13 +745,13 @@ public sealed class GpuContext : IDisposable
 
     /// <summary>
     /// Like <see cref="Invoke"/> for work that may not be finishable yet (a
-    /// program still compiling). <paramref name="step"/> returns true when done.
-    /// On the background lane a false return re-queues the step behind a short
-    /// delay, freeing the GL thread meanwhile, and the caller keeps waiting for
-    /// the final run. On the live lane a false return completes the call at
-    /// once: the frame is skipped, never waited for.
+    /// program still compiling). On the background lane <see cref="StepState.Poll"/>
+    /// re-queues the step behind a short delay and <see cref="StepState.WaitSlot"/>
+    /// parks it until a compile slot frees; the GL thread is free meanwhile and
+    /// the caller keeps waiting for the final run. On the live lane anything but
+    /// Done completes the call at once: the frame is skipped, never waited for.
     /// </summary>
-    public void InvokeStep(Func<bool> step)
+    public void InvokeStep(Func<StepState> step)
     {
         if (!Available || _glThread is null)
         {
@@ -721,18 +770,29 @@ public sealed class GpuContext : IDisposable
         Action? job = null;
         job = () =>
         {
-            var finished = true;
+            var state = StepState.Done;
             try
-            { finished = step(); }
+            { state = step(); }
             catch (Exception ex) { caught = ex; }
-            if (!finished && background && caught is null)
+            if (state != StepState.Done && background && caught is null)
             {
-                try
+                if (state == StepState.WaitSlot)
                 {
-                    queue.AddDeferred(job!, StepPollInterval);
-                    return;
+                    if (!queue.IsCompleted)
+                    {
+                        _slotWaiters.Enqueue((job!, queue));
+                        return;
+                    }
                 }
-                catch (InvalidOperationException) { }
+                else
+                {
+                    try
+                    {
+                        queue.AddDeferred(job!, StepPollInterval);
+                        return;
+                    }
+                    catch (InvalidOperationException) { }
+                }
             }
             done.Set();
         };

@@ -739,7 +739,11 @@ public sealed partial class LightingEngine : IDisposable
                             _lastRenderMs = nowMs;
                             _lastRenderEffect = effect;
                             effect.RenderFrame(_canvas, _lastRenderMs);
-                            Volatile.Write(ref _frozenRenderedEpoch, epoch);
+                            // A shader still compiling drew nothing of its own: keep asking until it does.
+                            if (effect is not Gpu.ShaderEffect { IsRenderPending: true })
+                            {
+                                Volatile.Write(ref _frozenRenderedEpoch, epoch);
+                            }
                         }
                         // One snapshot for the sample, the game pass and the
                         // publish: UpdateDevices swaps the array lock-free,
@@ -1024,7 +1028,8 @@ public sealed partial class LightingEngine : IDisposable
                     try
                     {
                         render.Effect.RenderFrame(render.Canvas, nowMs);
-                        render.Rendered = true;
+                        // Still compiling with nothing to stand in: leave the devices on the global canvas instead of a blank one.
+                        render.Rendered = render.Effect is not Gpu.ShaderEffect { CanPaint: false };
                     }
                     catch (Exception ex)
                     {
@@ -1086,7 +1091,12 @@ public sealed partial class LightingEngine : IDisposable
             var built = factory(key, previous);
             if (!ReferenceEquals(built, render.Effect))
             {
-                try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+                // A shader that has to compile keeps the pin showing the outgoing look until it lands.
+                var handedOver = built is Gpu.ShaderEffect incoming && render.Effect is Gpu.ShaderEffect outgoing && incoming.AdoptPredecessor(outgoing);
+                if (!handedOver)
+                {
+                    try { render.Effect?.Dispose(); } catch { /* best-effort */ }
+                }
             }
             render.Effect = built;
             render.Tag = tag;

@@ -31,6 +31,17 @@ internal sealed class GlWorkQueue
     /// <summary>Consecutive live jobs after which a waiting background job runs.</summary>
     public const int MaxLiveStreak = 8;
 
+    public bool IsCompleted
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _completed;
+            }
+        }
+    }
+
     public void Add(Action work, bool background)
     {
         lock (_gate)

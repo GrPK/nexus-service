@@ -14,8 +14,15 @@ internal sealed class ShaderPrewarmPlan
     /// <summary>Pause between programs, so the warm-up is a trickle behind live work.</summary>
     public static readonly TimeSpan Spacing = TimeSpan.FromMilliseconds(150);
 
-    /// <summary>Settling time after the context lands before the first program.</summary>
-    public static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(5);
+    /// <summary>Settling time after the live effect's program lands before the first program.</summary>
+    public static readonly TimeSpan Settle = TimeSpan.FromSeconds(2);
+
+    /// <summary>Longest wait for a live program (a static colour never builds one) before starting anyway.</summary>
+    public static readonly TimeSpan LiveProgramWait = TimeSpan.FromMinutes(2);
+
+    /// <summary>A warm-up only pays off when the compiled programs persist and compiling does not block the GL thread.</summary>
+    public static bool Worthwhile(bool isEs, bool isWarp, bool asyncCompile, bool programCacheActive) =>
+        isEs && !isWarp && asyncCompile && programCacheActive;
 
     private readonly List<(string Key, string Source)> _items = new();
     private int _next;
@@ -93,11 +100,14 @@ internal static class ShaderPrewarm
     {
         try
         {
-            if (!gpu.WaitForLateLanding(TimeSpan.FromMinutes(10)) || !gpu.IsEs)
+            if (!gpu.WaitForLateLanding(TimeSpan.FromMinutes(10))
+                || !ShaderPrewarmPlan.Worthwhile(gpu.IsEs, gpu.IsWarp, gpu.UseAsyncCompile, gpu.ProgramCacheActive))
             {
                 return;
             }
-            Thread.Sleep(ShaderPrewarmPlan.InitialDelay);
+            // The live effect's own compile goes first; the warm-up begins once it is out of the way.
+            gpu.WaitForLiveProgram(ShaderPrewarmPlan.LiveProgramWait);
+            Thread.Sleep(ShaderPrewarmPlan.Settle);
             var generation = gpu.Generation;
             var effects = new List<(string, string)>();
             foreach (var key in ShaderLibrary.AllEffectKeys)
@@ -117,9 +127,11 @@ internal static class ShaderPrewarm
                 }
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var ok = false;
+                var effect = new ShaderEffect(key, gpu, source);
                 try
-                { ok = new ShaderEffect(key, gpu, source).Prewarm(); }
+                { ok = effect.Prewarm(); }
                 catch (Exception ex) { GpuContext.Log($"[gpu/{key}] prewarm threw: {ex.Message}"); }
+                finally { effect.Dispose(); }
                 plan.Record(ok, sw.Elapsed.TotalMilliseconds);
                 Thread.Sleep(ShaderPrewarmPlan.Spacing);
             }
