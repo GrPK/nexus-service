@@ -10,7 +10,7 @@ using Nexus.Service.Persistence;
 
 namespace Nexus.Service.Lighting;
 
-/// <summary>The HydroShift LCD 360R's three fans as one 24 LED zone, fed per LED. Other HydroShift LCD products list nothing here.</summary>
+/// <summary>The HydroShift LCD 360R's three fans as one fan ring zone, fed per LED. Other HydroShift LCD products list nothing here.</summary>
 public sealed class HydroShiftLcdLightingProvider :
     ILightingDeviceProvider, ILightingFrameContributor, IDeviceStructureSource
 {

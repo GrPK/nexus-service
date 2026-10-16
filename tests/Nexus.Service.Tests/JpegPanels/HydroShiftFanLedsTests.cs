@@ -34,7 +34,7 @@ public class HydroShiftFanLedsTests
         return rgb;
     }
 
-    private static (HydroShiftFanLeds Leds, JpegPanelHub Hub, FakeDevice Device) Attached(int pid = Pid360R)
+    private static (HydroShiftFanLeds Leds, JpegPanelHub Hub, FakeDevice Device) Attached(int pid = Pid360R, Func<long>? clock = null)
     {
         var model = JpegPanelModel.HydroShiftLcd with
         {
@@ -44,11 +44,11 @@ public class HydroShiftFanLedsTests
         var device = new FakeDevice(pid);
         Assert.True(hub.Attach(device));
         device.Writes.Clear();
-        return (new HydroShiftFanLeds(hub), hub, device);
+        return (new HydroShiftFanLeds(hub, clock), hub, device);
     }
 
     [Fact]
-    public void Per_led_write_is_a_sequenced_report_b_carrying_the_selector_and_24_colours()
+    public void Per_led_write_is_a_sequenced_report_b_carrying_the_selector_and_24_colors()
     {
         var report = new byte[ReportLength];
         var rgb = Colors();
@@ -79,7 +79,7 @@ public class HydroShiftFanLedsTests
     }
 
     [Fact]
-    public void The_first_write_primes_then_sends_colours_and_later_writes_skip_the_prime()
+    public void The_first_write_primes_then_sends_colors_and_later_writes_skip_the_prime()
     {
         var (leds, _, device) = Attached();
 
@@ -94,13 +94,15 @@ public class HydroShiftFanLedsTests
     [Fact]
     public void A_failed_write_or_a_new_attach_primes_again()
     {
-        var (leds, hub, device) = Attached();
+        long now = 0;
+        var (leds, hub, device) = Attached(clock: () => now);
         leds.Write(Colors());
 
         device.FailWrites = true;
         Assert.False(leds.Write(Colors()));
         device.FailWrites = false;
         device.Writes.Clear();
+        now += HydroShiftFanLeds.InitialBackoffMs;
         leds.Write(Colors());
         Assert.Equal(5, device.Writes.Count);
 
@@ -205,6 +207,64 @@ public class HydroShiftFanLedsTests
         }
         Assert.Equal(0, expectedChunk);
         Assert.Contains(writes, w => w[1] == 0x14);
+    }
+
+    [Fact]
+    public void A_rejected_led_write_backs_off_instead_of_priming_on_every_tick()
+    {
+        long now = 0;
+        var (leds, _, device) = Attached(clock: () => now);
+        device.FailWrites = true;
+        Assert.False(leds.Write(Colors()));
+        int writesAfterFailure = device.Writes.Count;
+
+        for (now = 50; now < HydroShiftFanLeds.InitialBackoffMs; now += 50)
+        {
+            Assert.False(leds.Write(Colors()));
+        }
+        Assert.Equal(writesAfterFailure, device.Writes.Count);
+
+        device.FailWrites = false;
+        now = HydroShiftFanLeds.InitialBackoffMs;
+        Assert.True(leds.Write(Colors()));
+        Assert.Contains(device.Writes, w => w[1] == 0x14);
+    }
+
+    [Fact]
+    public void Backoff_doubles_to_a_cap_and_resets_on_success()
+    {
+        long now = 0;
+        var (leds, _, device) = Attached(clock: () => now);
+        device.FailWrites = true;
+        var gaps = new List<long>();
+        for (int i = 0; i < 9; i++)
+        {
+            Assert.False(leds.Write(Colors()));
+            long failedAt = now;
+            long probe = now;
+            int before = device.Writes.Count;
+            while (device.Writes.Count == before)
+            {
+                probe += 250;
+                now = probe;
+                leds.Write(Colors());
+                if (device.Writes.Count != before) break;
+            }
+            gaps.Add(probe - failedAt);
+        }
+        Assert.Equal(1000, gaps[0]);
+        Assert.Equal(2000, gaps[1]);
+        Assert.Equal(HydroShiftFanLeds.MaxBackoffMs, gaps[^1]);
+
+        device.FailWrites = false;
+        now += HydroShiftFanLeds.MaxBackoffMs;
+        Assert.True(leds.Write(Colors()));
+        device.FailWrites = true;
+        device.Writes.Clear();
+        leds.Write(Colors());
+        device.FailWrites = false;
+        now += HydroShiftFanLeds.InitialBackoffMs;
+        Assert.True(leds.Write(Colors()));
     }
 
     [Fact]

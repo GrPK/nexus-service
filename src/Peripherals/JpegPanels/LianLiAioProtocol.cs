@@ -30,14 +30,14 @@ public static class LianLiAioProtocol
     public const byte CmdSetFanLight = 0x85;
 
     /// <summary>
-    /// B-command carrying per-LED colours on the HydroShift LCD 360R: a selector byte, then RGB bytes
+    /// B-command carrying per-LED colors on the HydroShift LCD 360R: a selector byte, then RGB bytes
     /// for each LED in fan order. Rides the same sequenced header as a frame chunk.
     /// </summary>
     public const byte CmdSetPerLed = 0x14;
 
     private const byte PerLedSelector = 0x01;
 
-    /// <summary>Three fans of eight LEDs; the reference driver's zone size for the 360R.</summary>
+    /// <summary>The 360R's fan LED zone size, per the reference driver.</summary>
     public const int HydroShiftFanLedCount = 24;
 
     private const byte PumpSourceHost = 0x00;
@@ -85,7 +85,7 @@ public static class LianLiAioProtocol
         FillACommand(report, CmdSetPumpPwm, payload);
     }
 
-    /// <summary>Lights the whole ring one colour from the host, at full firmware brightness so the colour carries the level.</summary>
+    /// <summary>Lights the whole ring one color from the host, at full firmware brightness so the color carries the level.</summary>
     public static void FillSetPumpLight(Span<byte> report, byte r, byte g, byte b)
     {
         Span<byte> payload = stackalloc byte[19];
@@ -105,7 +105,7 @@ public static class LianLiAioProtocol
 
     /// <summary>
     /// The two prime payloads the 360R's per-LED path is brought up with (static mode, full
-    /// brightness, no colour, then a shifted variant), each sent as <see cref="CmdSetFanLight"/>
+    /// brightness, no color, then a shifted variant), each sent as <see cref="CmdSetFanLight"/>
     /// and then <see cref="CmdSetPumpLight"/>.
     /// </summary>
     private static readonly byte[] PrimeA =
@@ -130,8 +130,8 @@ public static class LianLiAioProtocol
     }
 
     /// <summary>
-    /// One per-LED colour set: <paramref name="rgb"/> is <see cref="HydroShiftFanLedCount"/> RGB triples
-    /// in fan order. The sequenced header's total and chunk length both count selector plus colours.
+    /// One per-LED color set: <paramref name="rgb"/> is <see cref="HydroShiftFanLedCount"/> RGB triples
+    /// in fan order. The sequenced header's total and chunk length both count selector plus colors.
     /// </summary>
     public static void FillPerLed(Span<byte> report, ReadOnlySpan<byte> rgb)
     {
