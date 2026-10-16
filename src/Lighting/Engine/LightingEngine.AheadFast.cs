@@ -25,6 +25,10 @@ public sealed partial class LightingEngine
     internal bool AheadFastForTest;
 
     private AheadSpot? _aheadSpot;
+    private long _aheadCounterLogMs;
+    private int _aheadCanvasWindows;
+    private int _aheadCanvasLogged;
+    private int _aheadFastLogged;
     private int _aheadFastCount;
     private int _aheadFastWindows;
     private int _aheadSpotChecks;
@@ -46,6 +50,36 @@ public sealed partial class LightingEngine
     /// and is held for comparison while the canvas path delivers the window.
     /// </summary>
     private FastWindow TryFastWindow(AheadRequest req, IEffect effect)
+    {
+        var result = TryFastWindowCore(req, effect);
+        if (result != FastWindow.Done)
+        {
+            _aheadCanvasWindows++;
+        }
+        LogAheadCounters();
+        return result;
+    }
+
+    /// <summary>Once a minute while windows are being served: how many went through each path.</summary>
+    private void LogAheadCounters()
+    {
+        var now = Environment.TickCount64;
+        if (now - _aheadCounterLogMs < 60_000)
+        {
+            return;
+        }
+        _aheadCounterLogMs = now;
+        var fast = AheadFastWindows;
+        if (fast == _aheadFastLogged && _aheadCanvasWindows == _aheadCanvasLogged)
+        {
+            return;
+        }
+        _aheadFastLogged = fast;
+        _aheadCanvasLogged = _aheadCanvasWindows;
+        GpuContext.Log($"[ledspace] windows so far: led-space {fast}, canvas {_aheadCanvasWindows}, spot-checks {AheadSpotChecks}, spot-check mismatches {AheadSpotMismatches}");
+    }
+
+    private FastWindow TryFastWindowCore(AheadRequest req, IEffect effect)
     {
         _aheadSpot = null;
         if (!(LedSpaceGate.Enabled || AheadFastForTest) || FullFrameSampling)
