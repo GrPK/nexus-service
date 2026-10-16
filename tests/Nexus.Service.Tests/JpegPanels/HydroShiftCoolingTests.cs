@@ -133,10 +133,25 @@ public class HydroShiftCoolingTests
 
         rig.Aio.SetFanDuty(55);
         rig.Aio.SetFanDuty(55);
-        rig.Tick();
-        rig.Tick();
 
         Assert.Equal(new byte[] { 0x01, 0x8B, 0, 0, 0, 2, 0x00, 53 }, Assert.Single(Cmds(rig.Device, 0x8B))[..8]);
+    }
+
+    [Fact]
+    public void Wanted_speeds_are_resent_every_keepalive_including_after_a_reset_on_the_same_handle()
+    {
+        var rig = Attached();
+        rig.Aio.SetPumpDuty(70);
+        rig.Aio.SetFanDuty(55);
+        rig.Tick();
+        Assert.Equal(2, Cmds(rig.Device, 0x8A).Count);
+
+        rig.Device.Writes.Clear();
+        rig.Device.Writes.Add(new byte[] { 0x01, 0x8E });
+        rig.Tick();
+
+        Assert.Equal(70, Assert.Single(Cmds(rig.Device, 0x8A))[7]);
+        Assert.Equal(53, Assert.Single(Cmds(rig.Device, 0x8B))[7]);
     }
 
     [Fact]
@@ -207,7 +222,7 @@ public class HydroShiftCoolingTests
         int pump = writes.FindIndex(w => w[0] == 0x01 && w[1] == 0x8A);
         int fans = writes.FindIndex(w => w[0] == 0x01 && w[1] == 0x8B);
         int panel = writes.FindIndex(w => w[0] == 0x02 && w[1] == 0x0C);
-        Assert.Equal(new byte[] { 0x01, 0x8A, 0, 0, 0, 2, 0x01, 1 }, writes[pump][..8]);
+        Assert.Equal(new byte[] { 0x01, 0x8A, 0, 0, 0, 2, 0x01, 100 }, writes[pump][..8]);
         Assert.Equal(new byte[] { 0x01, 0x8B, 0, 0, 0, 2, 0x00, LianLiAioProtocol.HydroShiftFanPwm(LianLiAioProtocol.HydroShiftFanReleaseDuty) }, writes[fans][..8]);
         Assert.True(pump >= 0 && fans > pump && panel > fans);
     }
@@ -236,7 +251,7 @@ public class HydroShiftCoolingTests
         rig.Hub.Detach();
 
         var pump = Cmds(rig.Device, 0x8A);
-        Assert.Equal(new byte[] { 0x01, 0x8A, 0, 0, 0, 2, 0x01, 1 }, Assert.Single(pump)[..8]);
+        Assert.Equal(new byte[] { 0x01, 0x8A, 0, 0, 0, 2, 0x01, 100 }, Assert.Single(pump)[..8]);
     }
 
     [Theory]

@@ -112,11 +112,11 @@ public sealed class HydroShiftAio
                 _statusAt = _clock();
             }
         }
-        Apply(device, report);
+        Apply(device, report, resend: true);
     }
 
-    /// <summary>Under the hub lock: writes whatever differs from what the device already holds, unless a failure is backing off.</summary>
-    private void Apply(IHidDevice device, byte[] report)
+    /// <summary>Under the hub lock: writes whatever differs from what the device holds, plus every wanted value when <paramref name="resend"/>, unless a failure is backing off.</summary>
+    private void Apply(IHidDevice device, byte[] report, bool resend = false)
     {
         if (device.ProductId != ProductId)
         {
@@ -133,7 +133,9 @@ public sealed class HydroShiftAio
             wantPump = _wantPump;
             wantFan = _wantFan;
         }
-        if (wantPump == _sentPump && wantFan == _sentFan)
+        bool pumpDue = wantPump != _sentPump || (resend && wantPump is not null);
+        bool fanDue = wantFan != _sentFan || (resend && wantFan is not null);
+        if (!pumpDue && !fanDue)
         {
             return;
         }
@@ -143,18 +145,21 @@ public sealed class HydroShiftAio
             return;
         }
         bool ok = true;
-        if (wantPump != _sentPump)
+        if (pumpDue)
         {
             ok = WritePump(device, report, wantPump);
             if (ok)
             {
+                if ((wantPump is null) != (_sentPump is null))
+                {
+                    ServiceLog.Info(wantPump is not null
+                        ? $"[{DeviceId}] pump driven"
+                        : $"[{DeviceId}] pump handed back to motherboard sync");
+                }
                 _sentPump = wantPump;
-                ServiceLog.Info(wantPump is { } p
-                    ? $"[{DeviceId}] pump driven at {p}%"
-                    : $"[{DeviceId}] pump handed back to motherboard sync");
             }
         }
-        if (ok && wantFan != _sentFan)
+        if (ok && fanDue)
         {
             ok = WriteFan(device, report, wantFan);
             if (ok)
@@ -200,8 +205,8 @@ public sealed class HydroShiftAio
         }
         else
         {
-            LianLiAioProtocol.FillHydroShiftPumpPwm(
-                report, LianLiAioProtocol.PumpSourceMotherboard, LianLiAioProtocol.HydroShiftPumpDutyFloor);
+            // Full duty rides along in case the firmware honors the PWM byte in motherboard sync.
+            LianLiAioProtocol.FillHydroShiftPumpPwm(report, LianLiAioProtocol.PumpSourceMotherboard, 100);
         }
         return WriteAndDrain(device, report);
     }
