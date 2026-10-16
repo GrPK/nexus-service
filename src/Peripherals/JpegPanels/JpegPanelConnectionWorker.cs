@@ -49,10 +49,10 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
         {
             try
             {
-                if (_backoff.DelayMs > 0)
-                {
-                    await Task.Delay((int)_backoff.DelayMs, stoppingToken).ConfigureAwait(false);
-                }
+                await _backoff.WaitAsync(
+                    () => !_gate.IsEnabled(model.HandlerId) || !OnBus(),
+                    Task.Delay,
+                    stoppingToken).ConfigureAwait(false);
 
                 if (!_gate.IsEnabled(model.HandlerId))
                 {
