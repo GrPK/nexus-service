@@ -83,7 +83,7 @@ public class GpuContextInvokeStepTests
         long backgroundRuns = 0;
         var compileTicks = Stopwatch.Frequency / 30;
 
-        // Each "program" takes a slot, then is ready ~33ms later without holding the thread.
+        // Each "program" takes a slot, then becomes ready a little later without holding the thread.
         var thumbs = new List<Task>();
         for (var i = 0; i < Programs; i++)
         {
@@ -138,7 +138,10 @@ public class GpuContextInvokeStepTests
         // A few samples can see more when the sampling thread is descheduled between reading the count and queuing;
         // a live job stuck behind the backlog would see dozens on nearly every sample.
         var behind = deltas.Count(d => d > 2);
-        Assert.True(behind * 10 <= deltas.Count, $"{behind} of {deltas.Count} live jobs ran behind more than one background job");
+        Assert.True(behind * 50 <= deltas.Count, $"{behind} of {deltas.Count} live jobs ran behind more than one background job");
+        Assert.True(deltas.Max() < 8, $"a live job ran behind {deltas.Max()} background jobs");
+        // Measured on the GL thread, so thread-pool pressure on the callers does not count. Every step here returns at once.
+        Assert.True(gpu.MaxLiveWaitMs < 40, $"live max wait {gpu.MaxLiveWaitMs:0.0}ms");
     }
 
     [Fact]
@@ -237,15 +240,42 @@ public class GpuContextInvokeStepTests
     }
 
     [Fact]
+    public async Task A_background_step_that_blocks_the_gl_thread_shows_in_the_live_wait()
+    {
+        using var gpu = Started();
+        using var blocking = new ManualResetEventSlim(false);
+        var bg = Task.Factory.StartNew(() =>
+        {
+            using var b = GpuContext.BeginBackground();
+            gpu.Invoke(() =>
+            {
+                blocking.Set();
+                Thread.Sleep(120);
+            });
+        }, TaskCreationOptions.LongRunning);
+        Assert.True(blocking.Wait(TimeSpan.FromSeconds(60)));
+
+        gpu.Invoke(() => { });
+        await bg;
+
+        Assert.True(gpu.MaxLiveWaitMs > 40, $"live max wait {gpu.MaxLiveWaitMs:0.0}ms");
+    }
+
+    [Fact]
     public void A_loss_releases_a_caller_parked_on_a_pending_step()
     {
         using var gpu = Started();
+        using var started = new ManualResetEventSlim(false);
         var call = Task.Run(() =>
         {
             using var bg = GpuContext.BeginBackground();
-            gpu.InvokeStep(() => StepState.Poll);
+            gpu.InvokeStep(() =>
+            {
+                started.Set();
+                return StepState.Poll;
+            });
         });
-        Thread.Sleep(50);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(60)));
 
         gpu.ReportContextLost("test");
 

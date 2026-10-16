@@ -83,6 +83,21 @@ public class AsyncCompileSwitchTests
     }
 
     [Fact]
+    public void A_disposed_effect_refuses_a_predecessor_and_leaves_it_to_the_caller()
+    {
+        using var gpu = Context();
+        var old = Shader(gpu, "old", 255, 0, 0, 0);
+        var incoming = Shader(gpu, "new", 0, 255, 0, 3);
+        old.RenderFrame(new CanvasBuffer(16, 9), 0);
+        incoming.Dispose();
+
+        Assert.False(incoming.AdoptPredecessor(old));
+
+        Assert.False(incoming.HasPredecessor);
+        Assert.Equal(0, old.DisposeCount);
+    }
+
+    [Fact]
     public void A_switch_during_a_switch_keeps_the_last_effect_that_had_a_program()
     {
         using var gpu = Context();
@@ -115,7 +130,7 @@ public class AsyncCompileSwitchTests
         return cond();
     }
 
-    private static Task Frames(LightingEngine engine, int count)
+    private static async Task Frames(LightingEngine engine, int count)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var seen = 0;
@@ -127,7 +142,14 @@ public class AsyncCompileSwitchTests
             }
         }
         engine.FramePublished += Handler;
-        return done.Task.WaitAsync(TimeSpan.FromSeconds(60)).ContinueWith(_ => engine.FramePublished -= Handler);
+        try
+        {
+            await done.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        }
+        finally
+        {
+            engine.FramePublished -= Handler;
+        }
     }
 
     [Fact]
@@ -144,7 +166,7 @@ public class AsyncCompileSwitchTests
         engine.SetEffect(shader);
         engine.SetFrozen(true);
 
-        // Polled on every tick while it compiles: the old behavior asked once and never again.
+        // Polled on every tick while it compiles, not asked once.
         Assert.True(await Eventually(() => Volatile.Read(ref calls) >= 5));
         gate.Set();
         Assert.True(await Eventually(() => !shader.IsRenderPending));

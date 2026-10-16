@@ -587,6 +587,11 @@ public sealed class ShaderEffect : IEffect
     /// </summary>
     internal bool AdoptPredecessor(ShaderEffect old)
     {
+        // A disposed effect would never release a predecessor it took; the caller disposes the outgoing one.
+        if (_disposed)
+        {
+            return false;
+        }
         // A stand-in from another generation would compile again from cold itself.
         if (ReferenceEquals(old, this) || _compiled || _failed || !_ctx.UseAsyncCompile || !ReferenceEquals(old._ctx, _ctx)
             || old._generation != _ctx.Generation)
@@ -616,6 +621,11 @@ public sealed class ShaderEffect : IEffect
         // rather than at zero, where its first frame would run the reset and drop the predecessor.
         _generation = _ctx.Generation;
         _predecessor = source;
+        // Dispose sets its flag before it drops the predecessor, so a dispose that began meanwhile may have missed this one.
+        if (_disposed)
+        {
+            DropPredecessor();
+        }
         return true;
     }
 
