@@ -70,7 +70,7 @@ public sealed partial class LightingEngine : IDisposable
 
     public LightingEngine()
     {
-        _canvas = new CanvasBuffer(160, 90);
+        _canvas = new CanvasBuffer(CanvasBuffer.DefaultWidth, CanvasBuffer.DefaultHeight);
         _aheadCanvas = new CanvasBuffer(_canvas.Width, _canvas.Height);
         _sampleCanvas = _canvas;
     }

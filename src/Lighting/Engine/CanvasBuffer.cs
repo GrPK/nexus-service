@@ -6,7 +6,11 @@ public sealed class CanvasBuffer
 {
     private readonly byte[] _pixels;
 
-    public CanvasBuffer(int width = 160, int height = 90)
+    /// <summary>The engine's render canvas size; the output stream and the screen preview share it.</summary>
+    public const int DefaultWidth = 160;
+    public const int DefaultHeight = 90;
+
+    public CanvasBuffer(int width = DefaultWidth, int height = DefaultHeight)
     {
         Width = width;
         Height = height;

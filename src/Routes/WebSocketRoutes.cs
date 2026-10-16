@@ -73,6 +73,12 @@ public static class WebSocketRoutes
             }
             using WebSocket socket = await ctx.WebSockets.AcceptWebSocketAsync();
             var hub = ctx.RequestServices.GetRequiredService<ScreenPreviewHub>();
+            if (hub.IsAvailable?.Invoke() != true)
+            {
+                // No capture source (macOS, or no helper connected): a distinct close code tells the page to fall back to the output stream.
+                await socket.CloseOutputAsync((WebSocketCloseStatus)ScreenPreviewHub.UnavailableCloseCode, "preview unavailable", CancellationToken.None);
+                return;
+            }
             await RunUntilShutdownAsync(ctx, ct => hub.HandleClientAsync(socket, cancellationToken: ct));
         });
 
