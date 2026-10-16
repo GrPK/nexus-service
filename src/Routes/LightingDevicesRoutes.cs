@@ -897,6 +897,7 @@ public static partial class DevicesRoutes
         // Per-device cap on frame pushes. Applied by RgbBridge on its next frame.
         app.MapPost("/devices/lighting-devices/max-rate", (
             SetLightingDeviceMaxRateBody body,
+            ILightingDeviceProvider ld,
             Nexus.Service.Persistence.IConfigStore store,
             FeatureGates gates) =>
         {
@@ -908,14 +909,33 @@ public static partial class DevicesRoutes
             {
                 return Results.BadRequest(ApiResponse.Fail("Invalid id or maxRateHz."));
             }
+            // Zone cards of one OpenRGB device share a single push, so the cap is
+            // written to every sibling and all of them report the same value.
+            var ids = new HashSet<string> { body.Id };
+            var cards = ld.GetAll().Devices;
+            var target = cards.FirstOrDefault(c => c.Id == body.Id);
+            if (target is { RateCapSupported: true })
+            {
+                var group = string.IsNullOrEmpty(target.ParentDeviceId) ? target.Id : target.ParentDeviceId;
+                foreach (var c in cards)
+                {
+                    if (c.RateCapSupported && (c.Id == group || c.ParentDeviceId == group))
+                    {
+                        ids.Add(c.Id);
+                    }
+                }
+            }
             store.Update(s =>
             {
-                if (!s.Devices.LightingDevicePrefs.TryGetValue(body.Id, out var pref) || pref is null)
+                foreach (var id in ids)
                 {
-                    pref = new Nexus.Service.Persistence.LightingDevicePreference();
-                    s.Devices.LightingDevicePrefs[body.Id] = pref;
+                    if (!s.Devices.LightingDevicePrefs.TryGetValue(id, out var pref) || pref is null)
+                    {
+                        pref = new Nexus.Service.Persistence.LightingDevicePreference();
+                        s.Devices.LightingDevicePrefs[id] = pref;
+                    }
+                    pref.MaxRateHz = body.MaxRateHz;
                 }
-                pref.MaxRateHz = body.MaxRateHz;
             });
             CaptureDeviceStateIntoActive(store);
             return Results.Ok(ApiResponse.Ok());

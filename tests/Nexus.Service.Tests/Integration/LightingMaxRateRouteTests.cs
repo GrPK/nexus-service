@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Nexus.Service.Auth;
 using Nexus.Service.Persistence;
 
@@ -56,5 +58,73 @@ public sealed class LightingMaxRateRouteTests : IClassFixture<StubDeviceHostFact
         var res = await Post(body);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
         Assert.False(Settings.Devices.LightingDevicePrefs.ContainsKey("openrgb-s-X"));
+    }
+}
+
+public sealed class SiblingZoneHostFactory : NexusAppFactory
+{
+    protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<Nexus.Service.Devices.ILightingDeviceProvider>();
+            services.AddSingleton<Nexus.Service.Devices.ILightingDeviceProvider>(new SiblingZoneProvider());
+        });
+    }
+}
+
+internal sealed class SiblingZoneProvider : Nexus.Service.Devices.ILightingDeviceProvider
+{
+    public bool IsConnected => true;
+
+    public Nexus.Service.Models.Devices.GetLightingDevicesResponse GetAll() => new()
+    {
+        IsInit = true,
+        Devices =
+        [
+            new() { Id = "openrgb-s-MB-0", ParentDeviceId = "openrgb-s-MB", RateCapSupported = true },
+            new() { Id = "openrgb-s-MB-1", ParentDeviceId = "openrgb-s-MB", RateCapSupported = true },
+            new() { Id = "openrgb-s-OTHER", RateCapSupported = true },
+            new() { Id = "keeb-1", ParentDeviceId = "openrgb-s-MB" },
+        ],
+    };
+
+    public void SetDisabled(IReadOnlyList<string> ids) { }
+    public void SetPower(string id, bool on) { }
+    public void SetBrightness(string id, int brightness) { }
+    public void SetHue(string id, float hue) { }
+    public void SetSaturation(string id, float saturation) { }
+    public void SetZoneLedCount(string id, int count) { }
+    public void Identify(string id, int durationMs) { }
+}
+
+public sealed class LightingMaxRateSiblingTests : IClassFixture<SiblingZoneHostFactory>
+{
+    private readonly SiblingZoneHostFactory _factory;
+    private readonly HttpClient _client;
+
+    public LightingMaxRateSiblingTests(SiblingZoneHostFactory factory)
+    {
+        _factory = factory;
+        _factory.ResetSettings();
+        _client = _factory.CreateClient();
+        _client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _factory.Services.GetRequiredService<TokenService>().Token);
+    }
+
+    [Fact]
+    public async Task Cap_is_written_to_every_zone_card_of_the_same_device_only()
+    {
+        var res = await _client.PostAsync(
+            "/devices/lighting-devices/max-rate",
+            new StringContent("""{"id":"openrgb-s-MB-1","maxRateHz":10}""", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        var prefs = _factory.Services.GetRequiredService<IConfigStore>().Load().Devices.LightingDevicePrefs;
+        Assert.Equal(10, prefs["openrgb-s-MB-0"].MaxRateHz);
+        Assert.Equal(10, prefs["openrgb-s-MB-1"].MaxRateHz);
+        Assert.False(prefs.ContainsKey("openrgb-s-OTHER"));
+        Assert.False(prefs.ContainsKey("keeb-1"));
     }
 }
