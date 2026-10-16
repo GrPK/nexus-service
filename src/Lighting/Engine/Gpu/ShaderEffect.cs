@@ -180,9 +180,10 @@ public sealed class ShaderEffect : IEffect
             {
                 try
                 {
+                    var compileSw = System.Diagnostics.Stopwatch.StartNew();
                     CompileProgram(gl);
                     _compiled = true;
-                    GpuContext.Log($"[gpu/{Name}] shader compiled, prog={_program}");
+                    GpuContext.Log($"[gpu/{Name}] shader compiled, prog={_program}, {compileSw.Elapsed.TotalMilliseconds:0}ms");
                 }
                 catch (Exception ex)
                 {
@@ -424,6 +425,7 @@ public sealed class ShaderEffect : IEffect
             return null;
         }
         string? error = null;
+        using var background = GpuContext.BeginBackground();
         ctx.Invoke(() =>
         {
             var gl = ctx.Gl;

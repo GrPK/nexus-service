@@ -39,6 +39,7 @@ internal static unsafe partial class AngleContext
     private const uint EglOpenGlEsApi = 0x30A0;
     private const int EglVendor = 0x3053;
     private const int EglVersion = 0x3054;
+    private const int EglExtensions = 0x3055;
     /// <summary>eglGetError after a power event or driver reset took the device (EGL 1.1 core value).</summary>
     internal const int EglContextLost = 0x300E;
 
@@ -73,6 +74,105 @@ internal static unsafe partial class AngleContext
     private static delegate* unmanaged[Cdecl]<void*, void*, uint> _eglDestroyContext;
     private static delegate* unmanaged[Cdecl]<void*, uint> _eglTerminate;
     private static delegate* unmanaged[Cdecl]<uint, void*, int*, void*> _eglGetPlatformDisplayExt;
+
+    // EGL_ANDROID_blob_cache: ANGLE hands every compiled program to the set callback and
+    // asks the get callback before compiling. One process-wide store, shared across contexts.
+    private const long ProgramCacheCapBytes = 128L * 1024 * 1024;
+    private const int MaxBlobKeyBytes = 256;
+    private static readonly DiskBlobCache ProgramCache = new(
+        Path.Combine(Nexus.Service.Persistence.NexusDataPaths.NexusRoot(), "cache", "angle-programs"),
+        ProgramCacheCapBytes);
+    private static string? _lastGetName;
+    private static byte[]? _lastGetBytes;
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    private static void BlobSet(void* key, nint keySize, void* value, nint valueSize)
+    {
+        try
+        {
+            if (key == null || value == null || keySize <= 0 || keySize > MaxBlobKeyBytes || valueSize <= 0)
+            {
+                return;
+            }
+            var name = DiskBlobCache.HexName(new ReadOnlySpan<byte>(key, (int)keySize));
+            ProgramCache.Put(name, new ReadOnlySpan<byte>(value, (int)valueSize));
+            GpuContext.Log($"[gpu] program cache store {name[..8]} {valueSize} bytes");
+        }
+        catch
+        {
+        }
+    }
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    private static nint BlobGet(void* key, nint keySize, void* value, nint valueSize)
+    {
+        try
+        {
+            if (key == null || keySize <= 0 || keySize > MaxBlobKeyBytes)
+            {
+                return 0;
+            }
+            var name = DiskBlobCache.HexName(new ReadOnlySpan<byte>(key, (int)keySize));
+            byte[]? bytes;
+            if (_lastGetName == name && _lastGetBytes is not null)
+            {
+                bytes = _lastGetBytes;
+            }
+            else
+            {
+                bytes = ProgramCache.TryGet(name);
+                if (bytes is null)
+                {
+                    return 0;
+                }
+                _lastGetName = name;
+                _lastGetBytes = bytes;
+            }
+            if (value != null && valueSize >= bytes.Length)
+            {
+                bytes.AsSpan().CopyTo(new Span<byte>(value, bytes.Length));
+                GpuContext.Log($"[gpu] program cache hit {name[..8]} {bytes.Length} bytes");
+                _lastGetName = null;
+                _lastGetBytes = null;
+            }
+            return bytes.Length;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>Persist compiled programs across restarts and context re-creates. Silent no-op when ANGLE lacks the extension.</summary>
+    private static void EnableProgramCache(void* display)
+    {
+        try
+        {
+            var extensions = Str(_eglQueryString(display, EglExtensions));
+            if (!extensions.Contains("EGL_ANDROID_blob_cache", StringComparison.Ordinal))
+            {
+                GpuContext.Log("[gpu] program cache: EGL_ANDROID_blob_cache not offered, compiling every start");
+                return;
+            }
+            void* setter;
+            fixed (byte* name = "eglSetBlobCacheFuncsANDROID\0"u8)
+            {
+                setter = _eglGetProcAddress(name);
+            }
+            if (setter == null)
+            {
+                GpuContext.Log("[gpu] program cache: eglSetBlobCacheFuncsANDROID missing");
+                return;
+            }
+            ((delegate* unmanaged[Cdecl]<void*, delegate* unmanaged[Cdecl]<void*, nint, void*, nint, void>, delegate* unmanaged[Cdecl]<void*, nint, void*, nint, nint>, void>)setter)(
+                display, &BlobSet, &BlobGet);
+            GpuContext.Log($"[gpu] program cache: EGL_ANDROID_blob_cache on, dir '{ProgramCache.Directory}'");
+        }
+        catch (Exception ex)
+        {
+            GpuContext.Log($"[gpu] program cache unavailable: {ex.Message}");
+        }
+    }
 
     /// <summary>Throws with the failing step when the libraries or an export are missing.</summary>
     private static void EnsureLoaded()
@@ -166,6 +266,7 @@ internal static unsafe partial class AngleContext
             {
                 throw Fail("eglInitialize failed");
             }
+            EnableProgramCache(display);
             _eglBindApi(EglOpenGlEsApi);
             var config = stackalloc int[]
             {

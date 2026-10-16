@@ -101,6 +101,7 @@ internal static class GpuFlopsKernel
     internal static GpuMeasurement Measure(
         GpuContext ctx, Action<double>? onProgress, CancellationToken ct)
     {
+        using var background = GpuContext.BeginBackground();
         lock (ctx.Lock)
         {
             ctx.EnsureInitializedLocked();

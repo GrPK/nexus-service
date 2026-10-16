@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Nexus.Service.Platform;
@@ -67,7 +66,7 @@ public sealed class GpuContext : IDisposable
     private Thread? _glThread;
     // One queue per GL thread: a lost context completes its queue so a late Invoke
     // fails fast instead of parking on an item nobody will take.
-    private BlockingCollection<Action> _workQueue = new(new ConcurrentQueue<Action>());
+    private GlWorkQueue _workQueue = new();
     private readonly ManualResetEventSlim _initDone = new(false);
     // Set only when an attempt actually produced a context. _initDone is also
     // set by a failure or an abandon, so a late-landing watcher needs its own
@@ -287,7 +286,7 @@ public sealed class GpuContext : IDisposable
         }
 
         _initStarted = true;
-        var queue = new BlockingCollection<Action>(new ConcurrentQueue<Action>());
+        var queue = new GlWorkQueue();
         _workQueue = queue;
         _glThread = new Thread(() => GlThreadMain(queue)) { IsBackground = true, Name = "nexus-gl" };
         _glThread.Start();
@@ -384,7 +383,7 @@ public sealed class GpuContext : IDisposable
         }
     }
 
-    private void GlThreadMain(BlockingCollection<Action> queue)
+    private void GlThreadMain(GlWorkQueue queue)
     {
         try
         {
@@ -399,7 +398,7 @@ public sealed class GpuContext : IDisposable
         }
     }
 
-    private void RunGlThread(BlockingCollection<Action> queue)
+    private void RunGlThread(GlWorkQueue queue)
     {
         try
         { _initAction(); }
@@ -429,28 +428,32 @@ public sealed class GpuContext : IDisposable
             _initDone.Set();
         }
 
+        var stats = new GlQueueStats(TimeSpan.FromSeconds(10));
         while (!_disposed && !_lostExit)
         {
-            Action work;
+            GlJob job;
             try
-            { work = queue.Take(); }
+            { job = queue.Take(); }
             catch (InvalidOperationException) { return; }
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
             try
-            { work(); }
+            { job.Work(); }
             catch (Exception ex) { Log($"[gpu] work item threw: {ex}"); }
+            if (stats.Record(job, started, System.Diagnostics.Stopwatch.GetTimestamp()) is { } summary)
+            {
+                Log(summary);
+            }
         }
 
         // A lost context leaves callers parked in Invoke. Completing the queue first
         // means nothing can be added past the drain below (a late Add throws and
         // Invoke returns), so every item that did get in runs against the dead
         // context (each throws or no-ops) and its waiter is released.
-        try
-        { queue.CompleteAdding(); }
-        catch (ObjectDisposedException) { }
+        queue.CompleteAdding();
         while (queue.TryTake(out var pending))
         {
             try
-            { pending(); }
+            { pending.Work(); }
             catch (Exception) { }
         }
     }
@@ -476,9 +479,7 @@ public sealed class GpuContext : IDisposable
         }
         Log($"[gpu] context lost ({reason}); re-creating");
         // Wakes a GL thread blocked waiting for work and refuses any later Invoke.
-        try
-        { _workQueue.CompleteAdding(); }
-        catch (ObjectDisposedException) { }
+        _workQueue.CompleteAdding();
         var thread = _glThread;
         var handler = ContextLost;
         // A driver reset can renumber adapters; the cached enumeration would hand back stale LUIDs.
@@ -524,9 +525,7 @@ public sealed class GpuContext : IDisposable
             thread = _glThread;
         }
         // Wake the thread out of its blocking Take.
-        try
-        { _workQueue.CompleteAdding(); }
-        catch (ObjectDisposedException) { }
+        _workQueue.CompleteAdding();
         if (thread is not null && !thread.Join(TimeSpan.FromSeconds(10)))
         {
             lock (_lock)
@@ -608,6 +607,27 @@ public sealed class GpuContext : IDisposable
 #endif
     }
 
+    // Per calling thread: while > 0, this thread's Invoke calls ride the background lane.
+    [ThreadStatic]
+    private static int _backgroundDepth;
+
+    private sealed class BackgroundScope : IDisposable
+    {
+        public void Dispose() => _backgroundDepth--;
+    }
+
+    /// <summary>
+    /// Mark this thread's GL work as background (thumbnails, validation,
+    /// benchmark kernels) until the scope is disposed. Background jobs run only
+    /// when no live frame is waiting, so a burst of them cannot delay the
+    /// lighting engine by more than the one job already executing.
+    /// </summary>
+    public static IDisposable BeginBackground()
+    {
+        _backgroundDepth++;
+        return new BackgroundScope();
+    }
+
     /// <summary>
     /// Run <paramref name="work"/> on the dedicated GL thread and block the
     /// caller until it returns. The caller does not need to hold <see cref="Lock"/>.
@@ -634,7 +654,7 @@ public sealed class GpuContext : IDisposable
                 { work(); }
                 catch (Exception ex) { caught = ex; }
                 finally { done.Set(); }
-            });
+            }, _backgroundDepth > 0);
         }
         catch (InvalidOperationException)
         {
@@ -903,9 +923,7 @@ public sealed class GpuContext : IDisposable
             }
             _disposed = true;
         }
-        try
-        { _workQueue.CompleteAdding(); }
-        catch { }
+        _workQueue.CompleteAdding();
         // If the GL thread didn't actually exit it may still be mid-GL-call with
         // the context current; destroying the native context underneath it
         // (eglTerminate / CGLDestroyContext) is undefined and can segfault. Only

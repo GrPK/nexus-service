@@ -619,15 +619,18 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         }
     }
 
+    // Bump when the thumbnail render pipeline changes so old disk entries are not served.
+    private const int ThumbnailDiskVersion = 1;
+    private const long ThumbnailDiskCapBytes = 64L * 1024 * 1024;
+
+    // Rendered thumbnails survive a restart, so repeat visits skip the compile + render.
+    private readonly Engine.Gpu.DiskBlobCache _thumbnailDisk = new(
+        System.IO.Path.Combine(Nexus.Service.Persistence.NexusDataPaths.NexusRoot(), "cache", "lighting-thumbnails"),
+        ThumbnailDiskCapBytes);
+
     private (byte[] Bytes, string Tag)? CaptureAnimateThumbnailCore(string key, int slot, bool skipCache, bool frozen)
     {
-        // Shader thumbnails are GPU-rendered; with no usable GPU the render is a
-        // no-op and the frame stays black, so skip it and let the caller 404 -
-        // the UI shows a placeholder instead of a grid of black tiles.
-        if (!_gpu.Available)
-        {
-            return null;
-        }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var name = (key ?? "").ToLowerInvariant();
         if (!ShaderLibrary.IsKnownKey(name))
         {
@@ -647,9 +650,26 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         {
             return (cached.Bytes, tag);
         }
+        var diskName = Engine.Gpu.DiskBlobCache.ThumbnailName(name, slot, frozen, tag, ThumbnailDiskVersion);
+        if (!skipCache && _thumbnailDisk.TryGet(diskName) is { } onDisk)
+        {
+            _thumbnailCache[cacheKey] = (tag, onDisk);
+            Engine.Gpu.GpuContext.Log($"[thumb] {cacheKey} disk {sw.Elapsed.TotalMilliseconds:0}ms");
+            return (onDisk, tag);
+        }
+
+        // Shader thumbnails are GPU-rendered; with no usable GPU the render is a
+        // no-op and the frame stays black, so skip it and let the caller 404 -
+        // the UI shows a placeholder instead of a grid of black tiles.
+        if (!_gpu.Available)
+        {
+            return null;
+        }
 
         var canvas = new Engine.CanvasBuffer(160, 90);
         var effect = BuildThumbnailEffect(name, defaults, state, frozen);
+        // Thumbnails ride the GL thread's background lane so a page full of them cannot stall the live frame.
+        using var background = Engine.Gpu.GpuContext.BeginBackground();
         try
         {
             if (!frozen && TimeLapseWindowMs(name) is var (start, span))
@@ -669,6 +689,12 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         }
         var bytes = BmpEncoder.Encode(canvas.Pixels, canvas.Width, canvas.Height);
         _thumbnailCache[cacheKey] = (tag, bytes);
+        // A failed compile or a lost context leaves a black frame: serve it, but never persist it.
+        if (_gpu.Available && effect is not ShaderEffect { HasFailed: true })
+        {
+            _thumbnailDisk.Put(diskName, bytes);
+        }
+        Engine.Gpu.GpuContext.Log($"[thumb] {cacheKey} render {sw.Elapsed.TotalMilliseconds:0}ms");
         return (bytes, tag);
     }
 
