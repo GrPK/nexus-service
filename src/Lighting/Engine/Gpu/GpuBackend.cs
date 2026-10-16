@@ -58,4 +58,17 @@ internal static class GpuBackend
 
     public static bool IsAngle(string? requested) =>
         string.Equals(Resolve(requested), Angle, StringComparison.Ordinal);
+
+    /// <summary>The Lighting.RenderGpu value that renders shaders on the CPU (ANGLE WARP).</summary>
+    public const string SoftwareChoice = "software";
+
+    public static bool IsSoftwareChoice(string? renderGpu) =>
+        string.Equals(renderGpu?.Trim(), SoftwareChoice, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Forced software rendering needs the ANGLE backend, since WARP is an ANGLE adapter.</summary>
+    public static bool SoftwareRenderingAvailable(string? requestedBackend, bool angleAvailable) =>
+        string.Equals(Resolve(requestedBackend, angleAvailable), Angle, StringComparison.Ordinal);
+
+    /// <summary>True for this session when the user's "software" choice took effect at boot. Set once by the warmup.</summary>
+    public static volatile bool SoftwareForced;
 }

@@ -95,6 +95,8 @@ public sealed class IdleDimStatus
 public class RenderGpuBody
 {
     public string Value { get; set; } = "auto";
+    /// <summary>GET only: true when "software" (CPU rendering) is a valid Value, i.e. the ANGLE backend is in use.</summary>
+    public bool SoftwareRenderingAvailable { get; set; }
 }
 
 public class SpeedScale

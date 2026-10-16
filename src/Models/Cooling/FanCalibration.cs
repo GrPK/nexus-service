@@ -75,6 +75,8 @@ public sealed class LightingStatusResponse
     public string GpuRenderer { get; set; } = "";
     /// <summary>True when shader lighting runs on the CPU (ANGLE WARP) because no GPU produced a context.</summary>
     public bool GpuSoftware { get; set; }
+    /// <summary>True when GpuSoftware is the user's "software" render choice rather than the automatic fallback.</summary>
+    public bool GpuSoftwareForced { get; set; }
 }
 
 public sealed class GetCalibrationsResponse
