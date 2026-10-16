@@ -31,6 +31,7 @@ internal static class LedSpaceGate
     internal const int SweepFrames = 30;
     private const int ChunkTaps = 4800;
     private const int MaxVerdictCacheBytes = 1024 * 1024;
+    private const int MaxEntries = 256;
 
     private sealed class Entry
     {
@@ -41,6 +42,7 @@ internal static class LedSpaceGate
 
     private static readonly object Gate = new();
     private static readonly Dictionary<string, Entry> Entries = new(StringComparer.Ordinal);
+    private static readonly Queue<string> EntryOrder = new();
     private static DiskBlobCache? _disk;
 
     /// <summary>Environment switch: NEXUS_LED_SPACE=0 closes the path everywhere.</summary>
@@ -67,11 +69,12 @@ internal static class LedSpaceGate
     }
 
     /// <summary>Everything the verdict depends on: the source, the rewrite, and the GPU stack that compiles it.</summary>
-    internal static string Key(string fragSource, string? renderer, string? glVersion)
+    internal static string Key(string fragSource, string? renderer, string? glVersion, bool ownsD3dDevice = false)
     {
+        // A context on a device this process created does not share verdicts with one on ANGLE's own device.
         var text = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"ledspace|{Version}|{LedWindowShader.MaxFrames}|{renderer}|{glVersion}|{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fragSource)))}");
+            $"ledspace|{Version}|{LedWindowShader.MaxFrames}|{renderer}|{glVersion}|{(ownsD3dDevice ? "own" : "angle")}|{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fragSource)))}");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
     }
 
@@ -87,7 +90,7 @@ internal static class LedSpaceGate
         {
             return false;
         }
-        var key = Key(fx.FragSource, ctx.Renderer, ctx.GlVersion);
+        var key = fx.LedGateKey();
         Entry entry;
         bool start;
         lock (Gate)
@@ -95,8 +98,7 @@ internal static class LedSpaceGate
             start = !Entries.TryGetValue(key, out entry!);
             if (start)
             {
-                entry = new Entry();
-                Entries[key] = entry;
+                entry = Add(key);
             }
         }
         if (start)
@@ -107,8 +109,21 @@ internal static class LedSpaceGate
         {
             return false;
         }
-        var lp = LedWindowStore.For(ctx).Program(ctx, fx.FragSource);
+        var lp = fx.LedProgramForSource();
         return lp is not null && lp.State == LedProgram.Ready && lp.Generation == ctx.Generation;
+    }
+
+    /// <summary>Caller holds the gate. Oldest entries go first once the table is full; a sweep in flight keeps its own entry.</summary>
+    private static Entry Add(string key)
+    {
+        while (Entries.Count >= MaxEntries && EntryOrder.TryDequeue(out var oldest))
+        {
+            Entries.Remove(oldest);
+        }
+        var entry = new Entry();
+        Entries[key] = entry;
+        EntryOrder.Enqueue(key);
+        return entry;
     }
 
     /// <summary>Latest known verdict without starting anything. For tests and diagnostics.</summary>
@@ -124,14 +139,13 @@ internal static class LedSpaceGate
     internal static void Reject(ShaderEffect fx, string detail)
     {
         var ctx = fx.Context;
-        var key = Key(fx.FragSource, ctx.Renderer, ctx.GlVersion);
+        var key = fx.LedGateKey();
         Entry? entry;
         lock (Gate)
         {
             if (!Entries.TryGetValue(key, out entry))
             {
-                entry = new Entry();
-                Entries[key] = entry;
+                entry = Add(key);
             }
         }
         Conclude(key, entry, fx.Name, LedVerdict.Rejected, detail);
@@ -191,19 +205,25 @@ internal static class LedSpaceGate
         var flags = LedWindowShader.CanvasDependencyFlags(frag).Where(static f => f is "derivative" or "texture" or "discard").ToList();
         if (flags.Count > 0)
         {
-            Conclude(key, entry, name, LedVerdict.Rejected, "reads neighbouring pixels: " + string.Join(',', flags));
+            Conclude(key, entry, name, LedVerdict.Rejected, "reads neighboring pixels: " + string.Join(',', flags));
             return;
         }
         // The program build starts now so a cached Exact verdict finds it ready.
-        LedWindowStore.For(ctx).Program(ctx, frag);
-        var cached = ReadCached(Disk, key);
-        if (cached is { } known)
+        fx.LedProgramForSource();
+        // The verdict cache starts loading now; the thread below waits for it before reading.
+        var disk = Disk;
+        new Thread(() => RunGate(disk, ctx, name, frag, key, entry)) { IsBackground = true, Name = "nexus-ledspace-gate", Priority = ThreadPriority.BelowNormal }.Start();
+    }
+
+    /// <summary>FNV-1a over the source bytes, so every run sweeps the same randomized windows for the same source.</summary>
+    private static int StableSeed(string text)
+    {
+        var h = 2166136261u;
+        foreach (var b in Encoding.UTF8.GetBytes(text))
         {
-            entry.Reason = "cached";
-            entry.Verdict = known;
-            return;
+            h = (h ^ b) * 16777619u;
         }
-        new Thread(() => RunSweep(ctx, name, frag, key, entry)) { IsBackground = true, Name = "nexus-ledspace-gate", Priority = ThreadPriority.BelowNormal }.Start();
+        return unchecked((int)h);
     }
 
     private static long[] WindowTicks(long baseMs, int salt)
@@ -216,10 +236,16 @@ internal static class LedSpaceGate
         return t;
     }
 
-    private static void RunSweep(GpuContext ctx, string name, string frag, string key, Entry entry)
+    private static void RunGate(DiskBlobCache disk, GpuContext ctx, string name, string frag, string key, Entry entry)
     {
         try
         {
+            if (disk.WaitReady(TimeSpan.FromSeconds(30)) && ReadCached(disk, key) is { } known)
+            {
+                entry.Reason = "cached";
+                entry.Verdict = known;
+                return;
+            }
             using var background = GpuContext.BeginBackground();
             var reason = SweepBlocking(ctx, name, frag, out var definitive);
             Conclude(key, entry, name, reason is null ? LedVerdict.Exact : LedVerdict.Rejected, reason ?? "golden sweep matched", persist: reason is null || definitive);
@@ -255,7 +281,7 @@ internal static class LedSpaceGate
             canvases[i] = new CanvasBuffer(w, h);
         }
         var specs = ShaderLibrary.IsCustomKey(name) ? ShaderParamSpec.Parse(frag) : ShaderLibrary.Params(name);
-        var rng = new Random(unchecked((int)(0x9E3779B1u * (uint)name.GetHashCode(StringComparison.Ordinal))));
+        var rng = new Random(StableSeed(frag));
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         const long Day = 86_400_000;
         var bases = new long[]

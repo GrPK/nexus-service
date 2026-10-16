@@ -138,6 +138,9 @@ public sealed class GpuContext : IDisposable
     // once init succeeds. Null until then.
     public string? Renderer { get; private set; }
 
+    /// <summary>True when the live context renders on a D3D11 device this process created itself, not on ANGLE's own device.</summary>
+    internal bool OwnsD3dDevice { get; private set; }
+
     /// <summary>GL_VERSION of the live context, which for ANGLE names its build.</summary>
     public string? GlVersion { get; private set; }
 
@@ -240,6 +243,7 @@ public sealed class GpuContext : IDisposable
             _gl = null;
             Renderer = null;
             GlVersion = null;
+            OwnsD3dDevice = false;
             _fbo = 0;
             _fboTex = 0;
             _quadVao = 0;
@@ -370,6 +374,7 @@ public sealed class GpuContext : IDisposable
             _gl = null;
             Renderer = null;
             GlVersion = null;
+            OwnsD3dDevice = false;
             _fbo = 0;
             _fboTex = 0;
             _quadVao = 0;
@@ -1084,6 +1089,7 @@ public sealed class GpuContext : IDisposable
         try
         {
             _angle = AngleContext.CreateAndMakeCurrent(target, _width, _height);
+            OwnsD3dDevice = _angle.Device != 0;
             _gl = GL.GetApi(new AngleNativeContext());
         }
         catch (Exception)

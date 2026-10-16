@@ -24,7 +24,7 @@ internal sealed class LedTapLayout
 /// <summary>
 /// Pure pieces of the LED-space probe: which canvas pixels an LED reads, how those reads reduce to
 /// one color, how a fragment source is rewritten to evaluate at chosen pixel centers, and which
-/// source constructs make an effect depend on neighbouring pixels. Probe only; the live engine keeps
+/// source constructs make an effect depend on neighboring pixels. Probe only; the live engine keeps
 /// its own copy of the sampling rules.
 /// </summary>
 internal static class LedSpaceCore

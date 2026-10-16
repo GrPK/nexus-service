@@ -68,6 +68,8 @@ service runs as LocalSystem and cannot see user-scope variables):
 | `NEXUS_OPENRGB_VERBOSITY` | `verbose` or `trace` raises what the OpenRGB child prints into the service log. Applies at launch. |
 | `NEXUS_STOP_SETTLE_MS` | How long turning lighting off waits after the final black frame before the OpenRGB child is killed (default 300, max 5000). |
 | `NEXUS_DISCORD_PRESENCE_CLIENT_ID` | Discord application used for Rich Presence, to test against a scratch application. |
+| `NEXUS_LED_SPACE` | Windows only. `0` closes the LED-space look-ahead window path so every window renders through the canvas path. |
+| `NEXUS_D3D_PREVENT_THREADING` | Windows only. `1` creates the ANGLE renderer's D3D11 device with the driver's internal threading off. |
 | `NEXUS_API_BASE`, `NEXUS_CLOUD_API` | Cloud API base override for the account and LED-mapping clients, and for the store catalog proxy respectively. |
 
 ## Source layout
@@ -236,9 +238,10 @@ threading flag).
 
 Look-ahead windows render through one LED-space draw per window once an
 exactness gate has proven a shader byte-identical to the canvas render on the
-running GPU; any other case uses the canvas path. `NEXUS_LED_SPACE=0` closes
-the window path. `NEXUS_D3D_PREVENT_THREADING=1` creates the ANGLE D3D11 device
-with the driver's internal threading off (off by default).
+running GPU; any other case uses the canvas path. The window path is
+Windows-only, and `NEXUS_LED_SPACE=0` closes it. `NEXUS_D3D_PREVENT_THREADING=1`
+(Windows-only) creates the ANGLE D3D11 device with the driver's internal
+threading off (off by default).
 
 ## Releases
 

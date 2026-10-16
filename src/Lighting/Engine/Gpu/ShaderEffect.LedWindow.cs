@@ -40,6 +40,7 @@ internal sealed class LedWindowStore
     private static readonly ConditionalWeakTable<GpuContext, LedWindowStore> Stores = new();
     private readonly object _gate = new();
     private readonly Dictionary<string, LedProgram> _programs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _users = new(StringComparer.Ordinal);
 
     public static LedWindowStore For(GpuContext ctx) => Stores.GetValue(ctx, static _ => new LedWindowStore());
 
@@ -64,6 +65,60 @@ internal sealed class LedWindowStore
             return lp;
         }
     }
+
+    /// <summary>One more effect instance keeps the source's program alive.</summary>
+    public void AddUser(string fragSource)
+    {
+        lock (_gate)
+        {
+            _users[fragSource] = _users.GetValueOrDefault(fragSource) + 1;
+        }
+    }
+
+    /// <summary>An effect instance is gone. With no instance left on the source, its program is deleted from the context.</summary>
+    public void RemoveUser(GpuContext ctx, string fragSource)
+    {
+        LedProgram? gone = null;
+        lock (_gate)
+        {
+            var left = _users.GetValueOrDefault(fragSource) - 1;
+            if (left > 0)
+            {
+                _users[fragSource] = left;
+                return;
+            }
+            _users.Remove(fragSource);
+            if (_programs.Remove(fragSource, out var lp))
+            {
+                gone = lp;
+            }
+        }
+        if (gone is null)
+        {
+            return;
+        }
+        var program = gone;
+        Task.Run(() =>
+        {
+            try
+            {
+                if (!program.Done.Wait(TimeSpan.FromMinutes(3)) || program.Handle == 0 || program.Generation != ctx.Generation || !ctx.Available)
+                {
+                    return;
+                }
+                ctx.Invoke(() =>
+                {
+                    if (program.Generation == ctx.Generation)
+                    {
+                        ctx.Gl.DeleteProgram(program.Handle);
+                    }
+                });
+            }
+            catch (Exception)
+            {
+            }
+        });
+    }
 }
 
 public sealed partial class ShaderEffect
@@ -72,6 +127,48 @@ public sealed partial class ShaderEffect
     internal const int LedWindowMaxTaps = 8192;
 
     internal string FragSource => _fragSource;
+
+    private int _ledUser;
+    private sealed record GateKeyBox(int Generation, string Key);
+
+    private volatile GateKeyBox? _ledGateKey;
+
+    /// <summary>The LED program for this effect's source, counting this instance as a user so disposing the last one frees it.</summary>
+    internal LedProgram? LedProgramForSource()
+    {
+        var store = LedWindowStore.For(_ctx);
+        var lp = store.Program(_ctx, _fragSource);
+        if (Interlocked.Exchange(ref _ledUser, 1) == 0)
+        {
+            store.AddUser(_fragSource);
+            if (_disposed)
+            {
+                ReleaseLedUser();
+            }
+        }
+        return lp;
+    }
+
+    internal void ReleaseLedUser()
+    {
+        if (Interlocked.Exchange(ref _ledUser, 0) == 1)
+        {
+            LedWindowStore.For(_ctx).RemoveUser(_ctx, _fragSource);
+        }
+    }
+
+    /// <summary>The exactness-gate key for this source on the live context, computed once per context generation.</summary>
+    internal string LedGateKey()
+    {
+        var generation = _ctx.Generation;
+        if (_ledGateKey is { } cached && cached.Generation == generation)
+        {
+            return cached.Key;
+        }
+        var key = LedSpaceGate.Key(_fragSource, _ctx.Renderer, _ctx.GlVersion, _ctx.OwnsD3dDevice);
+        _ledGateKey = new GateKeyBox(generation, key);
+        return key;
+    }
 
     /// <summary>Test seam: stands for a proven-exact LED window. Fills RGBA texels, frame-major, in the order the pixels are given.</summary>
     internal Func<int[], int[], double[], int, byte[], bool>? TestLedWindow;
@@ -157,7 +254,7 @@ public sealed partial class ShaderEffect
         {
             return false;
         }
-        var lp = LedWindowStore.For(_ctx).Program(_ctx, _fragSource);
+        var lp = LedProgramForSource();
         if (lp is null || lp.State != LedProgram.Ready || lp.Generation != _ctx.Generation)
         {
             return false;

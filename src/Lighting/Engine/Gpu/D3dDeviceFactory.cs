@@ -14,7 +14,15 @@ internal static unsafe class D3dDeviceFactory
     private static extern int CreateDXGIFactory1(ref Guid riid, out nint factory);
 
     [DllImport("d3d11.dll")]
-    private static extern int D3D11CreateDevice(nint adapter, uint driverType, nint software, uint flags, nint levels, uint nLevels, uint sdk, out nint device, out uint level, out nint context);
+    private static extern int D3D11CreateDevice(nint adapter, uint driverType, nint software, uint flags, uint* levels, uint nLevels, uint sdk, out nint device, out uint level, out nint context);
+
+    private const int InvalidArg = unchecked((int)0x80070057);
+
+    /// <summary>The feature levels ANGLE asks for when it creates its own device, highest first.</summary>
+    private static readonly uint[] FeatureLevels = [0xC100, 0xC000, 0xB100, 0xB000, 0xA100, 0xA000];
+
+    /// <summary>Same retry ANGLE makes: a runtime that rejects the list for its newest levels is asked again without its newest levels.</summary>
+    private const int FirstLevelWithoutNewest = 3;
 
     private static nint VTable(nint obj, int index) => ((nint*)*(nint*)obj)[index];
 
@@ -65,7 +73,18 @@ internal static unsafe class D3dDeviceFactory
             {
                 return 0;
             }
-            if (D3D11CreateDevice(adapter, 0, 0, flags, 0, 0, 7, out var device, out _, out var context) < 0)
+            nint device;
+            nint context;
+            int hr;
+            fixed (uint* levels = FeatureLevels)
+            {
+                hr = D3D11CreateDevice(adapter, 0, 0, flags, levels, (uint)FeatureLevels.Length, 7, out device, out _, out context);
+                if (hr == InvalidArg)
+                {
+                    hr = D3D11CreateDevice(adapter, 0, 0, flags, levels + FirstLevelWithoutNewest, (uint)(FeatureLevels.Length - FirstLevelWithoutNewest), 7, out device, out _, out context);
+                }
+            }
+            if (hr < 0)
             {
                 return 0;
             }

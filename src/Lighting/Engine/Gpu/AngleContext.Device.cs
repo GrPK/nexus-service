@@ -17,9 +17,38 @@ internal static unsafe partial class AngleContext
         return Str(_eglQueryString(null, EglExtensions));
     }
 
-    /// <summary>An initialized ANGLE display over a caller-created D3D11 device, or null (nothing left open) when the build lacks the extension or any step fails.</summary>
-    internal static void* DisplayOnDevice(nint d3d11Device, out int major, out int minor)
+    /// <summary>Frees an EGL device made by eglCreateDeviceANGLE, which drops the reference it took on the D3D11 device. Call after the last display on it is terminated.</summary>
+    internal static void ReleaseEglDevice(nint eglDevice)
     {
+        if (eglDevice == 0)
+        {
+            return;
+        }
+        try
+        {
+            void* release;
+            fixed (byte* name = "eglReleaseDeviceANGLE\0"u8)
+            {
+                release = _eglGetProcAddress(name);
+            }
+            if (release != null)
+            {
+                ((delegate* unmanaged[Cdecl]<void*, uint>)release)((void*)eglDevice);
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// An initialized ANGLE display over a caller-created D3D11 device, or null (nothing left open, EGL device released) when the
+    /// build lacks the extension or any step fails. On success <paramref name="eglDevice"/> is owned by the caller and must be
+    /// released with <see cref="ReleaseEglDevice"/> after the display is terminated.
+    /// </summary>
+    internal static void* DisplayOnDevice(nint d3d11Device, out nint eglDevice, out int major, out int minor)
+    {
+        eglDevice = 0;
         major = 0;
         minor = 0;
         void* create;
@@ -31,21 +60,25 @@ internal static unsafe partial class AngleContext
         {
             return null;
         }
-        var eglDevice = ((delegate* unmanaged[Cdecl]<int, void*, nint*, void*>)create)(EglD3D11DeviceAngle, (void*)d3d11Device, null);
-        if (eglDevice == null)
+        var created = ((delegate* unmanaged[Cdecl]<int, void*, nint*, void*>)create)(EglD3D11DeviceAngle, (void*)d3d11Device, null);
+        if (created == null)
         {
             return null;
         }
-        var display = _eglGetPlatformDisplayExt(EglPlatformDeviceExt, eglDevice, null);
+        var display = _eglGetPlatformDisplayExt(EglPlatformDeviceExt, created, null);
         if (display == null)
         {
+            ReleaseEglDevice((nint)created);
             return null;
         }
         int mj, mn;
         if (_eglInitialize(display, &mj, &mn) == 0)
         {
+            _eglTerminate(display);
+            ReleaseEglDevice((nint)created);
             return null;
         }
+        eglDevice = (nint)created;
         major = mj;
         minor = mn;
         return display;
@@ -55,9 +88,10 @@ internal static unsafe partial class AngleContext
     /// With the switch on, an initialized display over a device created with the prevent-threading flag on the target adapter.
     /// Null on any failure, with the device released, so the caller creates its display the ordinary way.
     /// </summary>
-    private static void* TryPreventThreadingDisplay(AngleTarget target, out nint device, out int major, out int minor)
+    private static void* TryPreventThreadingDisplay(AngleTarget target, out nint device, out nint eglDevice, out int major, out int minor)
     {
         device = 0;
+        eglDevice = 0;
         major = 0;
         minor = 0;
         if (!PreventDriverThreading || target.Warp)
@@ -72,7 +106,7 @@ internal static unsafe partial class AngleContext
                 GpuContext.Log("[gpu] D3D11 prevent-threading device could not be created; using ANGLE's own device");
                 return null;
             }
-            var display = DisplayOnDevice(device, out major, out minor);
+            var display = DisplayOnDevice(device, out eglDevice, out major, out minor);
             if (display == null)
             {
                 GpuContext.Log("[gpu] ANGLE refused the prevent-threading device; using its own device");

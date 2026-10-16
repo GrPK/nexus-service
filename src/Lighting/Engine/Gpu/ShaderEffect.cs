@@ -719,6 +719,7 @@ public sealed partial class ShaderEffect : IEffect
             return;
         }
         Interlocked.Increment(ref DisposeCount);
+        ReleaseLedUser();
         DropPredecessor();
         if (_ctx.Available && _generation == _ctx.Generation && (_program != 0 || _build.Build is not null))
         {

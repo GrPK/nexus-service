@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace Nexus.Service.Lighting.Engine.Gpu;
 
-/// <summary>Turns an effect's fragment source into one that evaluates at chosen pixel centers, and names the constructs that make a pixel depend on its neighbours.</summary>
+/// <summary>Turns an effect's fragment source into one that evaluates at chosen pixel centers, and names the constructs that make a pixel depend on its neighbors.</summary>
 internal static class LedWindowShader
 {
     /// <summary>Rows (frames) one LED-window draw covers at most; sizes the clock table in the rewritten source.</summary>
@@ -56,8 +56,7 @@ internal static class LedWindowShader
 
     /// <summary>
     /// Source constructs that make a pixel depend on something other than its coordinate, the clock and
-    /// uniforms. Comments are ignored; the shared prelude is skipped so only the effect's own text counts,
-    /// apart from texture and discard, which are checked everywhere.
+    /// uniforms. Comments are ignored; the shared prelude is skipped so only the effect's own text counts.
     /// </summary>
     public static List<string> CanvasDependencyFlags(string source)
     {
