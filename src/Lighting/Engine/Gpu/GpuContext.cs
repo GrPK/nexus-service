@@ -448,6 +448,10 @@ public sealed class GpuContext : IDisposable
             { job = queue.Take(); }
             catch (InvalidOperationException) { break; }
             var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!job.Background)
+            {
+                RecordLiveWait(started - job.EnqueuedTicks);
+            }
             try
             { job.Work(); }
             catch (Exception ex) { Log($"[gpu] work item threw: {ex}"); }
@@ -707,6 +711,23 @@ public sealed class GpuContext : IDisposable
     private bool _handedSlot;
 
     /// <summary>Take a background compile slot: the one handed to this run if any, else a free one. GL thread only.</summary>
+    private long _maxLiveWaitTicks;
+
+    private void RecordLiveWait(long ticks)
+    {
+        long seen;
+        while (ticks > (seen = Volatile.Read(ref _maxLiveWaitTicks)))
+        {
+            if (Interlocked.CompareExchange(ref _maxLiveWaitTicks, ticks, seen) == seen)
+            {
+                break;
+            }
+        }
+    }
+
+    /// <summary>Longest a live job sat in the queue before the GL thread took it, measured on the GL thread.</summary>
+    internal double MaxLiveWaitMs => Volatile.Read(ref _maxLiveWaitTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
     internal bool TryAcquireCompileSlot()
     {
         if (_handedSlot)

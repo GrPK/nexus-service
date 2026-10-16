@@ -1105,7 +1105,7 @@ public sealed partial class LightingEngine : IDisposable
                     {
                         render.Effect.RenderFrame(render.Canvas, nowMs);
                         // Still compiling with nothing to stand in: leave the devices on the global canvas instead of a blank one.
-                        // A shader that failed outright stays pinned (black), as before, rather than recompiling every retry.
+                        // A shader that failed outright stays pinned (black) instead of recompiling on every retry.
                         render.Rendered = render.Effect is not Gpu.ShaderEffect { IsRenderPending: true, CanPaint: false };
                     }
                     catch (Exception ex)
