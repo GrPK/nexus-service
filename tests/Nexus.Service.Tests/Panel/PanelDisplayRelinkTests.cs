@@ -39,13 +39,24 @@ public class PanelDisplayRelinkTests
     }
 
     [Fact]
-    public void Changed_serial_with_single_orphan_and_single_candidate_moves()
+    public void Strong_vs_strong_serial_mismatch_is_a_different_monitor()
     {
         var plan = PanelDisplayRelink.Plan(
             new[] { Rec("p1", "old", Fp(1111)) },
             new[] { Disp("new", Fp(2222)) });
 
-        Assert.Equal("new", Assert.Single(plan.Moves).NewDisplayId);
+        Assert.Empty(plan.Moves);
+    }
+
+    [Fact]
+    public void Strong_orphan_with_a_weak_candidate_is_a_weak_move()
+    {
+        var plan = PanelDisplayRelink.Plan(
+            new[] { Rec("p1", "old", Fp(1111)) },
+            new[] { Disp("new", Fp(0)) });
+
+        var move = Assert.Single(plan.Moves);
+        Assert.True(move.Weak);
     }
 
     [Theory]
@@ -198,11 +209,11 @@ public class PanelDisplayRelinkTests
         });
 
         // Scan 1: monitor attached under its original id, fingerprint is backfilled.
-        Assert.Empty(registry.ReconcileDisplayFingerprints(new[] { Disp("old-id", Fp(77)) }));
+        Assert.Empty(registry.ReconcileDisplayFingerprints(new[] { Disp("old-id", Fp(77)) }).Applied);
         Assert.Equal(77, store.Load().PanelDevices[record.Id].DisplayFingerprint!.Serial);
 
         // Scan 2: same hardware under a new id.
-        var moves = registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(77)) });
+        var moves = registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(77)) }).Applied;
 
         Assert.Equal(("old-id", "new-id"), (moves.Single().OldDisplayId, moves.Single().NewDisplayId));
         var stored = store.Load().PanelDevices[record.Id];
@@ -221,7 +232,7 @@ public class PanelDisplayRelinkTests
         registry.ReconcileDisplayFingerprints(new[] { Disp("old-id", Fp(77)) });
         registry.Remove(record.Id);
 
-        var moves = registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(77)) });
+        var moves = registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(77)) }).Applied;
 
         Assert.Empty(moves);
         Assert.Empty(store.Load().PanelDevices);
@@ -231,10 +242,13 @@ public class PanelDisplayRelinkTests
     public void Registry_relink_makes_auto_promotion_skip_the_display()
     {
         var store = new InMemoryConfigStore();
-        var registry = new PanelDeviceRegistry(store);
+        var clock = 0L;
+        var registry = new PanelDeviceRegistry(store) { ClockMs = () => clock };
         var (record, _) = registry.AllocateForDisplay("old-id", "Edge", null);
         registry.ReconcileDisplayFingerprints(new[] { Disp("old-id", Fp(0, mfg: "CRX", product: "ED00")) });
 
+        registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(0, mfg: "CRX", product: "ED00")) });
+        clock = 6000;
         registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(0, mfg: "CRX", product: "ED00")) });
 
         Assert.Equal(record.Id, registry.FindByDisplayId("new-id")?.Id);
@@ -275,5 +289,87 @@ public class PanelDisplayRelinkTests
         Assert.Null(EdidFingerprint.FromParts("", "41B7"));
         Assert.Null(EdidFingerprint.FromParts("DEL", null));
         Assert.Equal(5, EdidFingerprint.FromParts("DEL", "41B7", 5)!.Serial);
+    }
+
+    private static (PanelDeviceRegistry Registry, InMemoryConfigStore Store, string RecordId, System.Func<long> Now, System.Action<long> Set) WeakSetup()
+    {
+        var store = new InMemoryConfigStore();
+        var clock = 0L;
+        var registry = new PanelDeviceRegistry(store) { ClockMs = () => clock };
+        var (record, _) = registry.AllocateForDisplay("old-id", null, null);
+        registry.ReconcileDisplayFingerprints(new[] { Disp("old-id", Fp(0)) });
+        return (registry, store, record.Id, () => clock, t => clock = t);
+    }
+
+    [Fact]
+    public void Weak_plan_seen_once_is_a_no_op_and_requests_a_recheck()
+    {
+        var (registry, store, id, _, _) = WeakSetup();
+
+        var result = registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(0)) });
+
+        Assert.Empty(result.Applied);
+        Assert.True(result.PendingWeak);
+        Assert.Equal("old-id", store.Load().PanelDevices[id].DisplayId);
+    }
+
+    [Fact]
+    public void Weak_plan_seen_on_two_scans_five_seconds_apart_applies()
+    {
+        var (registry, store, id, _, set) = WeakSetup();
+        var scan = new[] { Disp("new-id", Fp(0)) };
+
+        registry.ReconcileDisplayFingerprints(scan);
+        set(4999);
+        Assert.Empty(registry.ReconcileDisplayFingerprints(scan).Applied);
+        set(5000);
+        var result = registry.ReconcileDisplayFingerprints(scan);
+
+        Assert.Single(result.Applied);
+        Assert.False(result.PendingWeak);
+        Assert.Equal("new-id", store.Load().PanelDevices[id].DisplayId);
+    }
+
+    [Fact]
+    public void Weak_plan_that_changes_between_scans_resets_the_timer()
+    {
+        var (registry, store, id, _, set) = WeakSetup();
+
+        registry.ReconcileDisplayFingerprints(new[] { Disp("new-a", Fp(0)) });
+        set(4000);
+        registry.ReconcileDisplayFingerprints(new[] { Disp("new-b", Fp(0)) });
+        set(8000);
+        Assert.Empty(registry.ReconcileDisplayFingerprints(new[] { Disp("new-b", Fp(0)) }).Applied);
+        set(9000);
+        Assert.Single(registry.ReconcileDisplayFingerprints(new[] { Disp("new-b", Fp(0)) }).Applied);
+        Assert.Equal("new-b", store.Load().PanelDevices[id].DisplayId);
+    }
+
+    [Fact]
+    public void Weak_plan_that_disappears_between_scans_resets_the_timer()
+    {
+        var (registry, store, id, _, set) = WeakSetup();
+
+        registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(0)) });
+        set(3000);
+        registry.ReconcileDisplayFingerprints(new[] { Disp("old-id", Fp(0)) });
+        set(9000);
+        Assert.Empty(registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(0)) }).Applied);
+        Assert.Equal("old-id", store.Load().PanelDevices[id].DisplayId);
+    }
+
+    [Fact]
+    public void Strong_serial_relink_applies_on_the_first_scan()
+    {
+        var store = new InMemoryConfigStore();
+        var registry = new PanelDeviceRegistry(store) { ClockMs = () => 0 };
+        var (record, _) = registry.AllocateForDisplay("old-id", null, null);
+        registry.ReconcileDisplayFingerprints(new[] { Disp("old-id", Fp(5)) });
+
+        var result = registry.ReconcileDisplayFingerprints(new[] { Disp("new-id", Fp(5)) });
+
+        Assert.Single(result.Applied);
+        Assert.False(result.PendingWeak);
+        Assert.Equal("new-id", store.Load().PanelDevices[record.Id].DisplayId);
     }
 }

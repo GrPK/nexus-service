@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Nexus.Service.Models.Displays;
 using Nexus.Service.Models.Panel;
 using Nexus.Service.Panel;
@@ -240,6 +241,35 @@ public sealed class DisplayTopologyService
         return ids;
     }
 
+    private const int RelinkRecheckDelayMs = 6000;
+    private const int RelinkRecheckMax = 5;
+    private readonly object _recheckLock = new();
+    private System.Threading.Timer? _recheckTimer;
+    private int _relinkRechecks;
+
+    /// <summary>
+    /// A model-only relink waits for a second matching scan, but topology scans
+    /// only fire on display events, so one rescan is scheduled to confirm it.
+    /// </summary>
+    private void ScheduleRelinkRecheck()
+    {
+        lock (_recheckLock)
+        {
+            if (_recheckTimer is not null || _relinkRechecks >= RelinkRecheckMax) return;
+            _relinkRechecks++;
+            _recheckTimer = new System.Threading.Timer(_ =>
+            {
+                lock (_recheckLock)
+                {
+                    _recheckTimer?.Dispose();
+                    _recheckTimer = null;
+                }
+                try { CacheAttachedIds(_provider.Enumerate()); }
+                catch (Exception ex) { Console.Error.WriteLine($"[displays] relink recheck failed: {ex.Message}"); }
+            }, null, RelinkRecheckDelayMs, System.Threading.Timeout.Infinite);
+        }
+    }
+
     /// <summary>
     /// Runs before auto-promotion and the capability sync so both see the
     /// re-linked record. Best-effort like the sync: a store fault must not
@@ -255,7 +285,11 @@ public sealed class DisplayTopologyService
                 if (IsY70Display(info.RawHardwareId)) continue;
                 attached.Add(new RelinkDisplay(info.Id, info.Fingerprint));
             }
-            _panelRegistry.ReconcileDisplayFingerprints(attached);
+            var (applied, pending) = _panelRegistry.ReconcileDisplayFingerprints(attached);
+            if (applied.Count > 0)
+                PromotedPanelCapabilitiesChanged?.Invoke(applied.Select(a => a.RecordId).ToList());
+            if (pending) ScheduleRelinkRecheck();
+            else _relinkRechecks = 0;
         }
         catch (Exception ex)
         {

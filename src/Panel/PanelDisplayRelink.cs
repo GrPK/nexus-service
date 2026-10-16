@@ -9,7 +9,8 @@ internal readonly record struct RelinkRecord(string RecordId, string DisplayId, 
 
 internal readonly record struct RelinkDisplay(string Id, DisplayFingerprint? Fingerprint);
 
-internal readonly record struct RelinkMove(string RecordId, string OldDisplayId, string NewDisplayId, DisplayFingerprint Fingerprint);
+/// <param name="Weak">The match rests on model alone (a serial is missing or placeholder on a side); such moves need confirmation across scans.</param>
+internal readonly record struct RelinkMove(string RecordId, string OldDisplayId, string NewDisplayId, DisplayFingerprint Fingerprint, bool Weak);
 
 internal sealed class RelinkPlan
 {
@@ -59,22 +60,27 @@ internal static class PanelDisplayRelink
             var sameOrphans = orphans.Count(o => SameDevice(o.Fingerprint!, orphan.Fingerprint!));
             var candidates = unclaimed.Where(d => SameDevice(d.Fingerprint!, orphan.Fingerprint!)).ToList();
             if (sameOrphans != 1 || candidates.Count != 1) continue;
-            Move(plan, orphan, candidates[0]);
+            Move(plan, orphan, candidates[0], weak: false);
             orphans.Remove(orphan);
             unclaimed.Remove(candidates[0]);
         }
 
         foreach (var group in orphans.GroupBy(o => ModelKey(o.Fingerprint!)))
         {
-            var candidates = unclaimed.Where(d => ModelKey(d.Fingerprint!) == group.Key).ToList();
-            if (group.Count() != 1 || candidates.Count != 1) continue;
-            Move(plan, group.First(), candidates[0]);
+            if (group.Count() != 1) continue;
+            var orphan = group.First();
+            // Two strong serials that differ are two physical monitors.
+            var candidates = unclaimed
+                .Where(d => ModelKey(d.Fingerprint!) == group.Key && !(IsStrong(orphan.Fingerprint!) && IsStrong(d.Fingerprint!)))
+                .ToList();
+            if (candidates.Count != 1) continue;
+            Move(plan, orphan, candidates[0], weak: true);
         }
         return plan;
     }
 
-    private static void Move(RelinkPlan plan, RelinkRecord record, RelinkDisplay target)
-        => plan.Moves.Add(new RelinkMove(record.RecordId, record.DisplayId, target.Id, target.Fingerprint!));
+    private static void Move(RelinkPlan plan, RelinkRecord record, RelinkDisplay target, bool weak)
+        => plan.Moves.Add(new RelinkMove(record.RecordId, record.DisplayId, target.Id, target.Fingerprint!, weak));
 
     private static bool IsStrong(DisplayFingerprint f)
         => (f.Serial != 0 && f.Serial != PlaceholderSerial) || !string.IsNullOrEmpty(f.SerialText);
