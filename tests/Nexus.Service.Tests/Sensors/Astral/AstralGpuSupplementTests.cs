@@ -255,6 +255,34 @@ public class AstralGpuSupplementTests
     }
 
     [Fact]
+    public void GetLevelSenseStates_carries_the_same_reading_as_the_sensors_once_calibrated()
+    {
+        var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true, GSensorSucceeds = true };
+        var time = new ManualTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(1_000_000));
+        var supplement = new AstralGpuSupplement(client, time, TimeSpan.FromSeconds(1), new InMemoryConfigStore());
+
+        Poll(supplement, time);
+        var during = Assert.Single(supplement.GetLevelSenseStates());
+        Assert.Null(during.Sag);
+        Assert.Null(during.Lean);
+        Assert.Null(during.X);
+        Assert.Null(during.Y);
+
+        for (var i = 1; i < AstralLevelSense.CalibrationSamples; i++)
+        {
+            Poll(supplement, time);
+        }
+        client.GSensorBlock = GBlock(40, -30, 4090);
+        var sensors = Poll(supplement, time);
+
+        var reading = Assert.Single(supplement.GetLevelSenseStates());
+        Assert.Equal((float?)Sag(sensors)!.Value, reading.Sag);
+        Assert.Equal((float?)Lean(sensors)!.Value, reading.Lean);
+        Assert.Equal((float?)LevelX(sensors)!.Value, reading.X);
+        Assert.Equal((float?)LevelY(sensors)!.Value, reading.Y);
+    }
+
+    [Fact]
     public void RecalibrateLevelSense_skips_a_gpu_without_a_g_sensor()
     {
         var client = new FakeClient { SubSystemId = AstralSubSystemId, ReadSucceeds = true, GSensorSucceeds = false };
