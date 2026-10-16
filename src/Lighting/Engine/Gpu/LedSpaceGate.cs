@@ -188,11 +188,6 @@ internal static class LedSpaceGate
     {
         var name = fx.Name;
         var frag = fx.FragSource;
-        if (ShaderLibrary.ReadsAudio(frag))
-        {
-            Conclude(key, entry, name, LedVerdict.Rejected, "reads live audio");
-            return;
-        }
         var flags = LedWindowShader.CanvasDependencyFlags(frag).Where(static f => f is "derivative" or "texture" or "discard").ToList();
         if (flags.Count > 0)
         {
