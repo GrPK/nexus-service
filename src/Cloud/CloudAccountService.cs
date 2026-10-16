@@ -160,6 +160,12 @@ public sealed class CloudAccountService
         return result.Success ? CloudActionResult.Ok() : CloudActionResult.FromError(result);
     }
 
+    public async Task<CloudActionResult> ResendVerificationAsync(string email, CancellationToken ct)
+    {
+        var result = await _api.ResendVerificationAsync(new CloudResendVerificationRequest { Email = email }, ct).ConfigureAwait(false);
+        return result.Success ? CloudActionResult.Ok() : CloudActionResult.FromError(result);
+    }
+
     public async Task<(CloudActionResult Result, string? AccountId)> LoginAsync(string identifier, string password, CancellationToken ct)
     {
         var installId = InstallIdentity.Resolve(_store);

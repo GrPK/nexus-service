@@ -52,6 +52,16 @@ public static class CloudRoutes
             return CloudResult(result);
         });
 
+        app.MapPost("/cloud/resend-verification", async (CloudResendVerificationBody body, CloudAccountService accounts, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(body.Email))
+            {
+                return Results.BadRequest(ApiResponse.Fail("email is required."));
+            }
+            var result = await accounts.ResendVerificationAsync(body.Email, ct).ConfigureAwait(false);
+            return CloudResult(result);
+        });
+
         app.MapPost("/cloud/login", async (CloudLoginBody body, CloudAccountService accounts, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(body.Identifier) || string.IsNullOrWhiteSpace(body.Password))

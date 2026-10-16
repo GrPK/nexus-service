@@ -53,6 +53,11 @@ public sealed class CloudLogoutBody
     public string AccountId { get; set; } = "";
 }
 
+public sealed class CloudResendVerificationBody
+{
+    public string Email { get; set; } = "";
+}
+
 public sealed class CloudRecoveryStartBody
 {
     public string Email { get; set; } = "";

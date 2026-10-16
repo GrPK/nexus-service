@@ -39,6 +39,11 @@ public sealed class CloudRegisterRequest
     public string Username { get; set; } = "";
 }
 
+public sealed class CloudResendVerificationRequest
+{
+    public string Email { get; set; } = "";
+}
+
 public sealed class CloudLoginRequest
 {
     public string Identifier { get; set; } = "";

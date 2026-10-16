@@ -529,6 +529,36 @@ public sealed class CloudAccountServiceTests
     }
 
     [Fact]
+    public async Task ResendVerificationAsync_relays_the_email_to_the_cloud()
+    {
+        var (svc, api, _) = Make();
+        CloudResendVerificationRequest? sent = null;
+        api.OnResendVerification = body =>
+        {
+            sent = body;
+            return CloudApiResult<CloudVoid>.Ok(CloudVoid.Instance);
+        };
+
+        var result = await svc.ResendVerificationAsync("nicola@example.com", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, api.ResendVerificationCalls);
+        Assert.Equal("nicola@example.com", sent?.Email);
+    }
+
+    [Fact]
+    public async Task ResendVerificationAsync_relays_a_throttled_refusal()
+    {
+        var (svc, api, _) = Make();
+        api.OnResendVerification = _ => CloudApiResult<CloudVoid>.Fail(429, "too_many_requests", "Slow down.");
+
+        var result = await svc.ResendVerificationAsync("nicola@example.com", CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(429, result.StatusCode);
+    }
+
+    [Fact]
     public async Task StartRecoveryAsync_refused_by_the_cloud_leaves_the_status_idle()
     {
         var (svc, api, _) = Make();

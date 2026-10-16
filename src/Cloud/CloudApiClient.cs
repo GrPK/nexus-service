@@ -59,6 +59,7 @@ public sealed class CloudRawResponse
 public interface ICloudApiClient
 {
     Task<CloudApiResult<CloudVoid>> RegisterAsync(CloudRegisterRequest body, CancellationToken ct);
+    Task<CloudApiResult<CloudVoid>> ResendVerificationAsync(CloudResendVerificationRequest body, CancellationToken ct);
     Task<CloudApiResult<CloudAuthSession>> LoginAsync(CloudLoginRequest body, CancellationToken ct);
     Task<CloudApiResult<CloudAuthSession>> RefreshAsync(string refreshToken, CancellationToken ct);
     Task<CloudApiResult<CloudVoid>> LogoutAsync(string refreshToken, CancellationToken ct);
@@ -122,6 +123,9 @@ public sealed class CloudApiClient : ICloudApiClient
 
     public Task<CloudApiResult<CloudVoid>> RegisterAsync(CloudRegisterRequest body, CancellationToken ct) =>
         PostVoidAsync("/auth/register", body, AppJsonContext.Default.CloudRegisterRequest, ct);
+
+    public Task<CloudApiResult<CloudVoid>> ResendVerificationAsync(CloudResendVerificationRequest body, CancellationToken ct) =>
+        PostVoidAsync("/auth/verify/resend", body, AppJsonContext.Default.CloudResendVerificationRequest, ct);
 
     public Task<CloudApiResult<CloudAuthSession>> LoginAsync(CloudLoginRequest body, CancellationToken ct) =>
         PostAsync("/auth/login", body, AppJsonContext.Default.CloudLoginRequest, AppJsonContext.Default.CloudAuthSession, ct);
