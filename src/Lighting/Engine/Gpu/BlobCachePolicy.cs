@@ -70,6 +70,10 @@ internal static class BlobCachePolicy
         return false;
     }
 
+    /// <summary>True when <paramref name="ownerSid"/> is SYSTEM, Administrators or TrustedInstaller. An owner keeps implicit WRITE_DAC whatever the list says, so any other owner can re-grant itself write.</summary>
+    internal static bool IsAdminOwner(string? ownerSid) =>
+        ownerSid is "S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
     private static bool Decide(out string why)
     {
         try
@@ -111,6 +115,12 @@ internal static class BlobCachePolicy
         if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
         {
             why = $"'{dir}' is a reparse point";
+            return false;
+        }
+        var owner = (new DirectorySecurity(dir, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier)?.Value;
+        if (!IsAdminOwner(owner))
+        {
+            why = $"'{dir}' is owned by {owner ?? "an unreadable owner"}";
             return false;
         }
         var rules = new DirectorySecurity(dir, AccessControlSections.Access).GetAccessRules(true, true, typeof(SecurityIdentifier));
