@@ -230,7 +230,15 @@ On Windows, `Nexus.exe --lighting-bench <out.json> [--backends angle,wgl]
 shader effect at the 30 Hz cadence in one child process per backend and
 adapter, and writes timing, CPU, memory and output-fingerprint results as JSON
 plus a summary table, with timestamped `.json` and `.txt` copies in the logs
-directory.
+directory. `--section ledspace|gate|d3dflag` replaces the standard run with a
+probe of the look-ahead window path (LED-space probe, exactness gate, D3D11
+threading flag).
+
+Look-ahead windows render through one LED-space draw per window once an
+exactness gate has proven a shader byte-identical to the canvas render on the
+running GPU; any other case uses the canvas path. `NEXUS_LED_SPACE=0` closes
+the window path. `NEXUS_D3D_PREVENT_THREADING=1` creates the ANGLE D3D11 device
+with the driver's internal threading off (off by default).
 
 ## Releases
 

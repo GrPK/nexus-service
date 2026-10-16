@@ -110,6 +110,22 @@ public sealed class BenchComboResult
     public List<BenchEffectResult> Effects { get; set; } = new();
     public BenchLedSpaceCombo? LedSpace { get; set; }
     public BenchD3dFlagSection? D3dFlag { get; set; }
+    public BenchGateSection? Gate { get; set; }
+}
+
+public sealed class BenchGateEffect
+{
+    public string Name { get; set; } = "";
+    public bool Exact { get; set; }
+    public string? Detail { get; set; }
+    public double SweepMs { get; set; }
+    public int Windows { get; set; }
+    public int WindowsEqual { get; set; }
+}
+
+public sealed class BenchGateSection
+{
+    public List<BenchGateEffect> Effects { get; set; } = new();
 }
 
 public sealed class BenchThreadCpu
@@ -295,7 +311,7 @@ internal sealed class BenchOptions
         options = new BenchOptions();
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
-            return "usage: --lighting-bench <out.json> [--backends angle,wgl] [--adapters integrated,dedicated,warp] [--seconds N] [--effects a,b] [--section ledspace|d3dflag]";
+            return "usage: --lighting-bench <out.json> [--backends angle,wgl] [--adapters integrated,dedicated,warp] [--seconds N] [--effects a,b] [--section ledspace|d3dflag|gate]";
         }
         options.OutPath = args[1];
         for (var i = 2; i < args.Length; i++)
@@ -331,9 +347,9 @@ internal sealed class BenchOptions
                     break;
                 case "--section":
                     options.Section = val.ToLowerInvariant();
-                    if (options.Section is not ("ledspace" or "d3dflag"))
+                    if (options.Section is not ("ledspace" or "d3dflag" or "gate"))
                     {
-                        return "--section must be ledspace or d3dflag";
+                        return "--section must be ledspace, d3dflag or gate";
                     }
                     break;
                 case "--seconds":
@@ -452,6 +468,10 @@ internal static class BenchReport
 
     public static string FormatTable(BenchRun run)
     {
+        if (run.Results.Any(static c => c.Gate is not null))
+        {
+            return BenchLedSpaceReport.FormatGate(run);
+        }
         if (run.Results.Any(static c => c.D3dFlag is not null))
         {
             return BenchLedSpaceReport.FormatD3d(run);

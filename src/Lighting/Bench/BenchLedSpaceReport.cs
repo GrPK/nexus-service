@@ -27,6 +27,30 @@ internal static class BenchLedSpaceReport
         return sb.ToString();
     }
 
+    public static string FormatGate(BenchRun run)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"LED-window gate  {run.StartedUtc}  v{run.ServiceVersion}  {run.Machine.Host}");
+        foreach (var c in run.Results)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"{BenchReport.Label(c)}  {c.Status}  {c.GlRenderer} | {c.GlVersion}");
+            if (c.Gate is not { } g)
+            {
+                continue;
+            }
+            var exact = g.Effects.Count(static e => e.Exact);
+            sb.AppendLine($"effects {g.Effects.Count}: window path open {exact}, closed {g.Effects.Count - exact}");
+            sb.AppendLine($"window bytes equal to the canvas path: {g.Effects.Sum(static e => e.WindowsEqual)} of {g.Effects.Sum(static e => e.Windows)} windows over the exact effects");
+            sb.AppendLine($"sweep ms: median {F(Median(g.Effects.Select(static e => e.SweepMs)))}, p95 {F(P95(g.Effects.Select(static e => e.SweepMs)))}");
+            foreach (var e in g.Effects.Where(static e => !e.Exact || e.WindowsEqual != e.Windows))
+            {
+                sb.AppendLine($"  {e.Name,-18} exact {e.Exact}  windows {e.WindowsEqual}/{e.Windows}  {e.Detail}");
+            }
+        }
+        return sb.ToString();
+    }
+
     public static string FormatD3d(BenchRun run)
     {
         var sb = new StringBuilder();

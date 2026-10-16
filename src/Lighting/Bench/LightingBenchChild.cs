@@ -218,6 +218,11 @@ internal static partial class LightingBench
             RunLedSpace(o, ctx, result);
             return;
         }
+        if (o.Section == "gate")
+        {
+            RunGateBench(o, ctx, result);
+            return;
+        }
         if (o.Section == "d3dflag")
         {
             RunD3dFlag(o, ctx, result);
@@ -489,10 +494,7 @@ internal static partial class LightingBench
                 active |= batch is not null;
                 for (var k = 0; k < n; k++)
                 {
-                    if (batch is not null)
-                    {
-                        batch.Group = k;
-                    }
+                    batch?.Group = k;
                     effect.RenderFrame(canvas, start + (long)(at + k) * PeriodMs);
                     if (batch is null && round == 0)
                     {

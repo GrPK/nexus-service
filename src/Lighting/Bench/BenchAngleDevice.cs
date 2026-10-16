@@ -1,47 +1,18 @@
 #if WINDOWS
 using System;
-using System.Globalization;
 
 namespace Nexus.Service.Lighting.Engine.Gpu;
 
-/// <summary>Bench-only: an ES 3.0 pbuffer context on a caller-created D3D11 device. The live path never calls this.</summary>
 internal static unsafe partial class AngleContext
 {
-    private const int EglPlatformDeviceExt = 0x313F;
-    private const int EglD3D11DeviceAngle = 0x33A1;
-
-    internal static string BenchClientExtensions()
-    {
-        EnsureLoaded();
-        return Str(_eglQueryString(null, EglExtensions));
-    }
-
+    /// <summary>Bench harness: a pbuffer ES 3.0 context current on the calling thread, over a device the caller created.</summary>
     internal static AngleHandles BenchCreateOnDevice(nint d3d11Device, int width, int height)
     {
         EnsureLoaded();
-        void* create;
-        fixed (byte* name = "eglCreateDeviceANGLE\0"u8)
-        {
-            create = _eglGetProcAddress(name);
-        }
-        if (create == null)
-        {
-            throw new InvalidOperationException("eglCreateDeviceANGLE is not exported");
-        }
-        var eglDevice = ((delegate* unmanaged[Cdecl]<int, void*, nint*, void*>)create)(EglD3D11DeviceAngle, (void*)d3d11Device, null);
-        if (eglDevice == null)
-        {
-            throw Fail("eglCreateDeviceANGLE returned no device");
-        }
-        var display = _eglGetPlatformDisplayExt(EglPlatformDeviceExt, eglDevice, null);
+        var display = DisplayOnDevice(d3d11Device, out _, out _);
         if (display == null)
         {
-            throw Fail("eglGetPlatformDisplayEXT(device) returned no display");
-        }
-        int major, minor;
-        if (_eglInitialize(display, &major, &minor) == 0)
-        {
-            throw Fail("eglInitialize failed");
+            throw new InvalidOperationException("ANGLE refused the device");
         }
         _eglBindApi(EglOpenGlEsApi);
         var config = stackalloc int[]

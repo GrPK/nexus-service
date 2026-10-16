@@ -138,6 +138,9 @@ public sealed class GpuContext : IDisposable
     // once init succeeds. Null until then.
     public string? Renderer { get; private set; }
 
+    /// <summary>GL_VERSION of the live context, which for ANGLE names its build.</summary>
+    public string? GlVersion { get; private set; }
+
 
     // Per-thread reusable completion handle used by Invoke(). Invoke blocks the
     // caller until its work runs, so at most one outstanding per thread -- safe
@@ -236,6 +239,7 @@ public sealed class GpuContext : IDisposable
             _lostExit = false;
             _gl = null;
             Renderer = null;
+            GlVersion = null;
             _fbo = 0;
             _fboTex = 0;
             _quadVao = 0;
@@ -365,6 +369,7 @@ public sealed class GpuContext : IDisposable
             _lostExit = false;
             _gl = null;
             Renderer = null;
+            GlVersion = null;
             _fbo = 0;
             _fboTex = 0;
             _quadVao = 0;
@@ -939,6 +944,7 @@ public sealed class GpuContext : IDisposable
             // GpuPreference class steered selection, and a diagnostic on a
             // customer capture.
             Renderer = _gl!.GetStringS(StringName.Renderer);
+            GlVersion = _gl.GetStringS(StringName.Version);
             Log($"[gpu] GL context on renderer='{Renderer}' "
                 + $"vendor='{_gl.GetStringS(StringName.Vendor)}' "
                 + $"version='{_gl.GetStringS(StringName.Version)}'");

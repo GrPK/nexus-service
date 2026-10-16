@@ -82,7 +82,7 @@ public sealed partial class LightingEngine : IDisposable
     /// An LED reads the plain mean of a spot this size centered on its sample position, clamped at the canvas edges and
     /// never larger than the LED's own cell.
     /// </summary>
-    private const float SpotSideOfCanvasWidth = 3f / 160f;
+    internal const float SpotSideOfCanvasWidth = 3f / 160f;
 
     /// <summary>
     /// Every device samples the WHOLE canvas instead of the rect its layout
@@ -95,7 +95,7 @@ public sealed partial class LightingEngine : IDisposable
     /// <summary>Fraction of the canvas height a linear strip integrates under
     /// <see cref="FullFrameSampling"/>; wide enough to reject single-pixel
     /// noise, narrow enough to keep a band's edge.</summary>
-    private const float FullFrameStripBreadth = 0.08f;
+    internal const float FullFrameStripBreadth = 0.08f;
 
     // Shader Studio live preview: painted over every device, above pins and the running effect, below the
     // LED mapper's highlight and test pattern and a blackout hold. Memory only.
@@ -1577,6 +1577,20 @@ public sealed partial class LightingEngine : IDisposable
                 req.Done.Set();
                 continue;
             }
+            if (req.NextFrame == 0)
+            {
+                switch (TryFastWindow(req, effect))
+                {
+                    case FastWindow.Done:
+                        rendered += req.TickMs.Length;
+                        req.Frames = req.Rendered;
+                        _aheadActive = null;
+                        req.Done.Set();
+                        continue;
+                    default:
+                        break;
+                }
+            }
             // The first frame of a window renders alone and shows whether every source queues its readback;
             // after that, up to AheadBatchFrames frames read back together. Without an open batch each
             // frame renders straight into the shared canvases, so it must be sampled before the next one.
@@ -1636,6 +1650,7 @@ public sealed partial class LightingEngine : IDisposable
                 for (var i = 0; i < count; i++)
                 {
                     batch?.Apply(i);
+                    CheckSpot(req, req.NextFrame);
                     var shadow = _aheadBatchShadows[i];
                     RestoreAheadMaps(i);
                     _sampleCanvas = _aheadCanvas;
@@ -1717,6 +1732,40 @@ public sealed partial class LightingEngine : IDisposable
     private readonly Dictionary<string, CanvasBuffer> _aheadPinCanvases = new(StringComparer.Ordinal);
     private readonly HashSet<string> _aheadPinRendered = new(StringComparer.Ordinal);
 
+    private enum AheadPinKind { Base, FollowActive, Pin }
+
+    /// <summary>
+    /// Where a look-ahead device reads its canvas: the base canvas (no animate pin, or its pinned source cannot render),
+    /// the active effect's canvas (pinned to what runs globally), or its own pinned source. Shared by the canvas
+    /// window and the LED window so both route every device the same way.
+    /// </summary>
+    private AheadPinKind ResolveAheadPin(
+        DeviceFrame dev, Dictionary<string, Nexus.Service.Persistence.DevicePin> pins, IEffect active,
+        out string key, out IEffect? fx, out bool sweep)
+    {
+        key = "";
+        fx = null;
+        sweep = false;
+        if (!pins.TryGetValue(dev.Id, out var pin)
+            || pin.Kind != Nexus.Service.Persistence.DevicePinKinds.Animate
+            || string.IsNullOrEmpty(pin.Effect))
+        {
+            return AheadPinKind.Base;
+        }
+        key = pin.Effect;
+        sweep = Gpu.ShaderLibrary.IsSweepEffect(key);
+        if (string.Equals(active.Name, key, StringComparison.Ordinal))
+        {
+            return AheadPinKind.FollowActive;
+        }
+        if (!_pinRenders.TryGetValue(key, out var render) || !PinSourceRendering(render, out fx) || !IsTimePure(fx))
+        {
+            fx = null;
+            return AheadPinKind.Base;
+        }
+        return AheadPinKind.Pin;
+    }
+
     /// <summary>
     /// Renders each animate-pinned source the chain uses at <paramref name="tickMs"/> onto its own scratch
     /// canvas and records which canvas each shadow device samples, as <see cref="RenderPins"/> does live.
@@ -1738,23 +1787,15 @@ public sealed partial class LightingEngine : IDisposable
         var pins = tracker.Snapshot();
         foreach (var dev in shadow)
         {
-            if (!pins.TryGetValue(dev.Id, out var pin)
-                || pin.Kind != Nexus.Service.Persistence.DevicePinKinds.Animate
-                || string.IsNullOrEmpty(pin.Effect))
+            var kind = ResolveAheadPin(dev, pins, active, out var key, out var fx, out var sweep);
+            if (kind == AheadPinKind.Base)
             {
                 continue;
             }
-            var key = pin.Effect;
-            var sweep = Gpu.ShaderLibrary.IsSweepEffect(key);
-            if (string.Equals(active.Name, key, StringComparison.Ordinal))
+            if (kind == AheadPinKind.FollowActive)
             {
                 _aheadPinned[dev.Id] = null;
                 if (sweep) _aheadPinFullFrame.Add(dev.Id);
-                continue;
-            }
-            if (!_pinRenders.TryGetValue(key, out var render) || !PinSourceRendering(render, out var fx) || !IsTimePure(fx))
-            {
-                // Follows the base canvas, as a pinned source that cannot render does live.
                 continue;
             }
             if (!_aheadPinCanvases.TryGetValue(key, out var canvas))
@@ -1764,7 +1805,7 @@ public sealed partial class LightingEngine : IDisposable
             }
             if (_aheadPinRendered.Add(key))
             {
-                fx.RenderFrame(canvas, tickMs);
+                fx!.RenderFrame(canvas, tickMs);
                 if (!Gpu.ReadbackBatch.CanDefer(fx))
                 {
                     _aheadImmediatePin = true;
@@ -1860,14 +1901,6 @@ public sealed partial class LightingEngine : IDisposable
             var frameCy = rectY + rectH * 0.5f;
             var kx = cw / CW;
             var ky = ch / CH;
-            // A full-frame device is not placed on the canvas at all, so it has
-            // no orientation to honour either: the pattern reads along its LED
-            // order whichever way its card is turned.
-            var rad = fullFrame ? 0f : (((dev.Rotation % 360) + 360) % 360) * (MathF.PI / 180f);
-            var cos = MathF.Cos(rad);
-            var sin = MathF.Sin(rad);
-            var absCos = MathF.Abs(cos);
-            var absSin = MathF.Abs(sin);
             var slots = fullFrame ? null : _stackSlots;
             if (slots is not null && slots.TryGetValue(dev.Id, out var slot))
             {
@@ -1923,77 +1956,11 @@ public sealed partial class LightingEngine : IDisposable
                 continue;
             }
 
-            if (devLedU is not null && devLedV is not null
-                && devLedU.Length == ledCount && devLedV.Length == ledCount)
-            {
-                // Cell dims from a uniform cols x rows density estimate matched
-                // to the rect aspect. The true UV layout may be non-uniform, so
-                // neighbouring cells can overlap or leave small gaps; keyboards
-                // land at ~key-sized cells and keep per-key sharpness. The cell
-                // read is the turned cell's bounding box.
-                var aspect = rectH > 0.001f ? rectW / rectH : 1f;
-                var cols = Math.Max(1, (int)MathF.Round(MathF.Sqrt(ledCount * aspect)));
-                var rows = Math.Max(1, (ledCount + cols - 1) / cols);
-                // Cells are at least one pixel on each axis.
-                var cellHalfW = Math.Max(1f / kx, rectW / cols) * 0.5f;
-                var cellHalfH = Math.Max(1f / ky, rectH / rows) * 0.5f;
-                // Full frame: the grid estimate spreads cols over the WHOLE
-                // canvas, so a device whose LEDs really run in a line gets a
-                // cell an order of magnitude too wide and the box mean flattens
-                // the pattern into a wash. The rect is not this device's frame
-                // here, so the layout tells us nothing about spacing - take the
-                // same cell the linear path does, n samples across the pattern
-                // by a thin slice.
-                // Width comes from the LED COUNT, not the span the u values
-                // actually cover, which matters for a hand-authored map that
-                // clusters its LEDs into a sliver of u: every LED then reads the
-                // same narrow window and the device pulses with the bands. A
-                // count-derived cell is the damping choice there - sizing it to
-                // the real (small) u extent would narrow the window further and
-                // sharpen the pulse, not soften it. The fix, if one is wanted,
-                // is to spread u over the full width under full frame.
-                if (fullFrame)
-                {
-                    cellHalfW = Math.Max(1f / kx, rectW / ledCount) * 0.5f;
-                    cellHalfH = Math.Max(1f / ky, rectH * FullFrameStripBreadth) * 0.5f;
-                }
-                var uvHalfW = (cellHalfW * absCos + cellHalfH * absSin) * kx;
-                var uvHalfH = (cellHalfW * absSin + cellHalfH * absCos) * ky;
-                for (int i = 0; i < ledCount; i++)
-                {
-                    if (devLedDisabled is not null && i < devLedDisabled.Length && devLedDisabled[i])
-                    {
-                        dev.SetLed(i, 0, 0, 0);
-                        continue;
-                    }
-                    var lx = rectX + devLedU[i] * rectW - frameCx;
-                    var ly = rectY + devLedV[i] * rectH - frameCy;
-                    var sx = (frameCx + lx * cos - ly * sin) * kx;
-                    var sy = (frameCy + lx * sin + ly * cos) * ky;
-                    var (r, g, b) = fullFrame
-                        ? SampleLedBox(sx - uvHalfW, sy - uvHalfH, sx + uvHalfW, sy + uvHalfH)
-                        : SampleLedSpot(sx, sy, uvHalfW, uvHalfH);
-                    dev.SetLed(i, r, g, b);
-                }
-                continue;
-            }
-
-            // Linear strip fallback: the LEDs walk the unturned rect's width
-            // along its centreline, first LED at the left. Each LED's cell spans
-            // the full breadth across the strip and one LED pitch along it, so
-            // content anywhere inside the frame reaches the LED at that position
-            // instead of only the centerline; the read is the turned cell's
-            // bounding box.
-            var pitchHalf = Math.Max(1f / kx, rectW / ledCount) * 0.5f;
-            // Full frame: a cell spanning the canvas top to bottom averages
-            // every band into one colour, so the strip reads a thin slice
-            // through the middle instead.
-            var breadth = fullFrame ? rectH * FullFrameStripBreadth : rectH;
-            var breadthHalf = Math.Max(1f / ky, breadth) * 0.5f;
-            var linHalfW = (pitchHalf * absCos + breadthHalf * absSin) * kx;
-            var linHalfH = (pitchHalf * absSin + breadthHalf * absCos) * ky;
-            var midY = rectY + rectH * 0.5f - frameCy;
-            var denom = ledCount > 1 ? 1f / (ledCount - 1) : 0f;
+            // UV maps read a cell sized from a uniform cols x rows density matched to the rect aspect; strips read one LED
+            // pitch along the centerline by the frame breadth. Geometry and spot rule live in LedSampling.cs.
+            var geo = LedSpotGeometry.Create(
+                rectX, rectY, rectW, rectH, frameCx, frameCy, dev.Rotation, cw, ch, ledCount, devLedU, devLedV, fullFrame,
+                FullFrameStripBreadth);
             for (int i = 0; i < ledCount; i++)
             {
                 if (devLedDisabled is not null && i < devLedDisabled.Length && devLedDisabled[i])
@@ -2001,13 +1968,10 @@ public sealed partial class LightingEngine : IDisposable
                     dev.SetLed(i, 0, 0, 0);
                     continue;
                 }
-                var t = ledCount > 1 ? i * denom - 0.5f : 0f;
-                var lx = rectX + rectW * 0.5f + t * rectW - frameCx;
-                var sx = (frameCx + lx * cos - midY * sin) * kx;
-                var sy = (frameCy + lx * sin + midY * cos) * ky;
+                geo.Center(i, out var sx, out var sy);
                 var (r, g, b) = fullFrame
-                    ? SampleLedBox(sx - linHalfW, sy - linHalfH, sx + linHalfW, sy + linHalfH)
-                    : SampleLedSpot(sx, sy, linHalfW, linHalfH);
+                    ? SampleLedBox(sx - geo.HalfW, sy - geo.HalfH, sx + geo.HalfW, sy + geo.HalfH)
+                    : SampleLedSpot(sx, sy, geo.HalfW, geo.HalfH);
                 dev.SetLed(i, r, g, b);
             }
         }
@@ -2121,15 +2085,9 @@ public sealed partial class LightingEngine : IDisposable
     /// </summary>
     private (byte r, byte g, byte b) SampleLedSpot(float sx, float sy, float cellHalfW, float cellHalfH)
     {
-        var spotHalf = Math.Max(0.5f, _sampleCanvas.Width * SpotSideOfCanvasWidth * 0.5f);
-        var hx = Math.Min(cellHalfW, spotHalf);
-        var hy = Math.Min(cellHalfH, spotHalf);
-        var cx = MathF.Floor(sx) + 0.5f;
-        var cy = MathF.Floor(sy) + 0.5f;
-        var ix0 = Math.Clamp((int)MathF.Floor(cx - hx), 0, _sampleCanvas.Width - 1);
-        var iy0 = Math.Clamp((int)MathF.Floor(cy - hy), 0, _sampleCanvas.Height - 1);
-        var ix1 = Math.Clamp((int)MathF.Ceiling(cx + hx) - 1, ix0, _sampleCanvas.Width - 1);
-        var iy1 = Math.Clamp((int)MathF.Ceiling(cy + hy) - 1, iy0, _sampleCanvas.Height - 1);
+        LedSpotGeometry.SpotRect(
+            sx, sy, cellHalfW, cellHalfH, _sampleCanvas.Width, _sampleCanvas.Height, SpotSideOfCanvasWidth,
+            out var ix0, out var iy0, out var ix1, out var iy1);
         long n = 0, rSum = 0, gSum = 0, bSum = 0;
         for (int py = iy0; py <= iy1; py++)
         {

@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 namespace Nexus.Service.Lighting.Engine.Gpu;
 
 /// <summary>What one ANGLE context owns. Pbuffer only: no window exists.</summary>
-internal readonly record struct AngleHandles(IntPtr Display, IntPtr Context, IntPtr Surface)
+internal readonly record struct AngleHandles(IntPtr Display, IntPtr Context, IntPtr Surface, nint Device = 0)
 {
     public bool Created => Context != IntPtr.Zero;
 }
@@ -267,9 +267,27 @@ internal static unsafe partial class AngleContext
     public static AngleHandles CreateAndMakeCurrent(AngleTarget target, int width, int height)
     {
         EnsureLoaded();
+        if (PreventDriverThreading && !target.Warp)
+        {
+            try
+            {
+                return CreateCore(target, width, height, ownDevice: true);
+            }
+            catch (Exception ex)
+            {
+                GpuContext.Log($"[gpu] context on the prevent-threading device failed ({ex.Message}); using ANGLE's own device");
+            }
+        }
+        return CreateCore(target, width, height, ownDevice: false);
+    }
+
+    private static AngleHandles CreateCore(AngleTarget target, int width, int height, bool ownDevice)
+    {
         void* display = null;
         void* context = null;
         void* surface = null;
+        nint ownedDevice = 0;
+        int major = 0, minor = 0;
         try
         {
             var attribs = stackalloc int[10];
@@ -293,15 +311,18 @@ internal static unsafe partial class AngleContext
                 throw new InvalidOperationException($"no usable adapter LUID in '{target.Luid}'");
             }
             attribs[n] = EglNone;
-            display = _eglGetPlatformDisplayExt(EglPlatformAngleAngle, null, attribs);
+            display = ownDevice ? TryPreventThreadingDisplay(target, out ownedDevice, out major, out minor) : null;
             if (display == null)
             {
-                throw Fail("eglGetPlatformDisplayEXT returned no display");
-            }
-            int major, minor;
-            if (_eglInitialize(display, &major, &minor) == 0)
-            {
-                throw Fail("eglInitialize failed");
+                display = _eglGetPlatformDisplayExt(EglPlatformAngleAngle, null, attribs);
+                if (display == null)
+                {
+                    throw Fail("eglGetPlatformDisplayEXT returned no display");
+                }
+                if (_eglInitialize(display, &major, &minor) == 0)
+                {
+                    throw Fail("eglInitialize failed");
+                }
             }
             EnableProgramCache(display);
             _eglBindApi(EglOpenGlEsApi);
@@ -336,11 +357,11 @@ internal static unsafe partial class AngleContext
             }
             GpuContext.Log($"[gpu] ANGLE EGL {major}.{minor} vendor='{Str(_eglQueryString(display, EglVendor))}' "
                 + $"version='{Str(_eglQueryString(display, EglVersion))}' target='{target.Description}'");
-            return new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface);
+            return new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface, ownedDevice);
         }
         catch
         {
-            Destroy(new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface));
+            Destroy(new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface, ownedDevice));
             throw;
         }
     }
@@ -367,6 +388,7 @@ internal static unsafe partial class AngleContext
                 _eglDestroyContext((void*)h.Display, (void*)h.Context);
             }
             _eglTerminate((void*)h.Display);
+            D3dDeviceFactory.Release(h.Device);
         }
         catch (Exception)
         {

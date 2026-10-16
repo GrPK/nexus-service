@@ -19,15 +19,9 @@ namespace Nexus.Service.Lighting.Bench;
 /// </summary>
 internal static partial class LightingBench
 {
-    private const uint D3dPreventThreading = 0x8;
+    private const uint D3dPreventThreading = D3dDeviceFactory.PreventInternalThreading;
     private const int D3dTicks30 = 14;
     private const int D3dSliceFrames = 8;
-
-    [DllImport("dxgi.dll")]
-    private static extern int CreateDXGIFactory1(ref Guid riid, out nint factory);
-
-    [DllImport("d3d11.dll")]
-    private static extern int D3D11CreateDevice(nint adapter, uint driverType, nint software, uint flags, nint levels, uint nLevels, uint sdk, out nint device, out uint level, out nint context);
 
     [DllImport("kernel32.dll")]
     private static extern nint OpenThread(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint tid);
@@ -38,64 +32,6 @@ internal static partial class LightingBench
 
     [DllImport("ntdll.dll")]
     private static extern int NtQueryInformationThread(nint thread, int cls, out nint info, int len, out int ret);
-
-    private static unsafe nint VTable(nint obj, int index) => ((nint*)*(nint*)obj)[index];
-
-    private static unsafe uint ComRelease(nint obj) => ((delegate* unmanaged<nint, uint>)VTable(obj, 2))(obj);
-
-    /// <summary>A hardware D3D11 device on the adapter with the given LUID, created with the given flags.</summary>
-    private static unsafe nint CreateD3dDevice(string luid, uint flags)
-    {
-        if (!AngleAdapterSelector.TryParseLuid(luid, out var high, out var low))
-        {
-            throw new InvalidOperationException($"no usable LUID in '{luid}'");
-        }
-        var iid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
-        var hr = CreateDXGIFactory1(ref iid, out var factory);
-        if (hr < 0)
-        {
-            throw new InvalidOperationException($"CreateDXGIFactory1 0x{hr:X}");
-        }
-        nint adapter = 0;
-        try
-        {
-            var desc = stackalloc byte[320];
-            for (uint i = 0; ; i++)
-            {
-                nint a;
-                if (((delegate* unmanaged<nint, uint, nint*, int>)VTable(factory, 12))(factory, i, &a) < 0)
-                {
-                    break;
-                }
-                if (((delegate* unmanaged<nint, byte*, int>)VTable(a, 10))(a, desc) >= 0
-                    && *(uint*)(desc + 296) == low && *(int*)(desc + 300) == high)
-                {
-                    adapter = a;
-                    break;
-                }
-                ComRelease(a);
-            }
-            if (adapter == 0)
-            {
-                throw new InvalidOperationException($"adapter {luid} not found");
-            }
-            hr = D3D11CreateDevice(adapter, 0, 0, flags, 0, 0, 7, out var device, out _, out var context);
-            if (hr < 0)
-            {
-                throw new InvalidOperationException($"D3D11CreateDevice 0x{hr:X}");
-            }
-            ComRelease(context);
-            return device;
-        }
-        finally
-        {
-            if (adapter != 0)
-            {
-                ComRelease(adapter);
-            }
-            ComRelease(factory);
-        }
-    }
 
     private sealed class LsEnv : ILsGl, IDisposable
     {
@@ -130,7 +66,7 @@ internal static partial class LightingBench
         {
             try
             {
-                _device = CreateD3dDevice(luid, flags);
+                _device = D3dDeviceFactory.Create(luid, flags) is var made and not 0 ? made : throw new InvalidOperationException("D3D11 device creation failed");
                 _handles = AngleContext.BenchCreateOnDevice(_device, Width, Height);
                 var gl = GL.GetApi(new AngleNativeContext());
                 Gl = gl;
@@ -214,7 +150,7 @@ internal static partial class LightingBench
             _queue.CompleteAdding();
             if (_device != 0)
             {
-                ComRelease(_device);
+                D3dDeviceFactory.Release(_device);
             }
         }
     }
@@ -293,7 +229,7 @@ internal static partial class LightingBench
         result.Status = "partial";
         try
         {
-            section.Extensions = AngleContext.BenchClientExtensions();
+            section.Extensions = AngleContext.ClientExtensions();
         }
         catch (Exception ex)
         {

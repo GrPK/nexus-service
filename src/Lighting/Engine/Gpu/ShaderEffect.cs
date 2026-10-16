@@ -16,7 +16,7 @@ namespace Nexus.Service.Lighting.Engine.Gpu;
 /// GPU-only. If the shared <see cref="GpuContext"/> can't initialise or the
 /// shader fails to compile, the canvas stays dark; there is no CPU fallback.
 /// </summary>
-public sealed class ShaderEffect : IEffect
+public sealed partial class ShaderEffect : IEffect
 {
     private const string VertexShaderSrc = """
         #version 330 core
@@ -40,26 +40,7 @@ public sealed class ShaderEffect : IEffect
     private System.Collections.Generic.Dictionary<string, ShaderParamSpec>? _specs;
 
     private uint _program;
-    private int _uResolution = -1;
-    private int _uTime = -1;
-    private int _uSpeed = -1;
-    private int _uIntensity = -1;
-    private int _uHue = -1;
-    private int _uColorize = -1;
-    private int _uSaturation = -1;
-    private int _uContrast = -1;
-    private int _uAudioLevel = -1;
-    private int _uAudioBass = -1;
-    private int _uAudioMid = -1;
-    private int _uAudioHigh = -1;
-    private int _uAudioBeat = -1;
-    private int _uAudioBoost = -1;
-    private int _uSpectrum = -1;
-    private int _uSpectrum64 = -1;
-    private int _uSpecHist = -1;
-    private int _uBassPeak = -1;
-    private int _uMidPeak = -1;
-    private int _uHighPeak = -1;
+    private readonly UniformLocations _u = new();
     private readonly System.Collections.Generic.Dictionary<string, int> _uniformCache = new();
     private bool _compiled;
     private bool _failed;
@@ -109,8 +90,8 @@ public sealed class ShaderEffect : IEffect
     public bool IsRenderPending => _renderPending;
     /// <summary>True once the compiled program reads a live audio uniform, so a frame depends on more than time.</summary>
     public bool ReadsAudio =>
-        _uAudioLevel >= 0 || _uAudioBass >= 0 || _uAudioMid >= 0 || _uAudioHigh >= 0 || _uAudioBeat >= 0
-        || _uSpectrum >= 0 || _uSpectrum64 >= 0 || _uSpecHist >= 0 || _uBassPeak >= 0 || _uMidPeak >= 0 || _uHighPeak >= 0;
+        _u.AudioLevel >= 0 || _u.AudioBass >= 0 || _u.AudioMid >= 0 || _u.AudioHigh >= 0 || _u.AudioBeat >= 0
+        || _u.Spectrum >= 0 || _u.Spectrum64 >= 0 || _u.SpecHist >= 0 || _u.BassPeak >= 0 || _u.MidPeak >= 0 || _u.HighPeak >= 0;
 
     /// <summary>0 = ignore audio, 1 = full reactive. Bound every frame to u_audioBoost.</summary>
     public float AudioBoost { get; set; } = 0f;
@@ -209,12 +190,7 @@ public sealed class ShaderEffect : IEffect
         _ctx.Invoke(_cachedRenderDelegate);
     }
 
-    private void ResetUniformLocations()
-    {
-        _uResolution = _uTime = _uSpeed = _uIntensity = _uHue = _uColorize = _uSaturation = _uContrast = -1;
-        _uAudioLevel = _uAudioBass = _uAudioMid = _uAudioHigh = _uAudioBeat = _uAudioBoost = -1;
-        _uSpectrum = _uSpectrum64 = _uSpecHist = _uBassPeak = _uMidPeak = _uHighPeak = -1;
-    }
+    private void ResetUniformLocations() => _u.Reset();
 
     private void RenderPending() => RenderOnGlThread(_pendingCanvas!, _pendingTick);
 
@@ -279,142 +255,7 @@ public sealed class ShaderEffect : IEffect
             gl.BindFramebuffer(FramebufferTarget.Framebuffer, _ctx.Fbo);
             gl.Viewport(0, 0, (uint)w, (uint)h);
             gl.UseProgram(_program);
-            if (_uResolution >= 0)
-            {
-                gl.Uniform2(_uResolution, (float)w, (float)h);
-            }
-            if (_uTime >= 0)
-            {
-                gl.Uniform1(_uTime, (float)(tickMs % 86_400_000 / 1000.0));
-            }
-            if (_uSpeed >= 0)
-            {
-                gl.Uniform1(_uSpeed, ClampBase("u_speed", Speed));
-            }
-            if (_uIntensity >= 0)
-            {
-                gl.Uniform1(_uIntensity, ClampBase("u_intensity", Intensity));
-            }
-            if (_uHue >= 0)
-            {
-                gl.Uniform1(_uHue, ClampBase("u_hue", Hue));
-            }
-            if (_uColorize >= 0)
-            {
-                gl.Uniform1(_uColorize, ClampBase("u_colorize", Colorize));
-            }
-            if (_uSaturation >= 0)
-            {
-                gl.Uniform1(_uSaturation, ClampBase("u_saturation", Saturation));
-            }
-            if (_uContrast >= 0)
-            {
-                gl.Uniform1(_uContrast, ClampBase("u_contrast", Contrast));
-            }
-            if (_uAudioLevel >= 0)
-            {
-                gl.Uniform1(_uAudioLevel, Nexus.Service.Lighting.Engine.AudioState.Level);
-            }
-            if (_uAudioBass >= 0)
-            {
-                gl.Uniform1(_uAudioBass, Nexus.Service.Lighting.Engine.AudioState.Bass);
-            }
-            if (_uAudioMid >= 0)
-            {
-                gl.Uniform1(_uAudioMid, Nexus.Service.Lighting.Engine.AudioState.Mid);
-            }
-            if (_uAudioHigh >= 0)
-            {
-                gl.Uniform1(_uAudioHigh, Nexus.Service.Lighting.Engine.AudioState.High);
-            }
-            if (_uAudioBeat >= 0)
-            {
-                gl.Uniform1(_uAudioBeat, Nexus.Service.Lighting.Engine.AudioState.Beat);
-            }
-            if (_uAudioBoost >= 0)
-            {
-                gl.Uniform1(_uAudioBoost, AudioBoost);
-            }
-            if (_uSpectrum >= 0)
-            {
-                unsafe
-                {
-                    fixed (float* p = Nexus.Service.Lighting.Engine.AudioState.Spectrum)
-                    {
-                        gl.Uniform1(_uSpectrum, (uint)Nexus.Service.Lighting.Engine.AudioState.SpectrumLength, p);
-                    }
-                }
-            }
-            if (_uSpectrum64 >= 0)
-            {
-                unsafe
-                {
-                    fixed (float* p = Nexus.Service.Lighting.Engine.AudioState.Spectrum64)
-                    {
-                        gl.Uniform1(_uSpectrum64, (uint)Nexus.Service.Lighting.Engine.AudioState.Spectrum64Length, p);
-                    }
-                }
-            }
-            if (_uSpecHist >= 0)
-            {
-                unsafe
-                {
-                    fixed (float* p = Nexus.Service.Lighting.Engine.AudioState.SpecHist)
-                    {
-                        gl.Uniform4(_uSpecHist, (uint)Nexus.Service.Lighting.Engine.AudioState.SpecHistVec4Count, p);
-                    }
-                }
-            }
-            if (_uBassPeak >= 0)
-            {
-                gl.Uniform1(_uBassPeak, Nexus.Service.Lighting.Engine.AudioState.BassPeak);
-            }
-            if (_uMidPeak >= 0)
-            {
-                gl.Uniform1(_uMidPeak, Nexus.Service.Lighting.Engine.AudioState.MidPeak);
-            }
-            if (_uHighPeak >= 0)
-            {
-                gl.Uniform1(_uHighPeak, Nexus.Service.Lighting.Engine.AudioState.HighPeak);
-            }
-            if (ExtraParams is not null)
-            {
-                foreach (var kv in ExtraParams)
-                {
-                    int loc;
-                    if (!_uniformCache.TryGetValue(kv.Key, out loc))
-                    {
-                        loc = gl.GetUniformLocation(_program, kv.Key);
-                        _uniformCache[kv.Key] = loc;
-                    }
-                    if (loc >= 0)
-                    {
-                        var value = Specs.TryGetValue(kv.Key, out var spec) ? ShaderParamSpec.Clamp(spec, kv.Value) : kv.Value;
-                        gl.Uniform1(loc, value);
-                    }
-                }
-            }
-            // A declared, annotated uniform the caller never sent (a preset
-            // predating the param) would otherwise stay at GL's post-link 0,
-            // not the shader's authored default.
-            foreach (var kv in Specs)
-            {
-                if (!kv.Value.Declared || BaseParamNames.Contains(kv.Key)
-                    || (ExtraParams is not null && ExtraParams.ContainsKey(kv.Key)))
-                {
-                    continue;
-                }
-                int loc;
-                if (!_uniformCache.TryGetValue(kv.Key, out loc))
-                {
-                    loc = gl.GetUniformLocation(_program, kv.Key);
-                    _uniformCache[kv.Key] = loc;
-                }
-                if (loc >= 0)
-                {
-                    gl.Uniform1(loc, kv.Value.Default);
-                }
-            }
+            PushUniforms(gl, _u, _uniformCache, _program, w, h, tickMs);
             _setUniforms?.Invoke(gl, (int)_program, tickMs);
 
             gl.Disable(EnableCap.Blend);
@@ -854,41 +695,7 @@ public sealed class ShaderEffect : IEffect
         LookupUniforms(gl, prog);
     }
 
-    private void LookupUniforms(GL gl, uint prog)
-    {
-        _uResolution = gl.GetUniformLocation(prog, "u_resolution");
-        _uTime = gl.GetUniformLocation(prog, "u_time");
-        _uSpeed = gl.GetUniformLocation(prog, "u_speed");
-        _uIntensity = gl.GetUniformLocation(prog, "u_intensity");
-        _uHue = gl.GetUniformLocation(prog, "u_hue");
-        _uColorize = gl.GetUniformLocation(prog, "u_colorize");
-        _uSaturation = gl.GetUniformLocation(prog, "u_saturation");
-        _uContrast = gl.GetUniformLocation(prog, "u_contrast");
-        _uAudioLevel = gl.GetUniformLocation(prog, "u_audioLevel");
-        _uAudioBass = gl.GetUniformLocation(prog, "u_audioBass");
-        _uAudioMid = gl.GetUniformLocation(prog, "u_audioMid");
-        _uAudioHigh = gl.GetUniformLocation(prog, "u_audioHigh");
-        _uAudioBeat = gl.GetUniformLocation(prog, "u_audioBeat");
-        _uAudioBoost = gl.GetUniformLocation(prog, "u_audioBoost");
-        _uSpectrum = gl.GetUniformLocation(prog, "u_spectrum[0]");
-        if (_uSpectrum < 0)
-        {
-            _uSpectrum = gl.GetUniformLocation(prog, "u_spectrum");
-        }
-        _uSpectrum64 = gl.GetUniformLocation(prog, "u_spectrum64[0]");
-        if (_uSpectrum64 < 0)
-        {
-            _uSpectrum64 = gl.GetUniformLocation(prog, "u_spectrum64");
-        }
-        _uSpecHist = gl.GetUniformLocation(prog, "u_specHist[0]");
-        if (_uSpecHist < 0)
-        {
-            _uSpecHist = gl.GetUniformLocation(prog, "u_specHist");
-        }
-        _uBassPeak = gl.GetUniformLocation(prog, "u_bassPeak");
-        _uMidPeak = gl.GetUniformLocation(prog, "u_midPeak");
-        _uHighPeak = gl.GetUniformLocation(prog, "u_highPeak");
-    }
+    private void LookupUniforms(GL gl, uint prog) => _u.Lookup(gl, prog);
 
     private static uint CompileShader(GL gl, ShaderType type, string src)
     {
