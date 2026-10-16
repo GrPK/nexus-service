@@ -203,6 +203,14 @@
     <PackageReference Include="SIPSorcery" Version="10.0.16" />
     <TrimmerRootDescriptor Include="TrimmerRoots.xml" />
   </ItemGroup>
+  <!-- Drops SIPSorcery's embedded sample media (about 3.5 MiB). NativeAOT runs
+       no ILLink pass, and the SDK has no item for ILC substitution files, so
+       the flag is added to the ILC response file directly. -->
+  <Target Name="AddIlcSubstitutions" BeforeTargets="WriteIlcRspFileForCompilation">
+    <ItemGroup>
+      <IlcArg Include="--substitution:$(MSBuildThisFileDirectory)ILLink.Substitutions.SIPSorcery.xml" />
+    </ItemGroup>
+  </Target>
 
   <!-- DPAPI at-rest protection for small secrets (Steam API key, Discord
        client secret). Cross-platform package; throws PlatformNotSupportedException
