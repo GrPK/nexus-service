@@ -122,24 +122,25 @@ internal static class Nexus2Y70Translator
     internal const string NoteIframeNoSrc = "iframe:no-src";
     internal const string NoteIframeNoSpace = "iframe:no-space";
 
-    private static readonly Regex IframeSrc = new(
-        "<iframe\\b[^>]*?\\bsrc\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-        TimeSpan.FromMilliseconds(250));
+    private static readonly Regex HtmlComment = new(
+        "<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+    private static readonly Regex IframeOpen = new(
+        "<iframe(?=[\\s/>])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+    private static readonly Regex HttpScheme = new(
+        "^https?://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+    // Any scheme prefix that is not host:port (localhost:8080 has digits after the colon).
+    private static readonly Regex OtherScheme = new(
+        "^[a-z][a-z0-9+.-]*:(?!\\d+(/|$))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+    private const int WebViewUrlMaxLength = 2000;
 
     private static void TranslateIframe(JsonElement widget, List<PanelPageDto> pages, Nexus2Y70LayoutResult result)
     {
         var code = Nexus2Json.GetString(widget, "mode") == "code";
         var raw = code ? ExtractIframeSrc(Nexus2Json.GetString(widget, "code")) : Nexus2Json.GetString(widget, "url");
-        if (code && raw is null)
-        {
-            result.Notes.Add(NoteIframeNoSrc);
-            return;
-        }
         var url = NormalizeWebViewUrl(raw);
         if (url is null)
         {
-            result.Notes.Add(NoteIframeInvalidUrl);
+            result.Notes.Add(code ? NoteIframeNoSrc : NoteIframeInvalidUrl);
             return;
         }
 
@@ -167,6 +168,7 @@ internal static class Nexus2Y70Translator
         }
     }
 
+    /// <summary>The decoded src of the first iframe that carries one, scanning quote-aware so a ">" inside a value does not end the tag; commented-out markup is ignored.</summary>
     private static string? ExtractIframeSrc(string? html)
     {
         if (string.IsNullOrEmpty(html))
@@ -175,42 +177,107 @@ internal static class Nexus2Y70Translator
         }
         try
         {
-            var m = IframeSrc.Match(html);
-            if (!m.Success)
+            var text = HtmlComment.Replace(html, "");
+            foreach (Match open in IframeOpen.Matches(text))
+            {
+                if (ReadSrcAttribute(text, open.Index + open.Length) is { } src)
+                {
+                    return WebUtility.HtmlDecode(src);
+                }
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+        }
+        return null;
+    }
+
+    private static string? ReadSrcAttribute(string text, int i)
+    {
+        while (i < text.Length)
+        {
+            while (i < text.Length && (char.IsWhiteSpace(text[i]) || text[i] == '/'))
+            {
+                i++;
+            }
+            if (i >= text.Length || text[i] == '>')
             {
                 return null;
             }
-            var src = WebUtility.HtmlDecode((m.Groups[1].Success ? m.Groups[1] : m.Groups[2].Success ? m.Groups[2] : m.Groups[3]).Value).Trim();
-            return src.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                || src.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                ? src
-                : null;
+            var nameStart = i;
+            while (i < text.Length && !char.IsWhiteSpace(text[i]) && text[i] != '=' && text[i] != '>' && text[i] != '/')
+            {
+                i++;
+            }
+            var name = text.Substring(nameStart, i - nameStart);
+            while (i < text.Length && char.IsWhiteSpace(text[i]))
+            {
+                i++;
+            }
+            string? value = null;
+            if (i < text.Length && text[i] == '=')
+            {
+                i++;
+                while (i < text.Length && char.IsWhiteSpace(text[i]))
+                {
+                    i++;
+                }
+                if (i < text.Length && (text[i] == '"' || text[i] == '\''))
+                {
+                    var quote = text[i++];
+                    var end = text.IndexOf(quote, i);
+                    if (end < 0)
+                    {
+                        return null;
+                    }
+                    value = text.Substring(i, end - i);
+                    i = end + 1;
+                }
+                else
+                {
+                    var start = i;
+                    while (i < text.Length && !char.IsWhiteSpace(text[i]) && text[i] != '>')
+                    {
+                        i++;
+                    }
+                    value = text.Substring(start, i - start);
+                }
+            }
+            if (value is not null && name.Equals("src", StringComparison.OrdinalIgnoreCase))
+            {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Mirrors nexus-web normalizeWebViewUrl: bare hosts and "//host" get https://; whitespace, other schemes, credentials and over-long input are refused.</summary>
+    internal static string? NormalizeWebViewUrl(string? input)
+    {
+        var text = input?.Trim();
+        if (string.IsNullOrEmpty(text) || text.Length > WebViewUrlMaxLength || text.Any(char.IsWhiteSpace))
+        {
+            return null;
+        }
+        try
+        {
+            if (!HttpScheme.IsMatch(text))
+            {
+                if (OtherScheme.IsMatch(text))
+                {
+                    return null;
+                }
+                text = "https://" + (text.StartsWith("//", StringComparison.Ordinal) ? text[2..] : text);
+            }
         }
         catch (RegexMatchTimeoutException)
         {
             return null;
         }
-    }
-
-    /// <summary>Same rule as the Web View widget: bare hosts get https://, only http/https survive.</summary>
-    internal static string? NormalizeWebViewUrl(string? input)
-    {
-        var text = input?.Trim();
-        if (string.IsNullOrEmpty(text))
-        {
-            return null;
-        }
-        if (text.StartsWith("//", StringComparison.Ordinal))
-        {
-            text = "https:" + text;
-        }
-        else if (!text.Contains("://", StringComparison.Ordinal))
-        {
-            text = "https://" + text;
-        }
         if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            || string.IsNullOrEmpty(uri.Host))
+            || string.IsNullOrEmpty(uri.Host)
+            || !string.IsNullOrEmpty(uri.UserInfo))
         {
             return null;
         }

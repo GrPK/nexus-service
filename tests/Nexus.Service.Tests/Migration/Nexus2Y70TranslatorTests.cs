@@ -254,7 +254,11 @@ public sealed class Nexus2Y70TranslatorTests
     [InlineData("<div>no frame</div>")]
     [InlineData("<iframe></iframe>")]
     [InlineData("<iframe src=\"javascript:alert(1)\"></iframe>")]
-    [InlineData("<iframe src=\"//cdn.example/x\"></iframe>")]
+    [InlineData("<iframe data-src=\"https://a.example\"></iframe>")]
+    [InlineData("<!-- <iframe src=\"https://a.example\"></iframe> -->")]
+    [InlineData("<iframe src=\"mailto:a@b.com\"></iframe><iframe src=\"https://later.example\"></iframe>")]
+    [InlineData("<iframe src=\"https://user:pw@a.example\"></iframe>")]
+    [InlineData("<iframe src=\"https://a b.example\"></iframe>")]
     [InlineData("")]
     public void Iframe_CodeModeWithoutHttpSrc_IsSkippedWithNote(string code)
     {
@@ -265,6 +269,86 @@ public sealed class Nexus2Y70TranslatorTests
         Assert.Equal(0, result.MappedWidgets);
         Assert.Equal(new List<string> { "iframe:no-src" }, result.Notes);
         Assert.Empty(result.DroppedTypes);
+    }
+
+    [Theory]
+    [InlineData("<iframe data-src=\"https://lazy.example\" src=\"https://real.example/\"></iframe>", "https://real.example/")]
+    [InlineData("<iframe src=https://plain.example/p width=3></iframe>", "https://plain.example/p")]
+    [InlineData("<iframe src=\"//www.youtube.com/embed/abc\"></iframe>", "https://www.youtube.com/embed/abc")]
+    [InlineData("<IFRAME SRC=\"HTTPS://Up.Example/\"></IFRAME>", "https://up.example/")]
+    [InlineData("<iframe title=\"a>b\" src=\"https://gt.example/\"></iframe>", "https://gt.example/")]
+    [InlineData("<!-- <iframe src=\"https://old.example\"></iframe> --><iframe src=\"https://new.example/\"></iframe>", "https://new.example/")]
+    [InlineData("<iframe></iframe><iframe src=\"https://second.example/\"></iframe>", "https://second.example/")]
+    public void Iframe_CodeModeSrcForms(string code, string expected)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(code);
+        var result = TranslateIframe("{\"type\":\"iframe\",\"size\":\"4x4\",\"mode\":\"code\",\"code\":" + json + "}");
+        Assert.Equal(expected, OnlyWidget(result).Config!["url"].GetString());
+    }
+
+    [Theory]
+    [InlineData("https://user:pw@a.example")]
+    [InlineData("https://a b.example")]
+    [InlineData("mailto:a@b.com")]
+    public void Iframe_UrlModeRejectsCredentialsWhitespaceAndOtherSchemes(string url)
+    {
+        var result = TranslateIframe("{\"type\":\"iframe\",\"size\":\"2x2\",\"mode\":\"url\",\"url\":\"" + url + "\"}");
+        Assert.Equal(new List<string> { "iframe:invalid-url" }, result.Notes);
+    }
+
+    [Fact]
+    public void Iframe_UrlModeAcceptsUppercaseSchemeHostPortAndRejectsOverlong()
+    {
+        Assert.Equal("https://a.example/", Nexus2Y70Translator.NormalizeWebViewUrl("HTTPS://A.example"));
+        Assert.Equal("https://localhost:8080/", Nexus2Y70Translator.NormalizeWebViewUrl("localhost:8080"));
+        Assert.Null(Nexus2Y70Translator.NormalizeWebViewUrl("https://a.example/" + new string('x', 2000)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(",\"zoom\":\"big\"")]
+    [InlineData(",\"zoom\":null")]
+    public void Iframe_MissingOrNonNumericZoomDefaultsToOne(string zoomJson)
+    {
+        var result = TranslateIframe("{\"type\":\"iframe\",\"size\":\"4x4\",\"mode\":\"url\",\"url\":\"https://a.example\"" + zoomJson + "}");
+        Assert.Equal(1, OnlyWidget(result).Config!["zoom"].GetDouble());
+    }
+
+    [Fact]
+    public void Iframe_MissingModeKeyIsUrlMode()
+    {
+        var result = TranslateIframe("""{"type":"iframe","size":"4x4","url":"https://a.example","code":"<iframe src=\"https://other.example\"></iframe>"}""");
+        Assert.Equal("https://a.example/", OnlyWidget(result).Config!["url"].GetString());
+    }
+
+    [Fact]
+    public void Iframe_MixedWithOtherWidgets_DoesNotOverlap()
+    {
+        var result = TranslateIframe("""
+        {"type":"clock","size":"4x2"},
+        {"type":"iframe","size":"4x8","mode":"url","url":"https://a.example"},
+        {"type":"weather","size":"2x2"},
+        {"type":"iframe","size":"2x2","mode":"url","url":"https://b.example"}
+        """);
+        var all = new List<Nexus.Service.Models.Panel.PanelWidgetDto>();
+        foreach (var page in result.Layout!.Pages)
+        {
+            var cells = new HashSet<(int, int)>();
+            foreach (var w in page.Widgets)
+            {
+                var (cs, rs) = w.Size switch { "4x4" => (4, 4), "4x2" => (4, 2), _ => (2, 2) };
+                for (var c = w.Col; c < w.Col + cs; c++)
+                {
+                    for (var r = w.Row; r < w.Row + rs; r++)
+                    {
+                        Assert.True(cells.Add((c, r)), $"overlap at {c},{r}");
+                    }
+                }
+                all.Add(w);
+            }
+        }
+        Assert.Equal(4, all.Count);
+        Assert.Equal(2, all.FindAll(w => w.Type == "web-view").Count);
     }
 
     [Theory]
