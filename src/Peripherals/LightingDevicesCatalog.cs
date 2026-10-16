@@ -3,6 +3,7 @@ using System.IO;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Nexus.Service.Models.Peripherals;
 using Nexus.Service.Serialization;
 
@@ -427,23 +428,28 @@ public static class LightingDevicesCatalog
     }
 
     /// <summary>
-    /// The type OpenRGB declares for the device wins; the device name catches rows the
-    /// extractor could not resolve statically (runtime-typed controllers); the
-    /// controller class is the last resort.
+    /// The type OpenRGB declares wins, except where it is coarse (light, accessory,
+    /// motherboard) and the name says something more specific. Rows the extractor could
+    /// not resolve statically (runtime-typed controllers) use the device name; the
+    /// controller class is the last resort. Mirrored in nexus-site
+    /// scripts/export-devices.mjs (resolveCategory); change both together.
     /// </summary>
     internal static string ResolveCategory(string? name, string? controller, string? kind, string? openRgbType)
     {
+        var n = name ?? "";
         if (openRgbType is not null && CategoryByOpenRgbType.TryGetValue(openRgbType, out var declared))
         {
             if (declared == "cooler")
             {
-                return AioName.IsMatch(name ?? "") ? "aio" : "fan";
+                return AioName.IsMatch(n) ? "aio" : "fan";
             }
-            // Fan hubs register as generic LED strips; the name says what they are.
-            return declared == "light" && FanHubName.IsMatch(name ?? "") ? "fan" : declared;
+            if (declared is "light" or "accessory" or "motherboard")
+            {
+                return SpecificCategoryFromName(n) ?? declared;
+            }
+            return declared;
         }
-        var fromName = CategoryFromName(name ?? "");
-        return fromName ?? CategoryFromController(controller, kind);
+        return CategoryFromName(n) ?? SpecificCategoryFromName(n) ?? CategoryFromController(controller, kind);
     }
 
     private static readonly Dictionary<string, string> CategoryByOpenRgbType = new()
@@ -470,21 +476,47 @@ public static class LightingDevicesCatalog
         ["cooler"] = "cooler",
     };
 
-    private static readonly System.Text.RegularExpressions.Regex AioName = new(
+    private static readonly Regex AioName = new(
         @"\b(AIO|Hydro|Kraken|Ryuo|Ryujin|LC|H\d{2,3}i|Galahad|Waterforce|Hanbo|Elite|Liquid)\b",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    private static readonly System.Text.RegularExpressions.Regex FanHubName = new(
-        @"\bFan\b|Smart Device",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly Regex AioStrictName = NameRule(
+        @"\b(AIO|Hydro|Kraken|Ryuo|Ryujin|LC|Galahad|Waterforce|Hanbo)\b");
+
+    // Fan hubs register as generic LED strips; the name says what they are.
+    private static readonly Regex FanHubName = NameRule(@"\bFan\b|Smart Device");
+
+    private static readonly Regex MonitorName = NameRule(@"\bOptix\b|\bMonitor\b(?! Light)");
+
+    private static readonly Regex MotherboardName = NameRule(@"\bMotherboard\b");
+
+    private static string? SpecificCategoryFromName(string name)
+    {
+        if (MonitorName.IsMatch(name))
+        {
+            return "monitor";
+        }
+        if (MotherboardName.IsMatch(name))
+        {
+            return "motherboard";
+        }
+        if (AioStrictName.IsMatch(name))
+        {
+            return "aio";
+        }
+        return FanHubName.IsMatch(name) ? "fan" : null;
+    }
 
     // Ordered: the first match wins, so the specific shapes (mat, headset, light bar)
     // come before the broad ones.
-    private static readonly (System.Text.RegularExpressions.Regex Pattern, string Category)[] NameRules =
+    private static readonly (Regex Pattern, string Category)[] NameRules =
     {
         (NameRule(@"mouse ?pad|mouse ?mat|powerplay mat|\bMM\d{3}\b"), "mousemat"),
         (NameRule(@"headset|headphone|kraken (7|kitty)"), "headset"),
-        (NameRule(@"light ?bar"), "light"),
+        (NameRule(@"light ?bar|lightboard|RGB HUB|kasasmart"), "light"),
+        (NameRule(@"\bDial\b"), "accessory"),
+        (NameRule(@"\bBloody MP\b"), "mousemat"),
+        (NameRule(@"\bBloody W\d"), "mouse"),
         (NameRule(@"keyboard|\bK\d{2,3}\b|\bStrafe\b|keyrox"), "keyboard"),
         (NameRule(@"\bmouse\b|\b(Glaive|Harpoon|Ironclaw|Nightsword|Sabre|Scimitar|Aerox|Rival|Katar|Dark Core)\b|\bM\d{2}\b|\bG(203|303|403|502|703|900|903)\b"), "mouse"),
         (NameRule(@"\bST100\b"), "headset stand"),
@@ -492,9 +524,9 @@ public static class LightingDevicesCatalog
         (NameRule(@"receiver"), "accessory"),
     };
 
-    private static System.Text.RegularExpressions.Regex NameRule(string pattern) => new(
+    private static Regex NameRule(string pattern) => new(
         pattern,
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static string? CategoryFromName(string name)
     {
