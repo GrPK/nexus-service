@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Platform;
 
@@ -22,7 +23,12 @@ public sealed class JpegPanelHub : IDisposable
     // kilobyte per chunk and roughly 30 chunks per frame.
     private readonly byte[] _report;
 
+    /// <summary>Failures worth a log line are rate limited so a wedged panel cannot spam.</summary>
+    private const long FailureLogIntervalMs = 10_000;
+
     private IHidDevice? _device;
+    private long _frameFailures;
+    private long _lastFailureLogMs = long.MinValue;
     private volatile bool _attached;
     private bool _disposed;
 
@@ -35,6 +41,27 @@ public sealed class JpegPanelHub : IDisposable
     public JpegPanelModel Model => _model;
 
     public bool IsConnected => _attached;
+
+    /// <summary>Frames that did not reach the panel since this hub was created: a rejected report or a refused pre-frame step.</summary>
+    public long FrameFailures => Interlocked.Read(ref _frameFailures);
+
+    /// <summary>Delay the worker waits on an open handle before <see cref="Attach"/>; 0 when the model has none.</summary>
+    public int SettleMs => _model.Handshake is IJpegPanelSession session ? session.SettleMs : 0;
+
+    /// <summary>Period of <see cref="Tick"/>; 0 when the model has no session traffic.</summary>
+    public int TickIntervalMs => _model.Handshake is IJpegPanelSession session ? session.TickIntervalMs : 0;
+
+    /// <summary>Runs the model's periodic session exchange (keepalive, availability check) on the attached handle.</summary>
+    public void Tick()
+    {
+        lock (_lock)
+        {
+            if (_device != null && _attached && _model.Handshake is IJpegPanelSession session)
+            {
+                session.Tick(_device, _model.ReportLength, Environment.TickCount64);
+            }
+        }
+    }
 
     /// <summary>USB serial of the attached panel, or null when nothing is attached.</summary>
     public string? Serial
@@ -153,6 +180,7 @@ public sealed class JpegPanelHub : IDisposable
             if (_model.Handshake is { } handshake
                 && !handshake.BeforeFrame(_device, _model.ReportLength, Environment.TickCount64))
             {
+                NoteFailureLocked("pre-frame step refused the frame (panel not ready or handle dead)");
                 return false;
             }
             int offset = 0;
@@ -167,6 +195,7 @@ public sealed class JpegPanelHub : IDisposable
                 }
                 if (!_device.Write(_report))
                 {
+                    NoteFailureLocked($"report write rejected at chunk {chunkIndex} ({offset} of {jpeg.Length} bytes sent)");
                     return false;
                 }
                 offset += written;
@@ -174,6 +203,18 @@ public sealed class JpegPanelHub : IDisposable
             }
             return true;
         }
+    }
+
+    private void NoteFailureLocked(string reason)
+    {
+        Interlocked.Increment(ref _frameFailures);
+        long now = Environment.TickCount64;
+        if (now - _lastFailureLogMs < FailureLogIntervalMs)
+        {
+            return;
+        }
+        _lastFailureLogMs = now;
+        ServiceLog.Warn($"[{_model.HandlerId}] frame failed: {reason}; failures so far {FrameFailures}");
     }
 
     /// <summary>Best-effort last write on the handle as it detaches, under the hub lock with the report buffer.</summary>

@@ -17,7 +17,7 @@ namespace Nexus.Service.Peripherals.JpegPanels;
 /// Without this the panel accepts every frame report and keeps showing its local UI, which
 /// is why this family cannot be driven by fixed init reports the way ID-Cooling's is.
 /// </summary>
-public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightness
+public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightness, IJpegPanelSession
 {
     /// <summary>B-command carrying control mode, brightness, rotation and frame rate.</summary>
     private const byte CmdLcdControl = 0x0C;
@@ -49,19 +49,85 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
     /// <summary>Matches the reference driver's per-frame ack read; the ack is normally already queued.</summary>
     private const int AckTimeoutMs = 20;
 
+    /// <summary>A-command status poll; the reference driver's background reader also uses it as the keepalive.</summary>
+    private const byte CmdHandshake = 0x81;
+
+    /// <summary>A-command that resets the panel's MCU; the recovery step when the LCD reports unavailable.</summary>
+    private const byte CmdResetDevice = 0x8E;
+
+    /// <summary>B-command asking whether the LCD is available; the reply carries one data byte, 0 meaning available.</summary>
+    private const byte CmdLcdAvailable = 0x17;
+
+    /// <summary>The reference driver waits this long after the device opens before it talks to it.</summary>
+    public const int SettleDelayMs = 10_000;
+
+    /// <summary>Pause between the status handshake and the application-mode claim.</summary>
+    private const int PostHandshakeDelayMs = 2000;
+
+    private const int KeepaliveIntervalMs = 1000;
+    private const int HandshakeTimeoutMs = 1000;
+    private const int FirmwareAttempts = 3;
+    private const int FirmwareRetryDelayMs = 2000;
+
+    /// <summary>Minimum spacing of availability checks and recovery attempts.</summary>
+    private const int RecoveryCooldownMs = 2000;
+    private const int UnavailableThreshold = 3;
+    private const int AvailabilityTimeoutMs = 1000;
+    private const int ResetTimeoutMs = 1000;
+    private const int ResetMaxReads = 20;
+    private const int PostResetDelayMs = 500;
+    private const int MaxStaleReads = 16;
+    private const int InputBufferLength = 512;
+
+    /// <summary>An availability check is skipped while frames flow, as the reference driver does for an active stream.</summary>
+    private const int StreamActiveWindowMs = 2000;
+
+    /// <summary>B-frame header length: the availability reply's data length sits in bytes 9 and 10, its data after them.</summary>
+    private const int BHeaderLength = 11;
+
+    private const byte ReportIdB = 0x02;
+
+    /// <summary>Far enough back that a timestamp difference never wraps.</summary>
+    private const long NeverMs = long.MinValue / 2;
+
     private readonly string _handlerId;
     private readonly byte _fps;
+    private readonly bool _referenceSession;
+    private readonly Action<int> _sleep;
+    private readonly Func<long> _clock;
     private byte[]? _report;
+
+    private long _lastKeepaliveMs = NeverMs;
+    private long _lastRecoveryMs = NeverMs;
+    private long _lastFrameMs = NeverMs;
+    private int _unavailableCount;
 
     // The panel forgets the backlight across a power cycle; holding it here is what lets
     // the attach packet carry it back.
     private byte _brightness = DefaultBrightness;
 
-    public LianLiAioHandshake(string handlerId, int fps)
+    /// <param name="referenceSession">
+    /// Follows the reference driver's full session: settle before attach, firmware retries,
+    /// status handshake before the claim, a status keepalive, and LCD availability recovery.
+    /// Off keeps the bare firmware-then-claim attach the Galahad II family was verified with.
+    /// </param>
+    public LianLiAioHandshake(string handlerId, int fps, bool referenceSession = false)
+        : this(handlerId, fps, referenceSession, System.Threading.Thread.Sleep, () => Environment.TickCount64)
+    {
+    }
+
+    internal LianLiAioHandshake(string handlerId, int fps, bool referenceSession, Action<int> sleep, Func<long> clock)
     {
         _handlerId = handlerId;
         _fps = (byte)Math.Clamp(fps, 1, 60);
+        _referenceSession = referenceSession;
+        _sleep = sleep;
+        _clock = clock;
     }
+
+    public int SettleMs => _referenceSession ? SettleDelayMs : 0;
+
+    public int TickIntervalMs => _referenceSession ? KeepaliveIntervalMs : 0;
 
     public bool OnAttach(IHidDevice device, int reportLength)
     {
@@ -69,7 +135,16 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
 
         // The one two-way exchange this panel offers, so the only evidence the handle reaches
         // the panel rather than just the HID stack.
-        var firmware = ReadFirmware(device, report);
+        string? firmware = null;
+        int attempts = _referenceSession ? FirmwareAttempts : 1;
+        for (int attempt = 1; attempt <= attempts && firmware == null; attempt++)
+        {
+            firmware = ReadFirmware(device, report);
+            if (firmware == null && attempt < attempts)
+            {
+                _sleep(FirmwareRetryDelayMs);
+            }
+        }
         if (firmware != null)
         {
             ServiceLog.Info($"[{_handlerId}] firmware: {firmware}");
@@ -79,11 +154,25 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
             ServiceLog.Warn($"[{_handlerId}] no firmware response; continuing to application mode");
         }
 
+        // The reference driver polls status once before claiming the glass, then gives the
+        // panel a moment; a panel claimed straight out of boot accepts the claim and stays blank.
+        if (_referenceSession)
+        {
+            if (!SendHandshake(device, report, readReply: true))
+            {
+                ServiceLog.Warn($"[{_handlerId}] status handshake not answered; continuing to application mode");
+            }
+            _sleep(PostHandshakeDelayMs);
+        }
+
         if (!SendLcdControl(device, report, ModeApplication, _brightness))
         {
             ServiceLog.Warn($"[{_handlerId}] application-mode command rejected; dropping the handle");
             return false;
         }
+        _lastKeepaliveMs = _clock();
+        _lastRecoveryMs = _lastKeepaliveMs;
+        _unavailableCount = 0;
         return true;
     }
 
@@ -103,6 +192,7 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
     /// </summary>
     public bool BeforeFrame(IHidDevice device, int reportLength, long nowMs)
     {
+        _lastFrameMs = nowMs;
         Span<byte> ack = stackalloc byte[64];
         // Negative is a dead handle, distinct from 0 for "no ack queued"; writing a frame
         // into it would burn the write timeout per chunk.
@@ -145,6 +235,156 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
         JpegPanelProtocol.FillChunk(
             report, JpegPanelHeaderStyle.LianLiSequenced, CmdLcdControl, payload, 0, 0);
         return device.Write(report);
+    }
+
+    /// <summary>
+    /// The status poll the reference driver runs for the whole session, then the LCD
+    /// availability check with reset recovery. Both ride the hub's lock, so neither
+    /// interleaves with a frame.
+    /// </summary>
+    public void Tick(IHidDevice device, int reportLength, long nowMs)
+    {
+        if (!_referenceSession)
+        {
+            return;
+        }
+        var report = Buffer(reportLength);
+        if (nowMs - _lastKeepaliveMs >= KeepaliveIntervalMs)
+        {
+            _lastKeepaliveMs = nowMs;
+            SendHandshake(device, report, readReply: false);
+        }
+
+        if (nowMs - _lastRecoveryMs < RecoveryCooldownMs || nowMs - _lastFrameMs < StreamActiveWindowMs)
+        {
+            return;
+        }
+        CheckAndRecover(device, report, nowMs);
+    }
+
+    private void CheckAndRecover(IHidDevice device, byte[] report, long nowMs)
+    {
+        bool? available = IsLcdAvailable(device, report);
+        if (available == true)
+        {
+            _unavailableCount = 0;
+            return;
+        }
+        if (++_unavailableCount < UnavailableThreshold)
+        {
+            return;
+        }
+        _unavailableCount = 0;
+        _lastRecoveryMs = nowMs;
+        ServiceLog.Warn($"[{_handlerId}] LCD unavailable ({(available == false ? "reported" : "no reply")}); resetting the panel");
+        if (ResetDevice(device, report))
+        {
+            ServiceLog.Info($"[{_handlerId}] panel reset; reclaiming the glass");
+            _sleep(PostResetDelayMs);
+        }
+        else
+        {
+            ServiceLog.Warn($"[{_handlerId}] panel reset failed; reclaiming the glass anyway");
+        }
+        if (SendLcdControl(device, report, ModeApplication, _brightness))
+        {
+            DrainAck(device);
+        }
+    }
+
+    /// <summary>
+    /// True when the panel says the LCD is available (or stays silent, as the reference
+    /// driver reads it), false when it says unavailable, null when the exchange itself failed.
+    /// </summary>
+    private bool? IsLcdAvailable(IHidDevice device, byte[] report)
+    {
+        report.AsSpan().Clear();
+        report[0] = ReportIdB;
+        report[1] = CmdLcdAvailable;
+        if (!device.Write(report))
+        {
+            return null;
+        }
+        Span<byte> reply = stackalloc byte[InputBufferLength];
+        for (int i = 0; i < MaxStaleReads; i++)
+        {
+            reply.Clear();
+            int read = device.Read(reply, AvailabilityTimeoutMs);
+            if (read < 0)
+            {
+                return null;
+            }
+            if (read == 0)
+            {
+                return true;
+            }
+            if (reply[1] != CmdLcdAvailable)
+            {
+                continue;
+            }
+            int length = (reply[9] << 8) | reply[10];
+            return length == 1 && reply[BHeaderLength] == 0;
+        }
+        return null;
+    }
+
+    private bool ResetDevice(IHidDevice device, byte[] report)
+    {
+        LianLiAioProtocol.FillACommand(report, CmdResetDevice, ReadOnlySpan<byte>.Empty);
+        if (!device.Write(report))
+        {
+            return false;
+        }
+        Span<byte> reply = stackalloc byte[InputBufferLength];
+        for (int i = 0; i < ResetMaxReads; i++)
+        {
+            reply.Clear();
+            int read = device.Read(reply, ResetTimeoutMs);
+            if (read <= 0)
+            {
+                return false;
+            }
+            if (read > LianLiAioProtocol.AHeaderLength && reply[1] == CmdResetDevice)
+            {
+                return reply[LianLiAioProtocol.AHeaderLength] == 1;
+            }
+        }
+        return false;
+    }
+
+    private bool SendHandshake(IHidDevice device, byte[] report, bool readReply)
+    {
+        LianLiAioProtocol.FillACommand(report, CmdHandshake, ReadOnlySpan<byte>.Empty);
+        if (!device.Write(report))
+        {
+            return false;
+        }
+        Span<byte> reply = stackalloc byte[64];
+        if (!readReply)
+        {
+            // Keepalive: the reply is only drained, so the IN endpoint cannot back up.
+            device.Read(reply, AckTimeoutMs);
+            return true;
+        }
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            reply.Clear();
+            if (device.Read(reply, HandshakeTimeoutMs) <= 0)
+            {
+                return false;
+            }
+            if (reply[1] == CmdHandshake)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void DrainAck(IHidDevice device)
+    {
+        Span<byte> ack = stackalloc byte[64];
+        device.Read(ack, AckTimeoutMs);
     }
 
     /// <summary>

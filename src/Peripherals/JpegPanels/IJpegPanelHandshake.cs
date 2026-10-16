@@ -46,3 +46,21 @@ public interface IJpegPanelBrightness
     /// <summary>Pushes the recorded backlight to an attached panel.</summary>
     bool ApplyBrightness(IHidDevice device, int reportLength);
 }
+
+/// <summary>
+/// A control channel whose panel wants a settle period after its handle opens and a
+/// periodic exchange while attached, independent of how often frames are pushed (a
+/// static page is resent only every few seconds).
+///
+/// <see cref="Tick"/> is called under the hub's lock, like the rest of the handshake.
+/// </summary>
+public interface IJpegPanelSession
+{
+    /// <summary>How long the connection worker idles on the open handle before <see cref="IJpegPanelHandshake.OnAttach"/>.</summary>
+    int SettleMs { get; }
+
+    /// <summary>How often <see cref="Tick"/> should run while attached.</summary>
+    int TickIntervalMs { get; }
+
+    void Tick(IHidDevice device, int reportLength, long nowMs);
+}

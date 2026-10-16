@@ -66,6 +66,19 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
                 }
                 _missLogged = false;
 
+                if (_hub.SettleMs > 0)
+                {
+                    try
+                    {
+                        await Task.Delay(_hub.SettleMs, stoppingToken).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        device.Dispose();
+                        throw;
+                    }
+                }
+
                 if (!_hub.Attach(device))
                 {
                     await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
@@ -75,12 +88,18 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
                 ServiceLog.Info($"[{model.HandlerId}] connected: {model.Name}, {model.Width}x{model.Height}");
                 try
                 {
+                    int tickMs = _hub.TickIntervalMs;
+                    long nextPresenceMs = 0;
                     while (!stoppingToken.IsCancellationRequested
                         && _gate.IsEnabled(model.HandlerId)
                         && _hub.IsConnected
-                        && StillPresent())
+                        && PresenceHolds(ref nextPresenceMs))
                     {
-                        await Task.Delay(PresencePollMs, stoppingToken).ConfigureAwait(false);
+                        await Task.Delay(tickMs > 0 ? tickMs : PresencePollMs, stoppingToken).ConfigureAwait(false);
+                        if (tickMs > 0)
+                        {
+                            _hub.Tick();
+                        }
                     }
                 }
                 finally
@@ -100,6 +119,18 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
             }
         }
         _hub.Detach();
+    }
+
+    /// <summary>The presence probe keeps its own cadence even when the loop ticks faster for session traffic.</summary>
+    private bool PresenceHolds(ref long nextCheckMs)
+    {
+        long now = Environment.TickCount64;
+        if (now < nextCheckMs)
+        {
+            return true;
+        }
+        nextCheckMs = now + PresencePollMs;
+        return StillPresent();
     }
 
     private void LogMissOnce()
