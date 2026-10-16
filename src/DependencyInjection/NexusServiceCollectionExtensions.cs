@@ -2191,7 +2191,6 @@ public static class NexusServiceCollectionExtensions
             Nexus.Service.Widgets.AppActions.SystemSpecsActions.RegisterAll(registry);
             Nexus.Service.Widgets.AppActions.DeviceListActions.RegisterAll(registry);
             Nexus.Service.Widgets.AppActions.OpenUrlActions.RegisterAll(registry);
-            Nexus.Service.Widgets.AppActions.PowerDetectorActions.RegisterAll(registry);
             return registry;
         });
         // ROG Astral Power Detector: watches the card's 12V-2x6 pins once a second

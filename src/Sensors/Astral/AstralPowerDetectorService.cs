@@ -183,6 +183,18 @@ public sealed class AstralPowerDetectorService : BackgroundService
         return cancelled;
     }
 
+    /// <summary>The name of the first card whose power monitor answered, or null before one has.</summary>
+    public string? FirstCardName
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _cards.Count > 0 ? _cards[0].Name : null;
+            }
+        }
+    }
+
     /// <summary>Shuts down now instead of at the end of the running countdown; false when none was running.</summary>
     public bool ShutdownNow()
     {

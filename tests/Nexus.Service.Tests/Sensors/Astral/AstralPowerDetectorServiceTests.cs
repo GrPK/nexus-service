@@ -109,6 +109,8 @@ public class AstralPowerDetectorServiceTests
         Assert.StartsWith("Pin 3 of the ROG Astral RTX 5090 power connector is carrying 13.0 A, over its 12.5 A limit.", notice.Text);
         Assert.Contains("\nUsing a ROG Equalizer cable?", notice.Text);
         Assert.False(notice.CancelsShutdown);
+        Assert.Equal("/system/device/curated-asus-astral", notice.Path);
+        Assert.Equal("ASUS ROG Astral RTX 5090", rig.Service.FirstCardName);
 
         var state = rig.Service.GetState();
         Assert.True(state.Supported);

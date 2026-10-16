@@ -141,6 +141,11 @@ public static class DiagnosticsHealthRoutes
         app.MapPost("/diagnostics/gpu/power-detector/cancel", (IServiceProvider sp) =>
             new PowerDetectorActionResponse { Ok = sp.GetService<Nexus.Service.Sensors.Astral.AstralPowerDetectorService>()?.Cancel() ?? false });
 
+        // Shuts down now instead of at the end of the running countdown. It can
+        // only cut a countdown short, never start a shutdown; false when none runs.
+        app.MapPost("/diagnostics/gpu/power-detector/shutdown-now", (IServiceProvider sp) =>
+            new PowerDetectorActionResponse { Ok = sp.GetService<Nexus.Service.Sensors.Astral.AstralPowerDetectorService>()?.ShutdownNow() ?? false });
+
         app.MapGet("/diagnostics/cooling", (CoolingStallDetector cooling) => cooling.Snapshot()).AllowPanel();
 
         // date (yyyy-MM-dd, service host's local calendar day) takes priority

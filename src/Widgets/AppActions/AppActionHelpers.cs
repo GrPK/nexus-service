@@ -22,7 +22,4 @@ internal static class AppActionHelpers
 
     public static double? Num(Dictionary<string, JsonElement>? args, string key)
         => args != null && args.TryGetValue(key, out var el) && el.ValueKind == JsonValueKind.Number ? el.GetDouble() : null;
-
-    public static bool? Bool(Dictionary<string, JsonElement>? args, string key)
-        => args != null && args.TryGetValue(key, out var el) && el.ValueKind is JsonValueKind.True or JsonValueKind.False ? el.GetBoolean() : null;
 }
