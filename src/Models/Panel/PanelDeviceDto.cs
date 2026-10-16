@@ -76,6 +76,10 @@ public sealed class PanelDeviceRecord : IPanelPersonalization
     /// <summary>Immersive views paint the theme's solid backdrop. False shows the
     /// panel's background behind them instead. Null is unset (on).</summary>
     public bool? ImmersiveBackdrop { get; set; }
+    /// <summary>Ids of the devices last selected on this panel's Lighting immersive view. Null is never set; an empty list is a real "nothing selected".</summary>
+    public List<string>? LightingSelection { get; set; }
+    /// <summary>Ids of the fans last selected on this panel's Cooling immersive view. Null is never set; an empty list is a real "nothing selected".</summary>
+    public List<string>? CoolingSelection { get; set; }
     /// <summary>Colour stops the value-coloured monitoring gauges paint with, positioned
     /// 0-1 along a gauge's own scale, shared by every monitoring widget on this panel.
     /// Null is unset; the client applies its own default.</summary>
@@ -402,6 +406,10 @@ public sealed class PanelDevicePatch
     public List<string>? BackgroundMediaOrder { get; set; }
     public double? BackgroundFrostLevel { get; set; }
     public bool? ImmersiveBackdrop { get; set; }
+    /// <summary>Full id list to replace this panel's Lighting selection; empty clears it.</summary>
+    public List<string>? LightingSelection { get; set; }
+    /// <summary>Full id list to replace this panel's Cooling selection; empty clears it.</summary>
+    public List<string>? CoolingSelection { get; set; }
     /// <summary>Full stop list to replace this panel's; the client sends the whole list.</summary>
     public List<PanelGaugeGradientStop>? GaugeGradient { get; set; }
     public double? WidgetOpacity { get; set; }
