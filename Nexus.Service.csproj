@@ -198,7 +198,7 @@
     <PackageReference Include="SIPSorcery" Version="10.0.16" />
     <TrimmerRootDescriptor Include="TrimmerRoots.xml" />
   </ItemGroup>
-  <!-- Drops SIPSorcery's embedded sample media (about 3.5 MiB). NativeAOT runs
+  <!-- Drops SIPSorcery's embedded sample media NativeAOT runs
        no ILLink pass, and the SDK has no item for ILC substitution files, so
        the flag is added to the ILC response file directly. -->
   <Target Name="AddIlcSubstitutions" BeforeTargets="WriteIlcRspFileForCompilation">
@@ -345,6 +345,20 @@
       <LogicalName>firmware/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
+  <!-- The alias is only valid while the two images are the same bytes. -->
+  <Target Name="CheckSharedY70Firmware" BeforeTargets="CoreCompile" Condition="'$(_NexusFirmwareDir)' != '' AND Exists('$(_NexusFirmwareDir)\y70-truly') AND Exists('$(_NexusFirmwareDir)\y70-infinite')">
+    <ItemGroup>
+      <_Y70TrulyHex Include="$(_NexusFirmwareDir)\y70-truly\*.hex" />
+    </ItemGroup>
+    <GetFileHash Files="@(_Y70TrulyHex)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_Y70TrulyHash" />
+    </GetFileHash>
+    <GetFileHash Files="@(_Y70TrulyHex->'$(_NexusFirmwareDir)\y70-infinite\%(Filename)%(Extension)')" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_Y70InfiniteHash" />
+    </GetFileHash>
+    <Error Condition="'@(_Y70TrulyHash->'%(FileHash)')' != '@(_Y70InfiniteHash->'%(FileHash)')'"
+           Text="y70-truly firmware differs from y70-infinite; BundledFirmwareCatalog aliases them. Embed y70-truly separately and drop the alias." />
+  </Target>
   <!-- Release flashes only the newest image per device (FirmwareFlasher), so the
        older np50 image is embedded for the dev-tools downgrade picker alone. -->
   <ItemGroup Condition="'$(DevTools)' != 'true'">

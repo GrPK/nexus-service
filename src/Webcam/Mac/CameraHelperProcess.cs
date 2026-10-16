@@ -24,8 +24,7 @@ internal sealed class ProcessCameraHelperLauncher : ICameraHelperLauncher
         if (!File.Exists(HelperPath))
         {
             throw new InvalidOperationException(
-                $"camera helper missing at {HelperPath}; this build omits the camera extension "
-                + "(NEXUS_SKIP_CAMERA_EXTENSION), so the virtual camera is unavailable");
+                $"camera helper missing at {HelperPath}; this build does not include the camera extension, so the virtual camera is unavailable");
         }
 
         var psi = new ProcessStartInfo
