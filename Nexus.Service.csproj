@@ -685,22 +685,6 @@
     </Content>
   </ItemGroup>
 
-  <!-- Nexus Game Sync shim DLLs produced by the nexus-gamesync component.
-       build.bat / build32.bat place them under Bundled/win-x64/gamesync/x64/
-       (RzChromaSDK64.dll, RzChromatic64.dll, LightFX.dll,
-        LogitechLedEnginesWrapper.dll, LogitechLed.dll) and x86/ (same names
-       except the Chroma pair uses the 32-bit names without the 64 suffix;
-       LightFX/Logitech share the same filenames across arches). x64 -> System32,
-       x86 -> SysWOW64. GameSyncShimInstaller copies them at enable-time.
-       Absence is tolerated at build time so Mac/CI builds are unaffected. -->
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows')) AND Exists('Bundled\win-x64\gamesync')">
-    <Content Include="Bundled\win-x64\gamesync\**\*.*" Exclude="Bundled\win-x64\gamesync\**\.gitkeep">
-      <Link>tools\gamesync\%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-  </ItemGroup>
-
   <!-- dfu-util (statically linked, ~1.8 MB) used by the firmware flasher to
        write images to devices in DFU mode. Unlike openrgb/ffmpeg this binary
        IS committed to the repo (Bundled/win-x64/dfu-util/). Copied to

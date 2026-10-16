@@ -236,7 +236,6 @@ public sealed partial class LightingEngine : IDisposable
     // device does globally while a sweep is the active effect.
     private readonly HashSet<string> _pinFullFrame = new(StringComparer.Ordinal);
     private long _pinTick;
-    private bool[] _gameSkip = Array.Empty<bool>();
 
     // One assignment renders once into this scratch canvas and every device
     // wearing that look samples it. Static is a held frame, so a look is
@@ -809,9 +808,8 @@ public sealed partial class LightingEngine : IDisposable
                         // still runs so device changes reach hardware.
                         _resampleOnce = false;
                         var epoch = Volatile.Read(ref _frozenEpoch);
-                        // One snapshot for the sample, the game pass and the
-                        // publish: UpdateDevices swaps the array lock-free,
-                        // and the skip mask below is indexed against it.
+                        // One snapshot for the sample and the publish:
+                        // UpdateDevices swaps the array lock-free.
                         var devices = _devices;
                         // The main effect and the pinned looks read back together, closed before any canvas is sampled.
                         var liveBatch = effect is Gpu.ShaderEffect liveShader ? Gpu.ReadbackBatch.TryBegin(liveShader.Context) : null;
@@ -846,16 +844,6 @@ public sealed partial class LightingEngine : IDisposable
                         TrackPinAhead(effect);
                         SampleDevicesFromCanvas(devices);
                         ApplyLedColorLocks(devices);
-                        if (effect is GameSyncEffect gs)
-                        {
-                            // A static pin (or a highlight / test pattern)
-                            // already owns its device; the game frame must
-                            // not paint over it.
-                            gs.WriteToDevices(devices, GameSkipMask(devices));
-                            // The game frame paints whole devices, locked LEDs too.
-                            ApplyLedColorLocks(devices);
-                        }
-                        // After the game frame so a press shows over game lighting too.
                         if (KeyReactive?.Apply(devices, _overlaid, Environment.TickCount64) == true)
                         {
                             ApplyLedColorLocks(devices);
@@ -899,11 +887,6 @@ public sealed partial class LightingEngine : IDisposable
                             effect.RenderFrame(_canvas, ReferenceEquals(effect, _lastRenderEffect) ? _lastRenderMs : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                             SampleDevicesFromCanvas(devices);
                             ApplyLedColorLocks(devices);
-                            if (effect is GameSyncEffect pausedGame)
-                            {
-                                pausedGame.WriteToDevices(devices, GameSkipMask(devices));
-                                ApplyLedColorLocks(devices);
-                            }
                         }
                         foreach (var dev in devices)
                         {
@@ -1203,26 +1186,6 @@ public sealed partial class LightingEngine : IDisposable
             render.RetryAtMs = nowMs + PinRetryMs;
             Gpu.GpuContext.Log($"[pin] build failed for {key}: {ex.GetType().Name}: {ex.Message}");
         }
-    }
-
-    /// <summary>
-    /// The skip mask for the game frame: whatever an overlay painted, plus
-    /// pinned devices, which the shared game frame must not overwrite.
-    /// The key-reactive pass keeps using the overlay mask alone, so a pinned
-    /// keyboard still reacts to presses.
-    /// </summary>
-    private bool[] GameSkipMask(DeviceFrame[] devices)
-    {
-        if (_pinnedDevices.Count == 0)
-        {
-            return _overlaid;
-        }
-        if (_gameSkip.Length < devices.Length) _gameSkip = new bool[devices.Length];
-        for (var i = 0; i < devices.Length; i++)
-        {
-            _gameSkip[i] = (i < _overlaid.Length && _overlaid[i]) || _pinnedDevices.ContainsKey(devices[i].Id);
-        }
-        return _gameSkip;
     }
 
     /// <summary>

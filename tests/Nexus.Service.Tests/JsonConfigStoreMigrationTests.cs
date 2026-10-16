@@ -875,12 +875,13 @@ public class JsonConfigStoreMigrationTests : IDisposable
         }
     }
 
-    /// <summary>v23: "wgl" was the old default and was always persisted, so it moves to ANGLE; "glfw" and an already-migrated document are left alone.</summary>
+    /// <summary>v24: "wgl" was the old default and was always persisted, so it moves to ANGLE; "glfw" and an already-migrated document are left alone.</summary>
     [Theory]
     [InlineData(21, "wgl", "angle")]
     [InlineData(22, "wgl", "angle")]
     [InlineData(22, "glfw", "glfw")]
-    [InlineData(23, "wgl", "wgl")]
+    [InlineData(23, "wgl", "angle")]
+    [InlineData(24, "wgl", "wgl")]
     public void Load_RenderBackend_WglMovesToAngleOnce(int schema, string stored, string expected)
     {
         File.WriteAllText(_settingsPath,
@@ -890,6 +891,27 @@ public class JsonConfigStoreMigrationTests : IDisposable
         try
         {
             Assert.Equal(expected, store.Load().Lighting.RenderBackend);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    /// <summary>A v22 file runs both the Game Sync removal (v23) and the render backend move (v24).</summary>
+    [Fact]
+    public void Load_V22File_RunsBothMigrations()
+    {
+        File.WriteAllText(_settingsPath,
+            """{ "schemaVersion": 22, "lighting": { "renderBackend": "wgl" } }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        try
+        {
+            var s = store.Load();
+            Assert.Equal("angle", s.Lighting.RenderBackend);
+            Assert.True(s.GameSyncRemovedNotice);
+            Assert.Equal(NexusSettings.CurrentSchemaVersion, s.SchemaVersion);
         }
         finally
         {

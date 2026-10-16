@@ -88,6 +88,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 {
                     _cached.FeaturesOnboardingCompleted = true;
                     Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.KeepMiceOn(_cached);
+                    _cached.GameSyncRemovedNotice = true;
                     pinsMigrated = true;
                 }
                 if (_cached.SchemaVersion < NexusSettings.CurrentSchemaVersion)
@@ -112,6 +113,11 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                         recovered = true;
                     }
                     if (NormalizeDeckInstanceModes(_cached))
+                    {
+                        recovered = true;
+                    }
+                    // A downgrade to an older build can write the removed mode back at the current schema version.
+                    if (Nexus.Service.Lighting.RemovedSyncModes.Apply(_cached.Lighting))
                     {
                         recovered = true;
                     }
@@ -222,7 +228,8 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
     /// widget's inline layout config does the same (DeckModesMigration).
     /// v19: ConflictWhitelistMigration.
     /// v20: ConflictWhitelistMigration.KeepThirdPartyDevicesOn.
-    /// v22: Lighting.RenderBackend "wgl" (the old default, always persisted) becomes "angle".
+    /// v23: the removed Game Sync mode becomes static; an upgrade sets GameSyncRemovedNotice.
+    /// v24: Lighting.RenderBackend "wgl" (the old default, always persisted) becomes "angle".
     /// </summary>
     private static void Migrate(NexusSettings doc)
     {
@@ -319,7 +326,12 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         {
             Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.KeepMiceOn(doc);
         }
-        if (doc.SchemaVersion < 23 && doc.Lighting is { } lighting
+        if (doc.SchemaVersion < 23)
+        {
+            Nexus.Service.Lighting.RemovedSyncModes.Apply(doc.Lighting);
+            doc.GameSyncRemovedNotice = true;
+        }
+        if (doc.SchemaVersion < 24 && doc.Lighting is { } lighting
             && string.Equals(lighting.RenderBackend, "wgl", StringComparison.OrdinalIgnoreCase))
         {
             lighting.RenderBackend = "angle";

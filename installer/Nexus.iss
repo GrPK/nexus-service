@@ -112,6 +112,9 @@ ErrorRenamingTemp=Setup could not save this file. {#AntivirusCause}%n%n{#Antivir
 ErrorReplacingExistingFile=Setup could not replace this file. {#AntivirusCause}%n%n{#AntivirusFix}, then click Try again.%n%nMore information: {#AntivirusDocsUrl}%n%nDetails:
 ErrorExecutingProgram=Setup could not run this file:%n%1%n%n{#AntivirusCause}%n%n{#AntivirusFix}, then run Setup again.%n%nMore information: {#AntivirusDocsUrl}
 
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\tools\gamesync"
+
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; BeforeInstall: UnlockTarget
 
