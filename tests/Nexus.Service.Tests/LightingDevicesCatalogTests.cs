@@ -65,6 +65,44 @@ public class LightingDevicesCatalogTests
     }
 
     [Theory]
+    // Declared by the OpenRGB fork's own device tables, not the controller class name.
+    [InlineData("Corsair", "Katar Pro", "mouse")]
+    [InlineData("Corsair", "Katar Pro XT", "mouse")]
+    [InlineData("Corsair", "K65 Mini", "keyboard")]
+    // Runtime-typed controllers: resolved from the device name.
+    [InlineData("Corsair", "K70 RGB MK.2", "keyboard")]
+    [InlineData("Corsair", "Scimitar RGB", "mouse")]
+    [InlineData("Logitech", "G502 HERO Gaming Mouse", "mouse")]
+    [InlineData("Logitech", "G Powerplay Mousepad", "mousemat")]
+    [InlineData("SteelSeries", "Aerox 3 Wireless", "mouse")]
+    public void Catalog_OpenRgbRowsCarryTheDeviceType(string vendor, string model, string category)
+    {
+        var device = LightingDevicesCatalog.All.First(
+            d => d.Source == "openrgb" && d.Vendor == vendor && d.Model == model);
+
+        Assert.Equal(category, device.Category);
+    }
+
+    [Theory]
+    [InlineData("Katar Pro", "CorsairPeripheralV2Controller", "hid", "mouse", "mouse")]
+    [InlineData("Katar Pro", "CorsairPeripheralV2Controller", "hid", null, "mouse")]
+    [InlineData("Corsair K95 RGB", "CorsairPeripheralController", "hid", null, "keyboard")]
+    [InlineData("Corsair H100i Pro XT", "CorsairHydroPlatinumController", "hid", "cooler", "aio")]
+    [InlineData("Lian Li Uni Hub", "LianLiController", "hid", "cooler", "fan")]
+    [InlineData("NZXT RGB & Fan Controller", "NZXTHue2Controller", "hid", "ledstrip", "fan")]
+    [InlineData("NZXT Hue 2", "NZXTHue2Controller", "hid", "ledstrip", "light")]
+    [InlineData("Corsair Galleon K100 SD", "CorsairGalleonController", "hid", null, "keyboard")]
+    [InlineData("Philips Hue", "PhilipsHueController", "remote", "light", "light")]
+    // Nothing declared and no name hint: the controller-class heuristic still applies.
+    [InlineData("Some Thing", "OpenRGBGPUController", "i2c", null, "gpu")]
+    [InlineData("Some Thing", "MysteryController", "hid", null, "controller")]
+    public void ResolveCategory_PrefersDeclaredTypeThenNameThenController(
+        string name, string controller, string kind, string? type, string expected)
+    {
+        Assert.Equal(expected, LightingDevicesCatalog.ResolveCategory(name, controller, kind, type));
+    }
+
+    [Theory]
     [InlineData("Lian Li", "Uni Fan SL-Infinity", "0x0CF2", "0xA102")]
     [InlineData("Lian Li", "Galahad II Trinity", "0x0416", "0x7373")]
     [InlineData("Lian Li", "SL-LCD", "0x1CBE", "0x0005")]

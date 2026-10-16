@@ -194,7 +194,7 @@ public static class LightingDevicesCatalog
             {
                 Vendor = vendor,
                 Model = model,
-                Category = CategoryFromController(d.Controller, d.Kind),
+                Category = ResolveCategory(detector, d.Controller, d.Kind, d.Type),
                 VendorId = d.Vid ?? "-",
                 ProductId = d.Pid ?? "-",
                 Capabilities = new List<string> { "rgb" },
@@ -426,6 +426,88 @@ public static class LightingDevicesCatalog
         return (name.Substring(0, sp), name.Substring(sp + 1));
     }
 
+    /// <summary>
+    /// The type OpenRGB declares for the device wins; the device name catches rows the
+    /// extractor could not resolve statically (runtime-typed controllers); the
+    /// controller class is the last resort.
+    /// </summary>
+    internal static string ResolveCategory(string? name, string? controller, string? kind, string? openRgbType)
+    {
+        if (openRgbType is not null && CategoryByOpenRgbType.TryGetValue(openRgbType, out var declared))
+        {
+            if (declared == "cooler")
+            {
+                return AioName.IsMatch(name ?? "") ? "aio" : "fan";
+            }
+            // Fan hubs register as generic LED strips; the name says what they are.
+            return declared == "light" && FanHubName.IsMatch(name ?? "") ? "fan" : declared;
+        }
+        var fromName = CategoryFromName(name ?? "");
+        return fromName ?? CategoryFromController(controller, kind);
+    }
+
+    private static readonly Dictionary<string, string> CategoryByOpenRgbType = new()
+    {
+        ["keyboard"] = "keyboard",
+        ["keypad"] = "keyboard",
+        ["mouse"] = "mouse",
+        ["mousemat"] = "mousemat",
+        ["headset"] = "headset",
+        ["microphone"] = "headset",
+        ["headset_stand"] = "headset stand",
+        ["gpu"] = "gpu",
+        ["dram"] = "memory",
+        ["motherboard"] = "motherboard",
+        ["monitor"] = "monitor",
+        ["gamepad"] = "gamepad",
+        ["case"] = "case",
+        ["ledstrip"] = "light",
+        ["light"] = "light",
+        ["laptop"] = "laptop",
+        ["storage"] = "storage",
+        ["speaker"] = "speaker",
+        ["accessory"] = "accessory",
+        ["cooler"] = "cooler",
+    };
+
+    private static readonly System.Text.RegularExpressions.Regex AioName = new(
+        @"\b(AIO|Hydro|Kraken|Ryuo|Ryujin|LC|H\d{2,3}i|Galahad|Waterforce|Hanbo|Elite|Liquid)\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static readonly System.Text.RegularExpressions.Regex FanHubName = new(
+        @"\bFan\b|Smart Device",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Ordered: the first match wins, so the specific shapes (mat, headset, light bar)
+    // come before the broad ones.
+    private static readonly (System.Text.RegularExpressions.Regex Pattern, string Category)[] NameRules =
+    {
+        (NameRule(@"mouse ?pad|mouse ?mat|powerplay mat|\bMM\d{3}\b"), "mousemat"),
+        (NameRule(@"headset|headphone|kraken (7|kitty)"), "headset"),
+        (NameRule(@"light ?bar"), "light"),
+        (NameRule(@"keyboard|\bK\d{2,3}\b|\bStrafe\b|keyrox"), "keyboard"),
+        (NameRule(@"\bmouse\b|\b(Glaive|Harpoon|Ironclaw|Nightsword|Sabre|Scimitar|Aerox|Rival|Katar|Dark Core)\b|\bM\d{2}\b|\bG(203|303|403|502|703|900|903)\b"), "mouse"),
+        (NameRule(@"\bST100\b"), "headset stand"),
+        (NameRule(@"\bLegion\b|laptop"), "laptop"),
+        (NameRule(@"receiver"), "accessory"),
+    };
+
+    private static System.Text.RegularExpressions.Regex NameRule(string pattern) => new(
+        pattern,
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static string? CategoryFromName(string name)
+    {
+        foreach (var (pattern, category) in NameRules)
+        {
+            if (pattern.IsMatch(name))
+            {
+                return category;
+            }
+        }
+        return null;
+    }
+
     private static string CategoryFromController(string? controller, string? kind)
     {
         var c = controller ?? "";
@@ -476,4 +558,5 @@ public sealed class OpenRgbSupportedDeviceEntry
     [JsonPropertyName("pid")] public string? Pid { get; set; }
     [JsonPropertyName("controller")] public string? Controller { get; set; }
     [JsonPropertyName("kind")] public string? Kind { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
 }
