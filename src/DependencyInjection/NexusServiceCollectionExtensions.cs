@@ -244,6 +244,8 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.Galahad2LcdCoolingProvider.IsGalahad2LcdId, sp.GetRequiredService<Nexus.Service.Cooling.Galahad2LcdCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.HydroShiftCoolingProvider.IsHydroShiftLcdId, sp.GetRequiredService<Nexus.Service.Cooling.HydroShiftCoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
@@ -278,6 +280,8 @@ public static class NexusServiceCollectionExtensions
                 Nexus.Service.Cooling.HydroShift2CurveCoolingProvider.IsHydroShift2CurveId, sp.GetRequiredService<Nexus.Service.Cooling.HydroShift2CurveCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.Galahad2LcdCoolingProvider.IsGalahad2LcdId, sp.GetRequiredService<Nexus.Service.Cooling.Galahad2LcdCoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.HydroShiftCoolingProvider.IsHydroShiftLcdId, sp.GetRequiredService<Nexus.Service.Cooling.HydroShiftCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
@@ -322,6 +326,8 @@ public static class NexusServiceCollectionExtensions
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.Galahad2LcdCoolingProvider.IsGalahad2LcdId, sp.GetRequiredService<Nexus.Service.Cooling.Galahad2LcdCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.HydroShiftCoolingProvider.IsHydroShiftLcdId, sp.GetRequiredService<Nexus.Service.Cooling.HydroShiftCoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.Slv3CoolingProvider.IsSlv3Id, sp.GetRequiredService<Nexus.Service.Cooling.Slv3CoolingProvider>()),
@@ -355,6 +361,8 @@ public static class NexusServiceCollectionExtensions
                 Nexus.Service.Cooling.HydroShift2CurveCoolingProvider.IsHydroShift2CurveId, sp.GetRequiredService<Nexus.Service.Cooling.HydroShift2CurveCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.Galahad2LcdCoolingProvider.IsGalahad2LcdId, sp.GetRequiredService<Nexus.Service.Cooling.Galahad2LcdCoolingProvider>()),
+            new CompositeFanControlProvider.FanSource(
+                Nexus.Service.Cooling.HydroShiftCoolingProvider.IsHydroShiftLcdId, sp.GetRequiredService<Nexus.Service.Cooling.HydroShiftCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
                 Nexus.Service.Cooling.CorsairLinkCoolingProvider.IsCorsairId, sp.GetRequiredService<Nexus.Service.Cooling.CorsairLinkCoolingProvider>()),
             new CompositeFanControlProvider.FanSource(
@@ -1232,6 +1240,9 @@ public static class NexusServiceCollectionExtensions
             {
                 // The 360R's fan LEDs ride the panel's handle; the provider and writer gate to that product.
                 services.AddSingleton(new Nexus.Service.Peripherals.JpegPanels.HydroShiftFanLeds(jpegPanelHub));
+                // Built here, not lazily: construction hooks the keepalive and the detach hand-back onto the hub.
+                services.AddSingleton(new Nexus.Service.Peripherals.JpegPanels.HydroShiftAio(jpegPanelHub));
+                services.AddSingleton<Nexus.Service.Cooling.HydroShiftCoolingProvider>();
                 services.AddSingleton<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>();
                 services.AddSingleton<Nexus.Service.Lighting.ILightingFrameContributor>(
                     sp => sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>());
