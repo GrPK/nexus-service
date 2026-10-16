@@ -100,6 +100,20 @@ public sealed class GpuContext : IDisposable
     public bool IsWarp => false;
 #endif
 
+    /// <summary>Pixel-pack buffers behind <see cref="ReadbackBatch"/>. GL thread only.</summary>
+    internal PackPool Pack { get; } = new();
+
+    // NEXUS_GL_BATCH_READBACK: 0 off everywhere, 1 on everywhere, unset = on for ANGLE (ES) and Windows WGL.
+    private static readonly string? BatchReadbackSetting = Environment.GetEnvironmentVariable("NEXUS_GL_BATCH_READBACK");
+
+    /// <summary>Renders inside a <see cref="ReadbackBatch"/> queue their glReadPixels and pay the GPU wait once per batch.</summary>
+    public bool BatchReadback => BatchReadbackSetting switch
+    {
+        "0" => false,
+        "1" => true,
+        _ => IsEs || OperatingSystem.IsWindows(),
+    };
+
     /// <summary>Allow compile and link to run in the driver's worker threads (KHR_parallel_shader_compile) when the context offers it. A caller that must have a finished render from its first frame sets this false.</summary>
     public bool AsyncCompile { get; set; } = true;
 

@@ -23,6 +23,24 @@ public sealed class BenchLookAhead
     public double PerFrameMs { get; set; }
 }
 
+/// <summary>Batched against one-by-one readback of the same frames: whole-process CPU, wall time, and whether every pixel matched.</summary>
+public sealed class BenchBatch
+{
+    public bool BatchActive { get; set; }
+    public int Frames { get; set; }
+    public int Rounds { get; set; }
+    public double UnbatchedCpuMsPerFrame { get; set; }
+    public double BatchedCpuMsPerFrame { get; set; }
+    public double UnbatchedWallMsPerFrame { get; set; }
+    public double BatchedWallMsPerFrame { get; set; }
+    public bool Identical { get; set; }
+
+    /// <summary>Two renders per tick (main effect plus a pinned look), one tick at a time.</summary>
+    public double PairUnbatchedCpuMsPerTick { get; set; }
+    public double PairBatchedCpuMsPerTick { get; set; }
+    public bool PairIdentical { get; set; }
+}
+
 public sealed class BenchEffectResult
 {
     public string Name { get; set; } = "";
@@ -69,6 +87,7 @@ public sealed class BenchEffectResult
     public long PrivateBytesAfter { get; set; }
     public List<BenchFingerprintSample> Fingerprints { get; set; } = new();
     public BenchLookAhead? LookAhead { get; set; }
+    public BenchBatch? Batch { get; set; }
 }
 
 public sealed class BenchComboResult

@@ -61,6 +61,19 @@ public sealed class CanvasBuffer
     }
 
     /// <summary>
+    /// Bulk write from a bottom-up glReadPixels block (RGBA when <paramref name="rgba"/>, else RGB) sized
+    /// Width * Height pixels. Flips the rows and drops alpha in one pass.
+    /// </summary>
+    internal void WriteFromGl(ReadOnlySpan<byte> src, bool rgba)
+    {
+        if (src.Length < Width * Height * (rgba ? 4 : 3))
+        {
+            return;
+        }
+        Gpu.GlReadbackConvert.FlipRows(src, _pixels, Width, Height, rgba);
+    }
+
+    /// <summary>
     /// Applies the shared hue / colorize / saturation / contrast post-process
     /// to every pixel in place. Called by Screen Mirror and Media effects so
     /// their output responds to the same four sliders the animate shaders do.

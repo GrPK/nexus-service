@@ -75,16 +75,18 @@ public sealed class ShaderEffect : IEffect
     // context invalidates every GL object, so they are rebuilt when it moves.
     private int _generation;
     private byte[] _readback = Array.Empty<byte>();
-    private byte[] _flipBuffer = Array.Empty<byte>();
 
     // Cached Invoke-callback that reads per-frame args from instance fields.
     // Avoids allocating a fresh lambda (display class) every render frame.
     // RenderFrame is only called from the engine loop thread, so stashing
     // args on the instance is safe.
     private CanvasBuffer? _pendingCanvas;
+    private ReadbackBatch? _pendingBatch;
     private double _pendingTick;
     private Action? _cachedRenderDelegate;
     private Func<StepState>? _cachedStepDelegate;
+
+    internal GpuContext Context => _ctx;
 
     public string Name { get; }
     public float Speed { get; set; } = 1f;
@@ -193,6 +195,8 @@ public sealed class ShaderEffect : IEffect
 
         _pendingCanvas = canvas;
         _pendingTick = tickMs;
+        var batch = ReadbackBatch.Current;
+        _pendingBatch = batch is not null && batch.Matches(_ctx) ? batch : null;
         _pendingBackground = GpuContext.InBackground;
         if (!_compiled && _ctx.UseAsyncCompile)
         {
@@ -423,18 +427,18 @@ public sealed class ShaderEffect : IEffect
             gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
 
             // ES only guarantees RGBA / UNSIGNED_BYTE for glReadPixels, so an ES
-            // context reads four channels and the flip pass drops alpha.
+            // context reads four channels and the conversion drops alpha.
             bool es = _ctx.IsEs;
-            int srcStride = w * (es ? 4 : 3);
-            int bytes = w * h * 3;
-            int readBytes = srcStride * h;
+            if (_pendingBatch is { } batch && batch.Enqueue(gl, _ctx, w, h, es, canvas))
+            {
+                // The read is queued; the batch maps it together with its siblings and fills the canvas.
+                gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+                return StepState.Done;
+            }
+            int readBytes = w * h * (es ? 4 : 3);
             if (_readback.Length < readBytes)
             {
                 _readback = new byte[readBytes];
-            }
-            if (_flipBuffer.Length < bytes)
-            {
-                _flipBuffer = new byte[bytes];
             }
             unsafe
             {
@@ -452,29 +456,9 @@ public sealed class ShaderEffect : IEffect
 
             // GL origin is bottom-left - flip rows into the top-left convention the
             // rest of the pipeline (and the old CPU effects) use.
-            int rowBytes = w * 3;
-            for (int y = 0; y < h; y++)
-            {
-                int srcRow = (h - 1 - y) * srcStride;
-                int dstRow = y * rowBytes;
-                if (es)
-                {
-                    for (int x = 0; x < w; x++)
-                    {
-                        _flipBuffer[dstRow + x * 3] = _readback[srcRow + x * 4];
-                        _flipBuffer[dstRow + x * 3 + 1] = _readback[srcRow + x * 4 + 1];
-                        _flipBuffer[dstRow + x * 3 + 2] = _readback[srcRow + x * 4 + 2];
-                    }
-                }
-                else
-                {
-                    System.Buffer.BlockCopy(_readback, srcRow, _flipBuffer, dstRow, rowBytes);
-                }
-            }
-
             if (canvas.Width == w && canvas.Height == h)
             {
-                canvas.WriteFromRgb(_flipBuffer.AsSpan(0, bytes));
+                canvas.WriteFromGl(_readback.AsSpan(0, readBytes), es);
             }
             // Canvas resized outside what we rendered: drop this frame silently.
 

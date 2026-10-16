@@ -809,23 +809,32 @@ public sealed partial class LightingEngine : IDisposable
                         // still runs so device changes reach hardware.
                         _resampleOnce = false;
                         var epoch = Volatile.Read(ref _frozenEpoch);
-                        if (!_frozen || Volatile.Read(ref _frozenRenderedEpoch) != epoch)
-                        {
-                            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            _lastRenderMs = nowMs;
-                            _lastRenderEffect = effect;
-                            effect.RenderFrame(_canvas, _lastRenderMs);
-                            // A shader still compiling drew nothing of its own: keep asking until it does.
-                            if (effect is not Gpu.ShaderEffect { IsRenderPending: true })
-                            {
-                                Volatile.Write(ref _frozenRenderedEpoch, epoch);
-                            }
-                        }
                         // One snapshot for the sample, the game pass and the
                         // publish: UpdateDevices swaps the array lock-free,
                         // and the skip mask below is indexed against it.
                         var devices = _devices;
-                        RenderPins(effect, devices);
+                        // The main effect and the pinned looks read back together, closed before any canvas is sampled.
+                        var liveBatch = effect is Gpu.ShaderEffect liveShader ? Gpu.ReadbackBatch.TryBegin(liveShader.Context) : null;
+                        try
+                        {
+                            if (!_frozen || Volatile.Read(ref _frozenRenderedEpoch) != epoch)
+                            {
+                                var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                _lastRenderMs = nowMs;
+                                _lastRenderEffect = effect;
+                                effect.RenderFrame(_canvas, _lastRenderMs);
+                                // A shader still compiling drew nothing of its own: keep asking until it does.
+                                if (effect is not Gpu.ShaderEffect { IsRenderPending: true })
+                                {
+                                    Volatile.Write(ref _frozenRenderedEpoch, epoch);
+                                }
+                            }
+                            RenderPins(effect, devices);
+                        }
+                        finally
+                        {
+                            liveBatch?.Dispose();
+                        }
                         // After RenderPins, which updates pinned looks in place.
                         TrackAheadParams(effect);
                         TrackPinAhead(effect);
@@ -1522,6 +1531,22 @@ public sealed partial class LightingEngine : IDisposable
         return req;
     }
 
+    // Frames of one window rendered back to back before their readbacks are mapped together.
+    private const int AheadBatchFrames = 8;
+
+    // The active window's renders all go through ShaderEffect, so several frames may share one readback batch.
+    private bool _aheadBatchOk;
+    // Set by RenderAheadPins when a pinned source renders straight into its canvas instead of queueing a readback.
+    private bool _aheadImmediatePin;
+    private readonly List<DeviceFrame[]> _aheadBatchShadows = new();
+    private readonly List<Dictionary<string, CanvasBuffer?>> _aheadBatchPinned = new();
+    private readonly List<HashSet<string>> _aheadBatchFullFrame = new();
+
+    private bool AheadAbandoned(AheadRequest req, IEffect effect) =>
+        req.Abandoned || _studioOverlay is not null || req.PinSig != PinAheadSig(req.DeviceIds)
+        || (Pins?.Version ?? -1) != _pinAheadSeenVersion
+        || (req.NeedsGlobal && (!ReferenceEquals(req.Effect, effect) || req.ParamsSig != _aheadParamsSig || !IsTimePure(effect)));
+
     private void ServiceAheadRequests(IEffect effect, DeviceFrame[] devices)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -1537,45 +1562,86 @@ public sealed partial class LightingEngine : IDisposable
                 }
                 req.Begin(effect, _aheadParamsSig, PinAheadSig(req.DeviceIds), NeedsGlobal(req.DeviceIds), devices);
                 _aheadActive = req;
+                _aheadBatchOk = false;
             }
             // A window whose zones are all pinned does not depend on the global effect at all.
-            if (req.Abandoned || _studioOverlay is not null || req.PinSig != PinAheadSig(req.DeviceIds)
-                || (Pins?.Version ?? -1) != _pinAheadSeenVersion
-                || (req.NeedsGlobal && (!ReferenceEquals(req.Effect, effect) || req.ParamsSig != _aheadParamsSig || !IsTimePure(effect))))
+            if (AheadAbandoned(req, effect))
             {
                 _aheadActive = null;
                 req.Done.Set();
                 continue;
             }
+            // The first frame of a window renders alone and shows whether every source queues its readback;
+            // after that, up to AheadBatchFrames frames read back together. Without an open batch each
+            // frame renders straight into the shared canvases, so it must be sampled before the next one.
+            var batch = _aheadBatchOk && effect is Gpu.ShaderEffect batchShader ? Gpu.ReadbackBatch.TryBegin(batchShader.Context) : null;
+            var want = batch is not null ? Math.Min(AheadBatchFrames, req.TickMs.Length - req.NextFrame) : 1;
+            var count = 0;
+            var discard = false;
             try
             {
-                var shadow = req.NewShadowFrames();
-                if (req.NeedsGlobal)
+                for (; count < want; count++)
                 {
-                    effect.RenderFrame(_aheadCanvas, req.TickMs[req.NextFrame]);
+                    if (count > 0 && (AheadAbandoned(req, effect) || sw.Elapsed.TotalMilliseconds >= AheadBudgetMs))
+                    {
+                        break;
+                    }
+                    var tickMs = req.TickMs[req.NextFrame + count];
+                    var shadow = req.NewShadowFrames();
+                    batch?.Group = count;
+                    if (req.NeedsGlobal)
+                    {
+                        effect.RenderFrame(_aheadCanvas, tickMs);
+                    }
+                    else
+                    {
+                        _aheadCanvas.Clear();
+                    }
+                    _aheadImmediatePin = false;
+                    var failed = RenderAheadPins(effect, shadow, tickMs)
+                        || (req.NeedsGlobal && effect is Gpu.ShaderEffect { HasFailed: true } or Gpu.ShaderEffect { IsRenderPending: true });
+                    if (failed)
+                    {
+                        // A shader that failed mid-window left a stale canvas; ship nothing rather than those frames.
+                        discard = true;
+                        break;
+                    }
+                    if (count > 0 && _aheadImmediatePin)
+                    {
+                        // A source that renders straight into its canvas joined mid-group and overwrote earlier frames.
+                        _aheadBatchOk = false;
+                        discard = true;
+                        break;
+                    }
+                    if (count == 0)
+                    {
+                        _aheadBatchOk = !_aheadImmediatePin && (!req.NeedsGlobal || effect is Gpu.ShaderEffect { TestRender: null });
+                    }
+                    SnapshotAheadMaps(count, shadow);
                 }
-                else
+                if (discard)
                 {
-                    _aheadCanvas.Clear();
-                }
-                var failed = RenderAheadPins(effect, shadow, req.TickMs[req.NextFrame])
-                    || (req.NeedsGlobal && effect is Gpu.ShaderEffect { HasFailed: true } or Gpu.ShaderEffect { IsRenderPending: true });
-                if (failed)
-                {
-                    // A shader that failed mid-window left a stale canvas; ship nothing rather than those frames.
+                    batch?.Cancel();
                     _aheadActive = null;
                     req.Done.Set();
                     continue;
                 }
-                _sampleCanvas = _aheadCanvas;
-                SampleDevicesFromCanvas(shadow, pinned: _aheadPinned, pinFullFrame: _aheadPinFullFrame);
-                ApplyLedColorLocks(shadow);
-                foreach (var d in shadow)
+                batch?.Resolve();
+                for (var i = 0; i < count; i++)
                 {
-                    d.Publish();
+                    batch?.Apply(i);
+                    var shadow = _aheadBatchShadows[i];
+                    RestoreAheadMaps(i);
+                    _sampleCanvas = _aheadCanvas;
+                    SampleDevicesFromCanvas(shadow, pinned: _aheadPinned, pinFullFrame: _aheadPinFullFrame);
+                    ApplyLedColorLocks(shadow);
+                    foreach (var d in shadow)
+                    {
+                        d.Publish();
+                    }
+                    req.Rendered[req.NextFrame++] = shadow;
+                    rendered++;
                 }
-                req.Rendered[req.NextFrame++] = shadow;
-                rendered++;
             }
             catch
             {
@@ -1585,6 +1651,7 @@ public sealed partial class LightingEngine : IDisposable
             }
             finally
             {
+                batch?.Dispose();
                 _sampleCanvas = _canvas;
             }
             if (req.NextFrame == req.TickMs.Length)
@@ -1594,6 +1661,41 @@ public sealed partial class LightingEngine : IDisposable
                 req.Done.Set();
             }
         }
+    }
+
+    // Keeps frame i's shadow devices and pin routing while later frames of the batch render over the shared maps.
+    private void SnapshotAheadMaps(int i, DeviceFrame[] shadow)
+    {
+        if (i == 0)
+        {
+            _aheadBatchShadows.Clear();
+        }
+        while (_aheadBatchPinned.Count <= i)
+        {
+            _aheadBatchPinned.Add(new Dictionary<string, CanvasBuffer?>(StringComparer.Ordinal));
+            _aheadBatchFullFrame.Add(new HashSet<string>(StringComparer.Ordinal));
+        }
+        _aheadBatchShadows.Add(shadow);
+        var pinned = _aheadBatchPinned[i];
+        pinned.Clear();
+        foreach (var kv in _aheadPinned)
+        {
+            pinned[kv.Key] = kv.Value;
+        }
+        var full = _aheadBatchFullFrame[i];
+        full.Clear();
+        full.UnionWith(_aheadPinFullFrame);
+    }
+
+    private void RestoreAheadMaps(int i)
+    {
+        _aheadPinned.Clear();
+        foreach (var kv in _aheadBatchPinned[i])
+        {
+            _aheadPinned[kv.Key] = kv.Value;
+        }
+        _aheadPinFullFrame.Clear();
+        _aheadPinFullFrame.UnionWith(_aheadBatchFullFrame[i]);
     }
 
     private readonly Dictionary<string, CanvasBuffer?> _aheadPinned = new(StringComparer.Ordinal);
@@ -1649,6 +1751,10 @@ public sealed partial class LightingEngine : IDisposable
             if (_aheadPinRendered.Add(key))
             {
                 fx.RenderFrame(canvas, tickMs);
+                if (!Gpu.ReadbackBatch.CanDefer(fx))
+                {
+                    _aheadImmediatePin = true;
+                }
                 failed |= fx is Gpu.ShaderEffect { HasFailed: true } or Gpu.ShaderEffect { IsRenderPending: true };
             }
             _aheadPinned[dev.Id] = canvas;

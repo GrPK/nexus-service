@@ -294,6 +294,7 @@ internal static partial class LightingBench
             TimedRun(r, effect, canvas, devices, engine, ctx, probe, seconds, cyclesPerMs);
             ReadbackProbe(r, ctx);
             LookAhead(r, effect, engine, ctx);
+            r.Batch = BatchComparison(effect, ctx, name);
             probe.Snapshot();
             r.GlErrors = probe.Errors;
             r.Ok = !effect.HasFailed;
@@ -429,6 +430,106 @@ internal static partial class LightingBench
         }
         var total = sw.Elapsed.TotalMilliseconds;
         r.LookAhead = new BenchLookAhead { Frames = LookAheadFrames, TotalMs = total, PerFrameMs = total / LookAheadFrames };
+    }
+
+    private const int BatchRounds = 100;
+    private const int BatchSize = 8;
+
+    private static string PixelHash(CanvasBuffer c) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(c.Pixels));
+
+    /// <summary>The same look-ahead window and the same two-render tick, read back one by one and in batches the way the engine does.</summary>
+    private static BenchBatch BatchComparison(ShaderEffect effect, GpuContext ctx, string name)
+    {
+        var b = new BenchBatch { Frames = LookAheadFrames, Rounds = BatchRounds };
+        var canvas = new CanvasBuffer(ctx.Width, ctx.Height);
+        var start = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        using var proc = Process.GetCurrentProcess();
+        var expected = new string[LookAheadFrames];
+
+        proc.Refresh();
+        var cpu0 = proc.TotalProcessorTime;
+        var sw = Stopwatch.StartNew();
+        for (var round = 0; round < BatchRounds; round++)
+        {
+            for (var i = 0; i < LookAheadFrames; i++)
+            {
+                effect.RenderFrame(canvas, start + (long)i * PeriodMs);
+                if (round == 0)
+                {
+                    expected[i] = PixelHash(canvas);
+                }
+            }
+        }
+        b.UnbatchedWallMsPerFrame = sw.Elapsed.TotalMilliseconds / (BatchRounds * LookAheadFrames);
+        proc.Refresh();
+        b.UnbatchedCpuMsPerFrame = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / (BatchRounds * LookAheadFrames);
+
+        var identical = true;
+        var active = false;
+        proc.Refresh();
+        cpu0 = proc.TotalProcessorTime;
+        sw.Restart();
+        for (var round = 0; round < BatchRounds; round++)
+        {
+            for (var at = 0; at < LookAheadFrames; at += BatchSize)
+            {
+                var n = Math.Min(BatchSize, LookAheadFrames - at);
+                using var batch = ReadbackBatch.TryBegin(ctx);
+                active |= batch is not null;
+                for (var k = 0; k < n; k++)
+                {
+                    if (batch is not null)
+                    {
+                        batch.Group = k;
+                    }
+                    effect.RenderFrame(canvas, start + (long)(at + k) * PeriodMs);
+                    if (batch is null && round == 0)
+                    {
+                        identical &= expected[at + k] == PixelHash(canvas);
+                    }
+                }
+                for (var k = 0; k < n && batch is not null; k++)
+                {
+                    batch.Apply(k);
+                    if (round == 0)
+                    {
+                        identical &= expected[at + k] == PixelHash(canvas);
+                    }
+                }
+            }
+        }
+        b.BatchedWallMsPerFrame = sw.Elapsed.TotalMilliseconds / (BatchRounds * LookAheadFrames);
+        proc.Refresh();
+        b.BatchedCpuMsPerFrame = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / (BatchRounds * LookAheadFrames);
+        b.BatchActive = active;
+        b.Identical = identical;
+
+        using var second = new ShaderEffect(name, ctx, ShaderLibrary.Get(name));
+        var c2 = new CanvasBuffer(ctx.Width, ctx.Height);
+        second.RenderFrame(c2, 0);
+        var ticks = BatchRounds * LookAheadFrames;
+        proc.Refresh();
+        cpu0 = proc.TotalProcessorTime;
+        for (var i = 0; i < ticks; i++)
+        {
+            effect.RenderFrame(canvas, start + (long)i * PeriodMs);
+            second.RenderFrame(c2, start + (long)i * PeriodMs + 500);
+        }
+        var h1 = PixelHash(canvas) + PixelHash(c2);
+        proc.Refresh();
+        b.PairUnbatchedCpuMsPerTick = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / ticks;
+        cpu0 = proc.TotalProcessorTime;
+        for (var i = 0; i < ticks; i++)
+        {
+            using var batch = ReadbackBatch.TryBegin(ctx);
+            effect.RenderFrame(canvas, start + (long)i * PeriodMs);
+            second.RenderFrame(c2, start + (long)i * PeriodMs + 500);
+        }
+        var h2 = PixelHash(canvas) + PixelHash(c2);
+        proc.Refresh();
+        b.PairBatchedCpuMsPerTick = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / ticks;
+        b.PairIdentical = h1 == h2;
+        return b;
     }
 }
 #endif
