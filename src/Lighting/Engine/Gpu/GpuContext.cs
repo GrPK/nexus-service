@@ -53,6 +53,7 @@ public sealed class GpuContext : IDisposable
     // Set by ReportContextLost: the GL thread leaves its loop so the context is freed and a fresh one can start.
     private volatile bool _lostExit;
     private volatile bool _upgradeGate;
+    private volatile bool _parallelCompile;
     private int _generation;
 #if !MACOS && !LINUX
     private volatile bool _isEs;
@@ -102,6 +103,15 @@ public sealed class GpuContext : IDisposable
     public bool IsEs => false;
     public bool IsWarp => false;
 #endif
+
+    /// <summary>Allow compile and link to run in the driver's worker threads (KHR_parallel_shader_compile) when the context offers it. A caller that must have a finished render from its first frame sets this false.</summary>
+    public bool AsyncCompile { get; set; } = true;
+
+    /// <summary>Shader programs compile and link without blocking the GL thread: the extension is present on the bound context and <see cref="AsyncCompile"/> is on.</summary>
+    public bool UseAsyncCompile => AsyncCompile && _parallelCompile;
+
+    /// <summary>Upper bound handed to glMaxShaderCompilerThreadsKHR; this value asks for the implementation default.</summary>
+    private const uint ParallelCompileThreadsDefault = 0xFFFFFFFF;
 
     /// <summary>Counts contexts that came up. GL objects belong to one generation; a holder rebuilds them when it moves.</summary>
     public int Generation => Volatile.Read(ref _generation);
@@ -668,8 +678,81 @@ public sealed class GpuContext : IDisposable
         }
     }
 
+    /// <summary>
+    /// Most background programs (thumbnails, validation, warm-up) compiling in the
+    /// driver at once. Two keeps a cold lighting page to at most two of ANGLE's
+    /// worker threads busy, so a game or the rest of the PC never sees a
+    /// burst, while still overlapping one compile's HLSL pass with the next.
+    /// </summary>
+    internal const int MaxBackgroundCompiles = 2;
+
+    /// <summary>GL thread only.</summary>
+    internal CompileGate BackgroundCompiles { get; } = new(MaxBackgroundCompiles);
+
+    internal static bool InBackground => _backgroundDepth > 0;
+
+    /// <summary>How long a background job that is waiting on a compile sleeps before it polls again.</summary>
+    internal static readonly TimeSpan StepPollInterval = TimeSpan.FromMilliseconds(5);
+
+    /// <summary>
+    /// Like <see cref="Invoke"/> for work that may not be finishable yet (a
+    /// program still compiling). <paramref name="step"/> returns true when done.
+    /// On the background lane a false return re-queues the step behind a short
+    /// delay, freeing the GL thread meanwhile, and the caller keeps waiting for
+    /// the final run. On the live lane a false return completes the call at
+    /// once: the frame is skipped, never waited for.
+    /// </summary>
+    public void InvokeStep(Func<bool> step)
+    {
+        if (!Available || _glThread is null)
+        {
+            return;
+        }
+        if (Thread.CurrentThread == _glThread)
+        {
+            step();
+            return;
+        }
+        var background = _backgroundDepth > 0;
+        var queue = _workQueue;
+        Exception? caught = null;
+        var done = _invokeDone.Value!;
+        done.Reset();
+        Action? job = null;
+        job = () =>
+        {
+            var finished = true;
+            try
+            { finished = step(); }
+            catch (Exception ex) { caught = ex; }
+            if (!finished && background && caught is null)
+            {
+                try
+                {
+                    queue.AddDeferred(job!, StepPollInterval);
+                    return;
+                }
+                catch (InvalidOperationException) { }
+            }
+            done.Set();
+        };
+        try
+        { queue.Add(job, background); }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+        done.Wait();
+        if (caught is not null)
+        {
+            throw caught;
+        }
+    }
+
     private void InitInternal()
     {
+        _parallelCompile = false;
+        BackgroundCompiles.Reset();
         ApplyForcedFailure();
 #if MACOS
         // macOS: skip GLFW / NSWindow entirely and create a headless GL 4.1
@@ -736,6 +819,7 @@ public sealed class GpuContext : IDisposable
                 + $"version='{_gl.GetStringS(StringName.Version)}'");
         }
         catch (Exception ex) { Log($"[gpu] GL renderer query failed: {ex.Message}"); }
+        EnableParallelCompile();
 
         _fboTex = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, _fboTex);
@@ -787,6 +871,37 @@ public sealed class GpuContext : IDisposable
         _gl.BindVertexArray(0);
 
         Log($"[gpu] OpenGL context ready ({_width}x{_height})");
+    }
+
+    // ES (ANGLE) only: desktop GL keeps the synchronous path. The ANGLE program cache is what the extension's worker compiles feed.
+    private void EnableParallelCompile()
+    {
+        _parallelCompile = false;
+        if (!IsEs || _gl is null)
+        {
+            return;
+        }
+        try
+        {
+            var extensions = _gl.GetStringS(StringName.Extensions) ?? "";
+            if (!extensions.Contains("GL_KHR_parallel_shader_compile", StringComparison.Ordinal))
+            {
+                Log("[gpu] GL_KHR_parallel_shader_compile not offered; shader compiles stay synchronous");
+                return;
+            }
+            if (!_gl.Context.TryGetProcAddress("glMaxShaderCompilerThreadsKHR", out var entry) || entry == 0)
+            {
+                Log("[gpu] glMaxShaderCompilerThreadsKHR not resolvable; shader compiles stay synchronous");
+                return;
+            }
+            unsafe
+            {
+                ((delegate* unmanaged<uint, void>)entry)(ParallelCompileThreadsDefault);
+            }
+            _parallelCompile = true;
+            Log("[gpu] GL_KHR_parallel_shader_compile on; shader compiles do not block the GL thread");
+        }
+        catch (Exception ex) { Log($"[gpu] parallel shader compile setup failed: {ex.Message}"); }
     }
 
 #if !MACOS && !LINUX

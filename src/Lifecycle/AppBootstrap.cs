@@ -72,6 +72,7 @@ internal static class AppBootstrap
                             Nexus.Service.Lighting.Engine.Gpu.GpuRenderSelect.OnSessionLogon(gpu);
                         Nexus.Service.Lighting.Engine.Gpu.GpuRenderSelect.SelectAndWarm(gpu, sw);
                         WatchForLateContext(app, gpu, sw);
+                        Nexus.Service.Lighting.Engine.Gpu.ShaderPrewarm.Start(gpu);
                         return;
                     }
                     // A pinned card skips the selection, so a lost context is re-created here on the same card.
@@ -113,6 +114,7 @@ internal static class AppBootstrap
                           + "until it lands, static colours, LED highlight, game sync and firmware-owned "
                           + "lighting are unaffected)");
                     WatchForLateContext(app, gpu, sw);
+                    Nexus.Service.Lighting.Engine.Gpu.ShaderPrewarm.Start(gpu);
                 }
                 catch (Exception ex)
                 {

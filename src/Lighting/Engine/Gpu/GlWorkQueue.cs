@@ -23,6 +23,8 @@ internal sealed class GlWorkQueue
     private readonly object _gate = new();
     private readonly Queue<GlJob> _live = new();
     private readonly Queue<GlJob> _background = new();
+    private readonly List<GlJob> _deferred = new();
+    private readonly List<long> _deferredDue = new();
     private bool _completed;
     private int _liveStreak;
 
@@ -42,6 +44,25 @@ internal sealed class GlWorkQueue
         }
     }
 
+    /// <summary>
+    /// Queue a background job that becomes runnable after <paramref name="delay"/>.
+    /// Used to poll something that is still running without holding the thread.
+    /// </summary>
+    public void AddDeferred(Action work, TimeSpan delay)
+    {
+        lock (_gate)
+        {
+            if (_completed)
+            {
+                throw new InvalidOperationException("queue completed");
+            }
+            var due = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(delay.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+            _deferred.Add(new GlJob(work, true, due));
+            _deferredDue.Add(due);
+            Monitor.Pulse(_gate);
+        }
+    }
+
     /// <summary>Block for the next job. Throws InvalidOperationException once completed and empty.</summary>
     public GlJob Take()
     {
@@ -57,7 +78,18 @@ internal sealed class GlWorkQueue
                 {
                     throw new InvalidOperationException("queue completed");
                 }
-                Monitor.Wait(_gate);
+                if (_deferred.Count == 0)
+                {
+                    Monitor.Wait(_gate);
+                    continue;
+                }
+                var earliest = long.MaxValue;
+                foreach (var due in _deferredDue)
+                {
+                    earliest = Math.Min(earliest, due);
+                }
+                var waitMs = (earliest - System.Diagnostics.Stopwatch.GetTimestamp()) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                Monitor.Wait(_gate, TimeSpan.FromMilliseconds(Math.Max(0.5, waitMs)));
             }
         }
     }
@@ -73,6 +105,7 @@ internal sealed class GlWorkQueue
     // Live first, except a background job is due after MaxLiveStreak consecutive live ones.
     private bool TryDequeueLocked(out GlJob job)
     {
+        PromoteDeferredLocked();
         if (_live.Count > 0 && !(_background.Count > 0 && _liveStreak >= MaxLiveStreak))
         {
             if (_liveStreak < MaxLiveStreak)
@@ -90,6 +123,29 @@ internal sealed class GlWorkQueue
         }
         job = default;
         return false;
+    }
+
+    // A completed queue releases every deferred job at once so its waiter is not parked on a delay nobody will serve.
+    private void PromoteDeferredLocked()
+    {
+        if (_deferred.Count == 0)
+        {
+            return;
+        }
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        for (var i = 0; i < _deferred.Count;)
+        {
+            if (_completed || _deferredDue[i] <= now)
+            {
+                _background.Enqueue(_deferred[i]);
+                _deferred.RemoveAt(i);
+                _deferredDue.RemoveAt(i);
+            }
+            else
+            {
+                i++;
+            }
+        }
     }
 
     public void CompleteAdding()
