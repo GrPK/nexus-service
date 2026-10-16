@@ -359,11 +359,49 @@
     <Error Condition="'@(_Y70TrulyHash->'%(FileHash)')' != '@(_Y70InfiniteHash->'%(FileHash)')'"
            Text="y70-truly firmware differs from y70-infinite; BundledFirmwareCatalog aliases them. Embed y70-truly separately and drop the alias." />
   </Target>
-  <!-- Release flashes only the newest image per device (FirmwareFlasher), so the
-       older np50 image is embedded for the dev-tools downgrade picker alone. -->
-  <ItemGroup Condition="'$(DevTools)' != 'true'">
-    <EmbeddedResource Remove="$(_NexusFirmwareDir)\np50\2.0.3.1.hex" />
-  </ItemGroup>
+  <!-- Release flashes only the newest image per device (FirmwareFlasher), so
+       older images are embedded for the dev-tools downgrade picker alone. -->
+  <UsingTask TaskName="SelectOlderFirmware" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Images ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <Older ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Collections.Generic" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        // Same ordering as BundledFirmwareCatalog.CompareVersions: dotted numeric parts, missing or non-numeric count as 0.
+        int[] V(Microsoft.Build.Framework.ITaskItem i) =>
+            System.IO.Path.GetFileNameWithoutExtension(i.ItemSpec).Split('.')
+                .Select(p => int.TryParse(p, out var n) ? n : 0).ToArray();
+        int Cmp(int[] x, int[] y)
+        {
+            for (var k = 0; k < Math.Max(x.Length, y.Length); k++)
+            {
+                var d = (k < x.Length ? x[k] : 0).CompareTo(k < y.Length ? y[k] : 0);
+                if (d != 0) return d;
+            }
+            return 0;
+        }
+        Older = Images
+            .GroupBy(i => System.IO.Path.GetDirectoryName(i.ItemSpec))
+            .SelectMany(g => g.OrderBy(i => V(i), Comparer<int[]>.Create(Cmp)).Reverse().Skip(1))
+            .ToArray();
+      ]]></Code>
+    </Task>
+  </UsingTask>
+  <Target Name="TrimOlderFirmware" BeforeTargets="AssignTargetPaths" Condition="'$(DevTools)' != 'true' AND '$(_NexusFirmwareDir)' != ''">
+    <ItemGroup>
+      <_FirmwareImage Include="@(EmbeddedResource)" Condition="$([System.String]::Copy('%(LogicalName)').StartsWith('firmware/'))" />
+    </ItemGroup>
+    <SelectOlderFirmware Images="@(_FirmwareImage)">
+      <Output TaskParameter="Older" ItemName="_OlderFirmware" />
+    </SelectOlderFirmware>
+    <ItemGroup>
+      <EmbeddedResource Remove="@(_OlderFirmware)" />
+    </ItemGroup>
+  </Target>
 
   <Target Name="ReportFirmwareBundle" BeforeTargets="CoreCompile" Condition="'$(DesignTimeBuild)' != 'true'">
     <Error Condition="'$(NexusFirmwareDir)' != '' AND !Exists('$(NexusFirmwareDir)')"
@@ -519,6 +557,7 @@
       <Using Namespace="System.Collections.Generic" />
       <Using Namespace="System.IO" />
       <Using Namespace="System.Linq" />
+      <Using Namespace="System.Collections.Generic" />
       <Using Namespace="System.Text.RegularExpressions" />
       <Code Type="Fragment" Language="cs"><![CDATA[
         var latin1 = System.Text.Encoding.GetEncoding(28591);
