@@ -87,6 +87,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 if (!HasTopLevelSchemaVersion(json))
                 {
                     _cached.FeaturesOnboardingCompleted = true;
+                    Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.KeepMiceOn(_cached);
                     pinsMigrated = true;
                 }
                 if (_cached.SchemaVersion < NexusSettings.CurrentSchemaVersion)
@@ -314,7 +315,11 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
             // Lighting and Cooling read off until this flag is set; no existing install may lose control on update.
             doc.FeaturesOnboardingCompleted = true;
         }
-        if (doc.SchemaVersion < 22 && doc.Lighting is { } lighting
+        if (doc.SchemaVersion < 22)
+        {
+            Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.KeepMiceOn(doc);
+        }
+        if (doc.SchemaVersion < 23 && doc.Lighting is { } lighting
             && string.Equals(lighting.RenderBackend, "wgl", StringComparison.OrdinalIgnoreCase))
         {
             lighting.RenderBackend = "angle";

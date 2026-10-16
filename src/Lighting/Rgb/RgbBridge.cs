@@ -189,6 +189,11 @@ public sealed class RgbBridge : IDisposable
     private readonly ConcurrentDictionary<int, RgbColor[]> _lastPushed = new();
     private readonly ConcurrentDictionary<int, long> _lastPushTicks = new();
     private const long HeartbeatMs = 1000;
+    // Physical index -> user cap in Hz for devices that have one, rebuilt every frame.
+    private readonly Dictionary<int, int> _physCapsHz = new();
+    // Physical index -> stable OpenRGB device id, the key LightingMaxRates uses. Replaced wholesale on device-set change.
+    private volatile Dictionary<int, string> _physStableIds = new();
+    private readonly PushRateLimiter<int> _pushLimiter = new();
     // Reused across frames - set of physical indices that had at least one zone
     // written in the current OnFrame. Cleared at the start of every frame.
     // Only touched inside OnFrame which the engine serialises, so a plain HashSet
@@ -1789,15 +1794,23 @@ public sealed class RgbBridge : IDisposable
     /// Compares as bytes: RgbColor has no IEquatable, so Span.SequenceEqual over
     /// the structs themselves would fall back to reflective ValueType.Equals and
     /// cost more than the push it saves.</summary>
-    private bool ShouldPush(int physIdx, RgbColor[] buf)
+    internal bool ShouldPush(int physIdx, RgbColor[] buf, int capHz = 0, long? nowMs = null)
     {
-        var now = Environment.TickCount64;
+        var now = nowMs ?? Environment.TickCount64;
         if (_lastPushed.TryGetValue(physIdx, out var last)
             && last.Length == buf.Length
             && _lastPushTicks.TryGetValue(physIdx, out var when)
             && now - when < HeartbeatMs
             && System.Runtime.InteropServices.MemoryMarshal.AsBytes(buf.AsSpan())
                 .SequenceEqual(System.Runtime.InteropServices.MemoryMarshal.AsBytes(last.AsSpan())))
+        {
+            return false;
+        }
+
+        // After the dedupe so an identical frame never spends the gap. A frame
+        // dropped here is not recorded as pushed, so the next OnFrame offers
+        // the then-current buffer again and sends it once the gap has elapsed.
+        if (capHz > 0 && !_pushLimiter.TryPass(physIdx, capHz, now))
         {
             return false;
         }
@@ -1809,11 +1822,49 @@ public sealed class RgbBridge : IDisposable
         return true;
     }
 
-    private void SyncPhysicalBuffers(IReadOnlyList<RgbDevice> devices)
+    /// <summary>
+    /// Fills <paramref name="caps"/> (cleared first) with physical index -> Hz for
+    /// every bridge frame whose owning device has a cap. The cap is keyed by the
+    /// physical device, so all zone frames sharing a push resolve the same value.
+    /// </summary>
+    internal static void ComputePhysicalCaps(
+        IReadOnlyList<DeviceFrame> deviceFrames,
+        IReadOnlySet<string> bridgeFrameIds,
+        IReadOnlyDictionary<int, string> physStableIds,
+        IReadOnlyDictionary<string, int> maxRates,
+        Dictionary<int, int> caps)
+    {
+        caps.Clear();
+        if (maxRates.Count == 0)
+        {
+            return;
+        }
+        foreach (var f in deviceFrames)
+        {
+            if (IsBridgeFrame(f, bridgeFrameIds)
+                && physStableIds.TryGetValue(f.PhysicalIndex, out var key)
+                && maxRates.TryGetValue(key, out var hz) && hz > 0)
+            {
+                caps[f.PhysicalIndex] = hz;
+            }
+        }
+    }
+
+    internal void SyncPhysicalBuffers(IReadOnlyList<RgbDevice> devices)
     {
         // Indices are being re-derived, so every dedup baseline is suspect.
         _lastPushed.Clear();
         _lastPushTicks.Clear();
+        _pushLimiter.Reset();
+        var stableIds = new Dictionary<int, string>();
+        foreach (var d in devices)
+        {
+            if (d.LedCount > 0)
+            {
+                stableIds[d.Address] = d.StableId;
+            }
+        }
+        _physStableIds = stableIds;
         SizePhysicalBuffers(_physBuffers, devices);
     }
 
@@ -2222,7 +2273,7 @@ public sealed class RgbBridge : IDisposable
         }
     }
 
-    /// <summary>Shows or drops the off card of each held-off controller (<see cref="OpenRgbGamepadDefaults"/>) as it comes and goes. HID enumeration sees Bluetooth pads too and opens at most query-only, never sending a report.</summary>
+    /// <summary>Shows or drops the off card of each held-off device (<see cref="OpenRgbGamepadDefaults"/>) as it comes and goes. HID enumeration sees Bluetooth pads too and opens at most query-only, never sending a report.</summary>
     private void CheckHeldOffGamepads()
     {
         if (_hid is null)
@@ -2259,7 +2310,7 @@ public sealed class RgbBridge : IDisposable
         _store.Update(s => changed = OpenRgbGamepadDefaults.ApplyPresence(s, present));
         if (changed)
         {
-            ServiceLog.Info($"[rgb-bridge] held-off controllers present: {(present.Count == 0 ? "none" : string.Join(", ", present))}");
+            ServiceLog.Info($"[rgb-bridge] held-off devices present: {(present.Count == 0 ? "none" : string.Join(", ", present))}");
             RequestTopologyRefresh();
         }
     }
@@ -2393,6 +2444,7 @@ public sealed class RgbBridge : IDisposable
 
         _touchedPhysicals.Clear();
         ComputeFullyUncontrolledPhysicals(deviceFrames, _bridgeFrameIds, uncontrolled, _physFullyUncontrolled);
+        ComputePhysicalCaps(deviceFrames, _bridgeFrameIds, _physStableIds, settings.Devices.LightingMaxRates, _physCapsHz);
 
         var deviceCount = frame[pos++];
         for (int d = 0; d < deviceCount && pos + 3 <= frame.Length; d++)
@@ -2530,7 +2582,8 @@ public sealed class RgbBridge : IDisposable
 
         foreach (var physIdx in _touchedPhysicals)
         {
-            if (_physBuffers.TryGetValue(physIdx, out var buf) && ShouldPush(physIdx, buf))
+            if (_physBuffers.TryGetValue(physIdx, out var buf)
+                && ShouldPush(physIdx, buf, _physCapsHz.GetValueOrDefault(physIdx)))
             {
                 _ = _controller.PushFrameAsync(physIdx, buf);
             }

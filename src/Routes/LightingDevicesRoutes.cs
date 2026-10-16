@@ -893,6 +893,45 @@ public static partial class DevicesRoutes
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
 
+        // Per-device cap on frame pushes. Applied by RgbBridge on its next frame.
+        app.MapPost("/devices/lighting-devices/max-rate", (
+            SetLightingDeviceMaxRateBody body,
+            ILightingDeviceProvider ld,
+            Nexus.Service.Persistence.IConfigStore store,
+            FeatureGates gates) =>
+        {
+            if (!gates.Lighting)
+            {
+                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
+            }
+            if (string.IsNullOrEmpty(body.Id) || !Nexus.Service.Lighting.DeviceRateCap.IsValid(body.MaxRateHz))
+            {
+                return Results.BadRequest(ApiResponse.Fail("Invalid id or maxRateHz."));
+            }
+            var target = ld.GetAll().Devices.FirstOrDefault(c => c.Id == body.Id);
+            if (target is not { RateCapSupported: true })
+            {
+                return Results.BadRequest(ApiResponse.Fail("Device does not support a rate cap."));
+            }
+            // Keyed by the owning device so every zone card of it shares one cap
+            // and the cap survives the user re-drawing zones.
+            var key = string.IsNullOrEmpty(target.ParentDeviceId) ? target.Id : target.ParentDeviceId;
+            store.Update(s =>
+            {
+                var rates = new Dictionary<string, int>(s.Devices.LightingMaxRates);
+                if (body.MaxRateHz is int hz)
+                {
+                    rates[key] = hz;
+                }
+                else
+                {
+                    rates.Remove(key);
+                }
+                s.Devices.LightingMaxRates = rates;
+            });
+            return Results.Ok(ApiResponse.Ok());
+        }).AllowPanel();
+
         // Hue and saturation of a color-capable device (smart lights), as
         // device metadata the UI reads back. Not a pin: what a device shows on
         // its own goes through POST /devices/lighting-devices/pins.
