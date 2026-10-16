@@ -191,8 +191,7 @@ public sealed class RgbBridge : IDisposable
     private const long HeartbeatMs = 1000;
     // Lowest user cap among the zones sharing a physical push, rebuilt every frame.
     private readonly Dictionary<int, int> _physCapsHz = new();
-    private PushRateLimiter<int>? _pushLimiter;
-    private PushRateLimiter<int> PushLimiter => _pushLimiter ??= new PushRateLimiter<int>(FlushCappedPhysical);
+    private readonly PushRateLimiter<int> _pushLimiter = new();
     // Reused across frames - set of physical indices that had at least one zone
     // written in the current OnFrame. Cleared at the start of every frame.
     // Only touched inside OnFrame which the engine serialises, so a plain HashSet
@@ -1793,9 +1792,9 @@ public sealed class RgbBridge : IDisposable
     /// Compares as bytes: RgbColor has no IEquatable, so Span.SequenceEqual over
     /// the structs themselves would fall back to reflective ValueType.Equals and
     /// cost more than the push it saves.</summary>
-    private bool ShouldPush(int physIdx, RgbColor[] buf, int capHz = 0)
+    internal bool ShouldPush(int physIdx, RgbColor[] buf, int capHz = 0, long? nowMs = null)
     {
-        var now = Environment.TickCount64;
+        var now = nowMs ?? Environment.TickCount64;
         if (_lastPushed.TryGetValue(physIdx, out var last)
             && last.Length == buf.Length
             && _lastPushTicks.TryGetValue(physIdx, out var when)
@@ -1807,9 +1806,9 @@ public sealed class RgbBridge : IDisposable
         }
 
         // After the dedupe so an identical frame never spends the gap. A frame
-        // dropped here is not recorded as pushed, so the trailing flush or the
-        // next differing frame still delivers it.
-        if (capHz > 0 && !PushLimiter.TryPass(physIdx, capHz))
+        // dropped here is not recorded as pushed, so the next OnFrame offers
+        // the then-current buffer again and sends it once the gap has elapsed.
+        if (capHz > 0 && !_pushLimiter.TryPass(physIdx, capHz, now))
         {
             return false;
         }
@@ -1827,21 +1826,12 @@ public sealed class RgbBridge : IDisposable
         caps[physIdx] = caps.TryGetValue(physIdx, out var prev) ? Math.Min(prev, capHz) : capHz;
     }
 
-    // The limiter already spent the gap, so this bypasses it and sends the newest buffer.
-    private void FlushCappedPhysical(int physIdx)
-    {
-        if (IsActive && _controller.IsConnected
-            && _physBuffers.TryGetValue(physIdx, out var buf) && ShouldPush(physIdx, buf))
-        {
-            _ = _controller.PushFrameAsync(physIdx, buf);
-        }
-    }
-
-    private void SyncPhysicalBuffers(IReadOnlyList<RgbDevice> devices)
+    internal void SyncPhysicalBuffers(IReadOnlyList<RgbDevice> devices)
     {
         // Indices are being re-derived, so every dedup baseline is suspect.
         _lastPushed.Clear();
         _lastPushTicks.Clear();
+        _pushLimiter.Reset();
         SizePhysicalBuffers(_physBuffers, devices);
     }
 
