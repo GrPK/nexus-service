@@ -92,4 +92,27 @@ public class WarpRenderBudgetTests
         }
         Assert.Equal(t - 33, last);
     }
+
+    [Fact]
+    public void ClockStepBackwards_RendersInsteadOfWaitingOutTheJump()
+    {
+        var b = new WarpRenderBudget();
+        var src = new object();
+        b.ShouldRender(src, 100_000, 33);
+        b.Record(100_000, 9.2);
+        Assert.False(b.ShouldRender(src, 100_033, 33));
+        Assert.True(b.ShouldRender(src, 40_000, 33));
+    }
+
+    [Fact]
+    public void Reset_RendersOnTheNextTick()
+    {
+        var b = new WarpRenderBudget();
+        var src = new object();
+        b.ShouldRender(src, 0, 33);
+        b.Record(0, 9.2);
+        Assert.False(b.ShouldRender(src, 33, 33));
+        b.Reset();
+        Assert.True(b.ShouldRender(src, 33, 33));
+    }
 }

@@ -319,11 +319,11 @@ internal static partial class LightingBench
     {
         var n = seconds * TargetHz;
         var interval = new double[Math.Max(0, n - 1)];
-        var render = new double[n];
+        var render = new List<double>(n);
         var sample = new double[n];
         var work = new double[n];
-        var rcpu = new double[n];
-        var gcpu = new double[n];
+        var rcpu = new List<double>(n);
+        var gcpu = new List<double>(n);
         var toMs = 1000.0 / Stopwatch.Frequency;
         var missed = 0;
         var renders = 0;
@@ -343,7 +343,7 @@ internal static partial class LightingBench
             var t0 = Stopwatch.GetTimestamp();
             var c0 = ThreadCycles();
             var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var due = !budgeted || budget.ShouldRender(effect, nowMs, PeriodMs);
+            var due = !budgeted || budget.ShouldRender(effect, Environment.TickCount64, PeriodMs);
             if (due)
             {
                 effect.RenderFrame(canvas, nowMs);
@@ -352,7 +352,7 @@ internal static partial class LightingBench
             var t1 = Stopwatch.GetTimestamp();
             if (due && budgeted)
             {
-                budget.Record(nowMs, (t1 - t0) * toMs);
+                budget.Record(Environment.TickCount64, (t1 - t0) * toMs);
             }
             engine.SampleForBench(devices, canvas);
             foreach (var d in devices)
@@ -368,15 +368,18 @@ internal static partial class LightingBench
                 interval[i - 1] = (t0 - prevStart) * toMs;
             }
             prevStart = t0;
-            render[i] = (t1 - t0) * toMs;
             sample[i] = (t2 - t1) * toMs;
             work[i] = (t2 - t0) * toMs;
             if (work[i] > PeriodMs)
             {
                 missed++;
             }
-            rcpu[i] = (c1 - c0) / cyclesPerMs;
-            gcpu[i] = (probe.Cycles - glPrev) / cyclesPerMs;
+            if (due)
+            {
+                render.Add((t1 - t0) * toMs);
+                rcpu.Add((c1 - c0) / cyclesPerMs);
+                gcpu.Add((probe.Cycles - glPrev) / cyclesPerMs);
+            }
             glPrev = probe.Cycles;
         }
         proc.Refresh();
@@ -386,11 +389,11 @@ internal static partial class LightingBench
         r.ProcessCpuMsPerSecond = (proc.TotalProcessorTime - cpu0).TotalMilliseconds / Math.Max(1, seconds);
         r.MissedDeadlines = missed;
         r.FrameIntervalMs = BenchStats.Summarize(interval);
-        r.RenderWallMs = BenchStats.Summarize(render);
+        r.RenderWallMs = BenchStats.Summarize(render.ToArray());
         r.SampleMs = BenchStats.Summarize(sample);
         r.WorkMs = BenchStats.Summarize(work);
-        r.RenderThreadCpuMs = BenchStats.Summarize(rcpu);
-        r.GlThreadCpuMs = BenchStats.Summarize(gcpu);
+        r.RenderThreadCpuMs = BenchStats.Summarize(rcpu.ToArray());
+        r.GlThreadCpuMs = BenchStats.Summarize(gcpu.ToArray());
     }
 
     private static void ReadbackProbe(BenchEffectResult r, GpuContext ctx)

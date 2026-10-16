@@ -740,7 +740,7 @@ public sealed partial class LightingEngine : IDisposable
                         {
                             var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                             var budgeted = effect is Gpu.ShaderEffect && SoftwareRenderProbe?.Invoke() == true;
-                            if (!budgeted || _mainBudget.ShouldRender(effect, nowMs, FrameIntervalMs))
+                            if (!budgeted || _mainBudget.ShouldRender(effect, Environment.TickCount64, FrameIntervalMs))
                             {
                                 var t0 = budgeted ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
                                 _lastRenderMs = nowMs;
@@ -748,7 +748,7 @@ public sealed partial class LightingEngine : IDisposable
                                 effect.RenderFrame(_canvas, _lastRenderMs);
                                 if (budgeted)
                                 {
-                                    _mainBudget.Record(nowMs, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds);
+                                    _mainBudget.Record(Environment.TickCount64, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds);
                                 }
                                 Volatile.Write(ref _frozenRenderedEpoch, epoch);
                             }
@@ -1037,13 +1037,13 @@ public sealed partial class LightingEngine : IDisposable
                     {
                         // On software rendering a shader pin keeps its last canvas between budgeted renders.
                         var budgeted = render.Effect is Gpu.ShaderEffect && SoftwareRenderProbe?.Invoke() == true;
-                        if (!budgeted || !render.Rendered || render.Budget.ShouldRender(render.Effect, nowMs, FrameIntervalMs))
+                        if (!budgeted || !render.Rendered || render.Budget.ShouldRender(render.Effect, Environment.TickCount64, FrameIntervalMs))
                         {
                             var t0 = budgeted ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
                             render.Effect.RenderFrame(render.Canvas, nowMs);
                             if (budgeted)
                             {
-                                render.Budget.Record(nowMs, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds);
+                                render.Budget.Record(Environment.TickCount64, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds);
                             }
                         }
                         render.Rendered = true;
@@ -1111,6 +1111,7 @@ public sealed partial class LightingEngine : IDisposable
                 try { render.Effect?.Dispose(); } catch { /* best-effort */ }
             }
             render.Effect = built;
+            render.Budget.Reset();
             render.Tag = tag;
             render.Failed = built is null;
             render.RetryAtMs = nowMs + PinRetryMs;

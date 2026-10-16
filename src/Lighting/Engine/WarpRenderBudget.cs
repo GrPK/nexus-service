@@ -40,6 +40,7 @@ internal sealed class WarpRenderBudget
     /// <summary>True when the source should render this tick. A new source and an unmeasured one always render.</summary>
     public bool ShouldRender(object source, long nowMs, int frameIntervalMs)
     {
+        // nowMs must come from a monotonic clock; a step backwards still renders rather than waiting out the jump.
         if (!ReferenceEquals(source, _source))
         {
             _source = source;
@@ -51,8 +52,15 @@ internal sealed class WarpRenderBudget
             return true;
         }
         // Ticks land on a grid, so a render that is nearly due goes on this tick rather than a whole tick later.
+        if (nowMs < _lastRenderMs)
+        {
+            return true;
+        }
         return nowMs - _lastRenderMs + Math.Max(1, frameIntervalMs) / 2 >= IntervalMs(_costMs, frameIntervalMs);
     }
+
+    /// <summary>Forgets the measured cost so the next tick renders, for a source that changed look in place.</summary>
+    public void Reset() => _hasCost = false;
 
     public void Record(long nowMs, double costMs)
     {
