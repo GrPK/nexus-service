@@ -117,8 +117,8 @@ licenses. Their respective license texts ship alongside the bundled binaries.
 - **License**: Apache License 2.0
 - **License text**: shipped with the bundled binaries as `adb/NOTICE.txt` under
   each runtime identifier
-- **Files**: `adb` (linux-x64, osx-arm64), `adb.exe` plus `AdbWinApi.dll`,
-  `AdbWinUsbApi.dll` and `libwinpthread-1.dll` (win-x64) - redistributed
+- **Files**: `adb` (linux-x64, osx-arm64), `adb.exe` plus `AdbWinApi.dll`
+  and `AdbWinUsbApi.dll` (win-x64) - redistributed
   unmodified from Google's `sdk-repo-*-platform-tools` archive, which is what
   the bundled `NOTICE.txt` covers
 - **Communication boundary**: spawned as a child process to reach Android-based

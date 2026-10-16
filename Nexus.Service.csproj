@@ -418,7 +418,7 @@
        Publish if the per-RID bundle was deleted. -->
   <Target Name="EnsureAdbBundle" BeforeTargets="Publish">
     <Error Condition="$(RuntimeIdentifier.StartsWith('win')) AND !Exists('Bundled\win-x64\adb\adb.exe')"
-           Text="adb bundle missing at Bundled\win-x64\adb\adb.exe. Restore from platform-tools-latest-windows.zip (adb.exe + AdbWinApi.dll + AdbWinUsbApi.dll + libwinpthread-1.dll + NOTICE.txt)." />
+           Text="adb bundle missing at Bundled\win-x64\adb\adb.exe. Restore from platform-tools-latest-windows.zip (adb.exe + AdbWinApi.dll + AdbWinUsbApi.dll + NOTICE.txt)." />
     <Error Condition="$(RuntimeIdentifier.StartsWith('osx')) AND !Exists('Bundled/osx-arm64/adb/adb')"
            Text="adb bundle missing at Bundled/osx-arm64/adb/adb. Restore from platform-tools-latest-darwin.zip: lipo -thin arm64 adb." />
     <Error Condition="$(RuntimeIdentifier.StartsWith('linux')) AND !Exists('Bundled/linux-x64/adb/adb')"
@@ -714,7 +714,7 @@
        Q-series watchers shell out to it via AdbLocator, which resolves this
        bundled copy first. Committed (unlike openrgb/ffmpeg) so the service
        runs on a host with no Android SDK. Slimmed to adb + its direct deps
-       (Windows: AdbWinApi/AdbWinUsbApi/libwinpthread; macOS thinned to arm64);
+       (Windows: AdbWinApi/AdbWinUsbApi; macOS thinned to arm64);
        fastboot and the other tools are dropped. -->
   <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows')) AND Exists('Bundled\win-x64\adb')">
     <Content Include="Bundled\win-x64\adb\**\*.*">
