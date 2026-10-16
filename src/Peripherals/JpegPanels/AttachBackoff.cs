@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Nexus.Service.Peripherals.JpegPanels;
 
@@ -59,6 +61,28 @@ public sealed class AttachBackoff
         int report = _unloggedFailures;
         _unloggedFailures = 0;
         return report;
+    }
+
+    /// <summary>How long one slice of <see cref="WaitAsync"/> sleeps before it looks at the device again.</summary>
+    public const int WaitSliceMs = 500;
+
+    /// <summary>
+    /// Waits out the pending delay in short slices. When <paramref name="deviceGone"/> turns true
+    /// (unplugged or control switched off) the streak is cleared and the wait ends, so a return
+    /// is not held back by a stale delay. Cancellation ends it at the next slice.
+    /// </summary>
+    public async Task WaitAsync(Func<bool> deviceGone, Func<int, CancellationToken, Task> delay, CancellationToken cancel)
+    {
+        while (DelayMs > 0)
+        {
+            cancel.ThrowIfCancellationRequested();
+            if (deviceGone())
+            {
+                Clear();
+                return;
+            }
+            await delay((int)Math.Min(WaitSliceMs, DelayMs), cancel).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Clears the streak after a healthy connection; returns how many failures it ended.</summary>

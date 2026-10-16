@@ -52,6 +52,16 @@ public static class CloudRoutes
             return CloudResult(result);
         });
 
+        app.MapPost("/cloud/resend-verification", async (CloudResendVerificationBody body, CloudAccountService accounts, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(body.Email))
+            {
+                return Results.BadRequest(ApiResponse.Fail("email is required."));
+            }
+            var result = await accounts.ResendVerificationAsync(body.Email, ct).ConfigureAwait(false);
+            return CloudResult(result);
+        });
+
         app.MapPost("/cloud/login", async (CloudLoginBody body, CloudAccountService accounts, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(body.Identifier) || string.IsNullOrWhiteSpace(body.Password))
@@ -458,7 +468,7 @@ public static class CloudRoutes
         {
             return Results.Ok(ApiResponse.Ok());
         }
-        return CloudApiFailure(result.StatusCode, result.ErrorCode, result.ErrorMessage, result.Offline, result.ErrorRetryAt);
+        return CloudApiFailure(result.StatusCode, result.ErrorCode, result.ErrorMessage, result.Offline, result.ErrorRetryAt, result.ErrorEmail);
     }
 
     private static IResult CloudResult<T>(CloudApiResult<T> result)
@@ -467,7 +477,7 @@ public static class CloudRoutes
         {
             return Results.Ok(ApiResponse.Ok());
         }
-        return CloudApiFailure(result.StatusCode, result.ErrorCode, result.ErrorMessage, result.Offline, result.ErrorRetryAt);
+        return CloudApiFailure(result.StatusCode, result.ErrorCode, result.ErrorMessage, result.Offline, result.ErrorRetryAt, result.ErrorEmail);
     }
 
     /// <summary>Anonymous GET passthrough: upstream status and body relayed verbatim.</summary>
@@ -481,7 +491,7 @@ public static class CloudRoutes
         return Results.Text(result.Value!.Body, result.Value.ContentType, statusCode: result.StatusCode);
     }
 
-    private static IResult CloudApiFailure(int statusCode, string? errorCode, string? errorMessage, bool offline, string? retryAt = null)
+    private static IResult CloudApiFailure(int statusCode, string? errorCode, string? errorMessage, bool offline, string? retryAt = null, string? email = null)
     {
         var msg = offline
             ? "Could not reach the Nexus cloud."
@@ -489,9 +499,9 @@ public static class CloudRoutes
             : !string.IsNullOrEmpty(errorMessage) ? errorMessage
             : "Request failed.";
         var status = statusCode is >= 400 and < 600 ? statusCode : StatusCodes.Status502BadGateway;
-        if (!string.IsNullOrEmpty(retryAt))
+        if (!string.IsNullOrEmpty(retryAt) || !string.IsNullOrEmpty(email))
         {
-            return Results.Json(new CloudFailureResponse { Error = true, Msg = msg, RetryAt = retryAt }, AppJsonContext.Default.CloudFailureResponse, statusCode: status);
+            return Results.Json(new CloudFailureResponse { Error = true, Msg = msg, RetryAt = retryAt, Email = email }, AppJsonContext.Default.CloudFailureResponse, statusCode: status);
         }
         return Results.Json(ApiResponse.Fail(msg), AppJsonContext.Default.ApiResponse, statusCode: status);
     }

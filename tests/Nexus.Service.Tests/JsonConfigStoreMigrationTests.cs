@@ -215,6 +215,56 @@ public class JsonConfigStoreMigrationTests : IDisposable
         }
     }
 
+    private static readonly string[] Mice =
+    {
+        "Corsair Katar Pro", "Corsair Katar Pro V2", "Corsair Katar Pro XT", "Corsair M55 RGB PRO",
+        "Corsair M65 RGB Ultra Wired", "Corsair Scimitar PRO RGB", "HyperX Pulsefire Haste",
+    };
+
+    private static readonly string[] Gamepads = { "GameSir Nova 2 Lite", "Sony DualSense", "Sony DualSense Edge", "Sony DualShock 4" };
+
+    private SortedSet<string> HeldOffAfterLoad(string? json)
+    {
+        if (json is not null)
+        {
+            File.WriteAllText(_settingsPath, json);
+        }
+        using var store = new JsonConfigStore(_settingsPath);
+        return Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.HeldOffDetectors(store.Load());
+    }
+
+    [Fact]
+    public void Load_FreshInstall_HoldsMiceAndGamepadsOff()
+    {
+        var held = HeldOffAfterLoad(null);
+
+        Assert.All(Mice, m => Assert.Contains(m, held));
+        Assert.All(Gamepads, g => Assert.Contains(g, held));
+    }
+
+    [Theory]
+    [InlineData("""{ "schemaVersion": 21, "ui": { "sidebarCollapsed": true } }""")]
+    [InlineData("""{ "ui": { "sidebarCollapsed": true } }""")]
+    public void Load_ExistingInstall_KeepsMiceOnAndGamepadsHeldOff(string json)
+    {
+        var held = HeldOffAfterLoad(json);
+
+        Assert.All(Mice, m => Assert.DoesNotContain(m, held));
+        Assert.All(Gamepads, g => Assert.Contains(g, held));
+    }
+
+    [Fact]
+    public void Load_ExistingInstall_KeepsAKatarCardAlreadyHeldOff()
+    {
+        var held = HeldOffAfterLoad("""
+        { "schemaVersion": 21, "devices": { "openRgbDetectorExclusions": {
+          "openrgb-gamepad-corsair-katar-pro-xt": { "detectorName": "Corsair Katar Pro XT", "deviceName": "Corsair Katar Pro XT" } } } }
+        """);
+
+        Assert.Contains("Corsair Katar Pro XT", held);
+        Assert.DoesNotContain("Corsair M55 RGB PRO", held);
+    }
+
     [Fact]
     public void Load_ExistingInstall_DashboardAutoArrangeDefaultsOff()
     {
@@ -818,6 +868,50 @@ public class JsonConfigStoreMigrationTests : IDisposable
             Assert.Single(s.StreamDeck.Presets);
             Assert.Equal("p1", s.StreamDeck.Instances["streamdeck:SERIAL-1"].ActivePresetId);
             Assert.Equal("custom", s.StreamDeck.Instances["streamdeck:SERIAL-1"].Mode);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    /// <summary>v24: "wgl" was the old default and was always persisted, so it moves to ANGLE; "glfw" and an already-migrated document are left alone.</summary>
+    [Theory]
+    [InlineData(21, "wgl", "angle")]
+    [InlineData(22, "wgl", "angle")]
+    [InlineData(22, "glfw", "glfw")]
+    [InlineData(23, "wgl", "angle")]
+    [InlineData(24, "wgl", "wgl")]
+    public void Load_RenderBackend_WglMovesToAngleOnce(int schema, string stored, string expected)
+    {
+        File.WriteAllText(_settingsPath,
+            $$"""{ "schemaVersion": {{schema}}, "lighting": { "renderBackend": "{{stored}}" } }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        try
+        {
+            Assert.Equal(expected, store.Load().Lighting.RenderBackend);
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    /// <summary>A v22 file runs both the Game Sync removal (v23) and the render backend move (v24).</summary>
+    [Fact]
+    public void Load_V22File_RunsBothMigrations()
+    {
+        File.WriteAllText(_settingsPath,
+            """{ "schemaVersion": 22, "lighting": { "renderBackend": "wgl" } }""");
+
+        var store = new JsonConfigStore(_settingsPath);
+        try
+        {
+            var s = store.Load();
+            Assert.Equal("angle", s.Lighting.RenderBackend);
+            Assert.True(s.GameSyncRemovedNotice);
+            Assert.Equal(NexusSettings.CurrentSchemaVersion, s.SchemaVersion);
         }
         finally
         {

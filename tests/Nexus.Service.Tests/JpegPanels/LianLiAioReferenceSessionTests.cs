@@ -440,6 +440,64 @@ public class LianLiAioReferenceSessionTests
         Assert.Equal(0, backoff.Failures);
     }
 
+    [Fact]
+    public async Task The_backoff_wait_ends_and_clears_when_the_device_leaves_mid_wait()
+    {
+        long now = 0;
+        var backoff = new AttachBackoff(() => now);
+        for (int i = 0; i < 6; i++)
+        {
+            backoff.NoteFailure();
+        }
+        int slices = 0;
+        bool gone = false;
+
+        await backoff.WaitAsync(
+            () => gone,
+            (ms, _) =>
+            {
+                Assert.True(ms <= AttachBackoff.WaitSliceMs);
+                now += ms;
+                gone = ++slices == 3;
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(3, slices);
+        Assert.Equal(0, backoff.DelayMs);
+        Assert.Equal(0, backoff.Failures);
+    }
+
+    [Fact]
+    public async Task The_backoff_wait_runs_its_full_course_when_nothing_changes_and_stops_on_cancel()
+    {
+        long now = 0;
+        var backoff = new AttachBackoff(() => now);
+        backoff.NoteFailure();
+
+        await backoff.WaitAsync(() => false, (ms, _) => { now += ms; return Task.CompletedTask; }, CancellationToken.None);
+        Assert.Equal(0, backoff.DelayMs);
+        Assert.Equal(1, backoff.Failures);
+
+        backoff.NoteFailure();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => backoff.WaitAsync(() => false, (_, _) => Task.CompletedTask, cts.Token));
+    }
+
+    [Fact]
+    public async Task A_disabled_backoff_never_waits()
+    {
+        var backoff = new AttachBackoff(() => 0, enabled: false);
+        backoff.NoteFailure();
+        int calls = 0;
+
+        await backoff.WaitAsync(() => false, (_, _) => { calls++; return Task.CompletedTask; }, CancellationToken.None);
+
+        Assert.Equal(0, calls);
+    }
+
     private static byte[] AResponse(byte cmd, string text)
     {
         var frame = new byte[64];

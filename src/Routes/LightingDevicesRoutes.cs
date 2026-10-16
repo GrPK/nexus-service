@@ -47,15 +47,15 @@ public static partial class DevicesRoutes
     }
 
     // LiveEngineSync covers every mode a profile switch can restore; a preset
-    // can additionally carry Off or Game Sync, which it has no arm for.
+    // can additionally carry Off, which it has no arm for.
     private static void EngageLook(
         Nexus.Service.Persistence.LightingPresetLook look,
         Nexus.Service.Persistence.IConfigStore store,
         Nexus.Service.Lighting.ILightingProvider lighting)
     {
-        // Runs for every mode, including the Off / Game Sync arms below that
-        // never reach LiveEngineSync, so a later switch to Mirror or Media picks
-        // up this preset's filter rather than the outgoing one.
+        // Runs for every mode, including the Off arm below that never reaches
+        // LiveEngineSync, so a later switch to Mirror or Media picks up this
+        // preset's filter rather than the outgoing one.
         Nexus.Service.Lifecycle.LiveEngineSync.ApplyPostProcess(store, lighting);
 
         var sync = (look.Sync ?? "").ToLowerInvariant();
@@ -67,11 +67,6 @@ public static partial class DevicesRoutes
         if (sync == "none")
         {
             lighting.StopAll();
-            return;
-        }
-        if (sync == "gamesync")
-        {
-            lighting.StartGameSync();
             return;
         }
         Nexus.Service.Lifecycle.LiveEngineSync.ApplyLighting(store, lighting);
@@ -890,6 +885,45 @@ public static partial class DevicesRoutes
                 }
             }
             CaptureDeviceStateIntoActive(store);
+            return Results.Ok(ApiResponse.Ok());
+        }).AllowPanel();
+
+        // Per-device cap on frame pushes. Applied by RgbBridge on its next frame.
+        app.MapPost("/devices/lighting-devices/max-rate", (
+            SetLightingDeviceMaxRateBody body,
+            ILightingDeviceProvider ld,
+            Nexus.Service.Persistence.IConfigStore store,
+            FeatureGates gates) =>
+        {
+            if (!gates.Lighting)
+            {
+                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
+            }
+            if (string.IsNullOrEmpty(body.Id) || !Nexus.Service.Lighting.DeviceRateCap.IsValid(body.MaxRateHz))
+            {
+                return Results.BadRequest(ApiResponse.Fail("Invalid id or maxRateHz."));
+            }
+            var target = ld.GetAll().Devices.FirstOrDefault(c => c.Id == body.Id);
+            if (target is not { RateCapSupported: true })
+            {
+                return Results.BadRequest(ApiResponse.Fail("Device does not support a rate cap."));
+            }
+            // Keyed by the owning device so every zone card of it shares one cap
+            // and the cap survives the user re-drawing zones.
+            var key = string.IsNullOrEmpty(target.ParentDeviceId) ? target.Id : target.ParentDeviceId;
+            store.Update(s =>
+            {
+                var rates = new Dictionary<string, int>(s.Devices.LightingMaxRates);
+                if (body.MaxRateHz is int hz)
+                {
+                    rates[key] = hz;
+                }
+                else
+                {
+                    rates.Remove(key);
+                }
+                s.Devices.LightingMaxRates = rates;
+            });
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();
 

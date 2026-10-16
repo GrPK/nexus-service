@@ -235,6 +235,10 @@ public class LightingDevice
     public int Brightness { get; set; }
     public float Hue { get; set; }
     public float Saturation { get; set; }
+    /// <summary>True when the device honors a user update-rate cap (OpenRGB devices only for now).</summary>
+    public bool RateCapSupported { get; set; }
+    /// <summary>The user's cap in updates per second. Null means no cap.</summary>
+    public int? MaxRateHz { get; set; }
     public int LedCount { get; set; }
     /// <summary>Number of the card's LEDs not disabled in the resolved layout (applied mapping's disabled set layered under user overrides, which win in both directions). Equals <see cref="LedCount"/> when no disable data exists.</summary>
     public int EnabledLedCount { get; set; }
@@ -281,6 +285,13 @@ public class GetLightingDevicesResponse
     public List<Nexus.Service.Persistence.DeviceGroup> Groups { get; set; } = new();
     /// <summary>Cards stacked on one canvas frame and one selection, riding the list the same way.</summary>
     public List<Nexus.Service.Persistence.DeviceGroup> Stacks { get; set; } = new();
+}
+
+/// <summary>POST /devices/lighting-devices/max-rate. A null <see cref="MaxRateHz"/> removes the cap.</summary>
+public class SetLightingDeviceMaxRateBody
+{
+    public string Id { get; set; } = "";
+    public int? MaxRateHz { get; set; }
 }
 
 /// <summary>Whole-list replace for the user-made groups; the client owns order and membership.</summary>
