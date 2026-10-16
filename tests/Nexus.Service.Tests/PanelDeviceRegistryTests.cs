@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Nexus.Service.Models.Panel;
@@ -360,6 +361,74 @@ public sealed class PanelDeviceRegistryTests : IDisposable
     }
 
     [Fact]
+    public void Patch_Selections_RoundTripSurviveUnrelatedPatchAndEmptyReplaces()
+    {
+        var record = _registry.Allocate(null, Caps(PanelSurfaces.Phone));
+        Assert.Null(record.LightingSelection);
+        Assert.Null(record.CoolingSelection);
+
+        var set = _registry.Patch(record.Id, new PanelDevicePatch
+        {
+            LightingSelection = new List<string> { "d1", "d2" },
+            CoolingSelection = new List<string> { "f1" },
+        });
+        Assert.Equal(new[] { "d1", "d2" }, set!.LightingSelection);
+        Assert.Equal(new[] { "f1" }, _registry.Get(record.Id)!.CoolingSelection);
+
+        var renamed = _registry.Patch(record.Id, new PanelDevicePatch { DisplayName = "Renamed" });
+        Assert.Equal(new[] { "d1", "d2" }, renamed!.LightingSelection);
+        Assert.Equal(new[] { "f1" }, renamed.CoolingSelection);
+
+        var cleared = _registry.Patch(record.Id, new PanelDevicePatch { LightingSelection = new List<string>() });
+        Assert.Empty(cleared!.LightingSelection!);
+        Assert.Equal(new[] { "f1" }, cleared.CoolingSelection);
+    }
+
+    [Fact]
+    public void Patch_Selections_PanelsStayIndependent()
+    {
+        var a = _registry.Allocate(null, Caps(PanelSurfaces.Phone));
+        var b = _registry.Allocate(null, Caps(PanelSurfaces.Phone));
+
+        _registry.Patch(a.Id, new PanelDevicePatch { LightingSelection = new List<string> { "x" } });
+
+        Assert.Null(_registry.Get(b.Id)!.LightingSelection);
+        Assert.Equal(new[] { "x" }, _registry.Get(a.Id)!.LightingSelection);
+    }
+
+    [Fact]
+    public void Patch_Selections_ReturnedListIsACopy()
+    {
+        var record = _registry.Allocate(null, Caps(PanelSurfaces.Phone));
+        var input = new List<string> { "a" };
+        var patched = _registry.Patch(record.Id, new PanelDevicePatch { CoolingSelection = input });
+
+        input.Add("from-input");
+        patched!.CoolingSelection!.Add("from-returned");
+        _registry.Get(record.Id)!.CoolingSelection!.Add("from-get");
+
+        Assert.Equal(new[] { "a" }, _registry.Get(record.Id)!.CoolingSelection);
+    }
+
+    [Fact]
+    public void Patch_Selections_SurviveReload()
+    {
+        var record = _registry.Allocate(null, Caps(PanelSurfaces.Phone));
+        _registry.Patch(record.Id, new PanelDevicePatch
+        {
+            LightingSelection = new List<string> { "d1" },
+            CoolingSelection = new List<string>(),
+        });
+        _store.FlushNow();
+
+        using var store2 = new JsonConfigStore(_path);
+        var reloaded = new PanelDeviceRegistry(store2) { SeeThroughHost = false }.Get(record.Id)!;
+
+        Assert.Equal(new[] { "d1" }, reloaded.LightingSelection);
+        Assert.Empty(reloaded.CoolingSelection!);
+    }
+
+    [Fact]
     public void Patch_GaugeGradient_RoundTripsCopiesAndResets()
     {
         var record = _registry.Allocate(null, Caps(PanelSurfaces.Phone));
@@ -446,6 +515,8 @@ public sealed class PanelDeviceRegistryTests : IDisposable
             BackgroundMediaOrder = new List<string> { "asset-2", "asset-1" },
             BackgroundFrostLevel = 100,
             ImmersiveBackdrop = false,
+            LightingSelection = new List<string> { "l1" },
+            CoolingSelection = new List<string> { "c1" },
             WidgetOpacity = 0.7,
             WidgetLabels = true,
             WidgetPadding = 25,
@@ -481,6 +552,8 @@ public sealed class PanelDeviceRegistryTests : IDisposable
         Assert.Null(reset.BackgroundMediaOrder);
         Assert.Null(reset.BackgroundFrostLevel);
         Assert.Null(reset.ImmersiveBackdrop);
+        Assert.Null(reset.LightingSelection);
+        Assert.Null(reset.CoolingSelection);
         Assert.Null(reset.WidgetOpacity);
         Assert.Null(reset.WidgetLabels);
         Assert.Null(reset.WidgetPadding);

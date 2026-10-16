@@ -590,6 +590,10 @@ public sealed class PanelDeviceRegistry
                 record.BackgroundFrostLevel = patch.BackgroundFrostLevel.Value;
             if (patch.ImmersiveBackdrop.HasValue)
                 record.ImmersiveBackdrop = patch.ImmersiveBackdrop.Value;
+            if (patch.LightingSelection is not null)
+                record.LightingSelection = new List<string>(patch.LightingSelection);
+            if (patch.CoolingSelection is not null)
+                record.CoolingSelection = new List<string>(patch.CoolingSelection);
             if (patch.GaugeGradient is not null)
                 record.GaugeGradient = CloneGaugeGradient(patch.GaugeGradient);
             if (patch.WidgetOpacity.HasValue)
@@ -705,6 +709,8 @@ public sealed class PanelDeviceRegistry
             record.BackgroundMediaOrder = null;
             record.BackgroundFrostLevel = null;
             record.ImmersiveBackdrop = null;
+            record.LightingSelection = null;
+            record.CoolingSelection = null;
             record.GaugeGradient = null;
             record.WidgetOpacity = null;
             record.WidgetLabels = null;
@@ -1018,6 +1024,8 @@ public sealed class PanelDeviceRegistry
             BackgroundMediaOrder = r.BackgroundMediaOrder is null ? null : new List<string>(r.BackgroundMediaOrder),
             BackgroundFrostLevel = r.BackgroundFrostLevel,
             ImmersiveBackdrop = r.ImmersiveBackdrop,
+            LightingSelection = r.LightingSelection is null ? null : new List<string>(r.LightingSelection),
+            CoolingSelection = r.CoolingSelection is null ? null : new List<string>(r.CoolingSelection),
             GaugeGradient = r.GaugeGradient is null ? null : CloneGaugeGradient(r.GaugeGradient),
             WidgetOpacity = r.WidgetOpacity,
             WidgetLabels = r.WidgetLabels,
