@@ -232,8 +232,35 @@ public sealed class DisplayTopologyService
             _attachedIdsAtMs = Environment.TickCount64;
             _attachedIdsValid = true;
         }
-        if (raw is not null) SyncPromotedPanelCapabilities(raw);
+        if (raw is not null)
+        {
+            RelinkPanelDisplays(raw);
+            SyncPromotedPanelCapabilities(raw);
+        }
         return ids;
+    }
+
+    /// <summary>
+    /// Runs before auto-promotion and the capability sync so both see the
+    /// re-linked record. Best-effort like the sync: a store fault must not
+    /// fail the topology read it rides on.
+    /// </summary>
+    private void RelinkPanelDisplays(IReadOnlyList<RawDisplayInfo> raw)
+    {
+        try
+        {
+            var attached = new List<RelinkDisplay>(raw.Count);
+            foreach (var info in raw)
+            {
+                if (IsY70Display(info.RawHardwareId)) continue;
+                attached.Add(new RelinkDisplay(info.Id, info.Fingerprint));
+            }
+            _panelRegistry.ReconcileDisplayFingerprints(attached);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[displays] panel display relink failed: {ex.Message}");
+        }
     }
 
     /// <summary>

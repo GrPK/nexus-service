@@ -4,6 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using Nexus.Service.Models.Panel;
 using Nexus.Service.Persistence;
+using Nexus.Service.Platform;
 
 namespace Nexus.Service.Panel;
 
@@ -147,6 +148,48 @@ public sealed class PanelDeviceRegistry
         _store.FlushNow();
         if (activated) DisplayRecordReady?.Invoke(result!);
         return (result!, activated);
+    }
+
+    /// <summary>
+    /// Keeps display-bound records attached to their physical monitor: stamps a
+    /// hardware fingerprint on records that lack one, and rewrites the
+    /// DisplayId of a record whose display id no longer exists when exactly one
+    /// unclaimed attached monitor is its hardware. Ambiguity changes nothing.
+    /// Returns the moves applied.
+    /// </summary>
+    internal IReadOnlyList<(string RecordId, string OldDisplayId, string NewDisplayId)> ReconcileDisplayFingerprints(
+        IReadOnlyList<RelinkDisplay> attached)
+    {
+        static List<RelinkRecord> Snapshot(IEnumerable<PanelDeviceRecord> records)
+            => records
+                .Where(r => !string.IsNullOrEmpty(r.DisplayId))
+                .Select(r => new RelinkRecord(r.Id, r.DisplayId!, r.DisplayFingerprint))
+                .ToList();
+
+        // Pre-check on the snapshot so the common no-op scan takes no store write-lock.
+        var precheck = PanelDisplayRelink.Plan(Snapshot(_store.Load().PanelDevices.Values), attached);
+        if (precheck.Backfills.Count == 0 && precheck.Moves.Count == 0) return Array.Empty<(string, string, string)>();
+
+        var applied = new List<(string RecordId, string OldDisplayId, string NewDisplayId)>();
+        _store.Update(s =>
+        {
+            var plan = PanelDisplayRelink.Plan(Snapshot(s.PanelDevices.Values), attached);
+            foreach (var (recordId, fingerprint) in plan.Backfills)
+            {
+                if (s.PanelDevices.TryGetValue(recordId, out var record)) record.DisplayFingerprint = fingerprint;
+            }
+            foreach (var move in plan.Moves)
+            {
+                if (!s.PanelDevices.TryGetValue(move.RecordId, out var record)) continue;
+                record.DisplayId = move.NewDisplayId;
+                record.DisplayFingerprint = move.Fingerprint;
+                applied.Add((move.RecordId, move.OldDisplayId, move.NewDisplayId));
+                ServiceLog.Info($"[panel-relink] record {move.RecordId} display '{move.OldDisplayId}' -> '{move.NewDisplayId}' "
+                    + $"(fingerprint {move.Fingerprint.Manufacturer}:{move.Fingerprint.Product} serial {move.Fingerprint.Serial})");
+            }
+        });
+        if (applied.Count > 0) _store.FlushNow();
+        return applied;
     }
 
     /// <summary>
@@ -1039,6 +1082,7 @@ public sealed class PanelDeviceRegistry
             LastSeenAt = r.LastSeenAt,
             Capabilities = r.Capabilities,
             DisplayId = r.DisplayId,
+            DisplayFingerprint = r.DisplayFingerprint,
             ReserveMonitor = r.ReserveMonitor,
             AutoOrient = r.AutoOrient,
             KeepCursorOff = r.KeepCursorOff,
