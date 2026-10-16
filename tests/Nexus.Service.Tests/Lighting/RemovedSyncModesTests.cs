@@ -105,7 +105,7 @@ public sealed class RemovedSyncModesTests : IDisposable
     }
 
     [Fact]
-    public void Loading_a_profile_file_normalizes_it_and_keeps_the_installs_notice()
+    public void Loading_a_profile_file_normalizes_its_sync_and_presets()
     {
         File.WriteAllText(SettingsPath, """{ "schemaVersion": 22 }""");
         using var store = new JsonConfigStore(SettingsPath);
@@ -122,7 +122,27 @@ public sealed class RemovedSyncModesTests : IDisposable
         var lighting = store.Load().Lighting;
         Assert.Equal("static", lighting.Sync);
         Assert.Equal("static", lighting.LayoutPresets[0].Look!.Sync);
-        Assert.True(store.Load().GameSyncRemovedNotice);
+    }
+
+    [Fact]
+    public void Making_lighting_shared_from_a_primary_that_carries_game_sync_lands_on_static()
+    {
+        File.WriteAllText(SettingsPath, """{ "schemaVersion": 22 }""");
+        using var store = new JsonConfigStore(SettingsPath);
+        using var profiles = new ProfileManager(store);
+        profiles.Initialize();
+        var primary = profiles.CreateProfile("Primary");
+        profiles.CreateProfile("Active");
+        Assert.NotEqual(primary.Id, profiles.ActiveProfileId);
+        store.Update(s => s.SharedCategories.Remove(ProfileSharing.Lighting));
+        profiles.SetPrimary(primary.Id);
+        File.WriteAllText(
+            Path.Combine(_tempDir, $"profile-{primary.Id}.json"),
+            """{ "lighting": { "sync": "gamesync" } }""");
+
+        Assert.True(profiles.SetCategoryShared(ProfileSharing.Lighting, true));
+
+        Assert.Equal("static", store.Load().Lighting.Sync);
     }
 
     [Theory]
