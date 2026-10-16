@@ -57,10 +57,10 @@ public sealed class BenchEffectResult
     /// <summary>Whole-process CPU per frame, averaged over the run.</summary>
     public double ProcessCpuMsPerFrame { get; set; }
 
-    /// <summary>Shader renders per second actually done. Equals the target rate except on WARP, where the engine's CPU budget spaces renders out.</summary>
+    /// <summary>Shader renders per second actually done.</summary>
     public double RendersPerSecond { get; set; }
 
-    /// <summary>Whole-process CPU per second of run, which is what the WARP budget bounds.</summary>
+    /// <summary>Whole-process CPU per second of run.</summary>
     public double ProcessCpuMsPerSecond { get; set; }
 
     /// <summary>Warm ReadPixels of the idle target, measured after the timed run.</summary>

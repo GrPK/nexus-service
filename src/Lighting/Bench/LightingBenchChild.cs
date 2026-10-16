@@ -327,9 +327,6 @@ internal static partial class LightingBench
         var toMs = 1000.0 / Stopwatch.Frequency;
         var missed = 0;
         var renders = 0;
-        // The engine spaces shader renders on WARP; the bench applies the same budget so its numbers match the service.
-        var budgeted = ctx.IsWarp;
-        var budget = new WarpRenderBudget();
         long prevStart = 0;
         using var proc = Process.GetCurrentProcess();
         proc.Refresh();
@@ -343,17 +340,9 @@ internal static partial class LightingBench
             var t0 = Stopwatch.GetTimestamp();
             var c0 = ThreadCycles();
             var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var due = !budgeted || budget.ShouldRender(effect, Environment.TickCount64, PeriodMs);
-            if (due)
-            {
-                effect.RenderFrame(canvas, nowMs);
-                renders++;
-            }
+            effect.RenderFrame(canvas, nowMs);
+            renders++;
             var t1 = Stopwatch.GetTimestamp();
-            if (due && budgeted)
-            {
-                budget.Record(Environment.TickCount64, (t1 - t0) * toMs);
-            }
             engine.SampleForBench(devices, canvas);
             foreach (var d in devices)
             {
@@ -374,12 +363,9 @@ internal static partial class LightingBench
             {
                 missed++;
             }
-            if (due)
-            {
-                render.Add((t1 - t0) * toMs);
-                rcpu.Add((c1 - c0) / cyclesPerMs);
-                gcpu.Add((probe.Cycles - glPrev) / cyclesPerMs);
-            }
+            render.Add((t1 - t0) * toMs);
+            rcpu.Add((c1 - c0) / cyclesPerMs);
+            gcpu.Add((probe.Cycles - glPrev) / cyclesPerMs);
             glPrev = probe.Cycles;
         }
         proc.Refresh();

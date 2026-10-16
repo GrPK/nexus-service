@@ -78,15 +78,6 @@ public sealed partial class LightingEngine : IDisposable
     public int FrameIntervalMs { get; set; } = 33;
 
     /// <summary>
-    /// True while shaders render on the CPU (WARP). Shader renders are then spaced to a CPU budget (see
-    /// <see cref="WarpRenderBudget"/>); the tick, sampling and device publish keep their rate. Null or false leaves
-    /// every render on every tick, as on a hardware GPU.
-    /// </summary>
-    public Func<bool>? SoftwareRenderProbe { get; set; }
-
-    private readonly WarpRenderBudget _mainBudget = new();
-
-    /// <summary>
     /// Side of the sampling spot at an LED, as a fraction of the canvas width.
     /// An LED reads the plain mean of a spot this size centered on its sample position, clamped at the canvas edges and
     /// never larger than the LED's own cell.
@@ -236,7 +227,6 @@ public sealed partial class LightingEngine : IDisposable
         public bool Rendered;
         public long UsedTick = -1;
         public long RetryAtMs;
-        public readonly WarpRenderBudget Budget = new();
     }
     private readonly Dictionary<string, PinRender> _pinRenders = new(StringComparer.Ordinal);
     // Device id to the canvas it samples this tick; a null canvas means the
@@ -739,19 +729,10 @@ public sealed partial class LightingEngine : IDisposable
                         if (!_frozen || Volatile.Read(ref _frozenRenderedEpoch) != epoch)
                         {
                             var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            var budgeted = effect is Gpu.ShaderEffect && SoftwareRenderProbe?.Invoke() == true;
-                            if (!budgeted || _mainBudget.ShouldRender(effect, Environment.TickCount64, FrameIntervalMs))
-                            {
-                                var t0 = budgeted ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-                                _lastRenderMs = nowMs;
-                                _lastRenderEffect = effect;
-                                effect.RenderFrame(_canvas, _lastRenderMs);
-                                if (budgeted)
-                                {
-                                    _mainBudget.Record(Environment.TickCount64, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds);
-                                }
-                                Volatile.Write(ref _frozenRenderedEpoch, epoch);
-                            }
+                            _lastRenderMs = nowMs;
+                            _lastRenderEffect = effect;
+                            effect.RenderFrame(_canvas, _lastRenderMs);
+                            Volatile.Write(ref _frozenRenderedEpoch, epoch);
                         }
                         // One snapshot for the sample, the game pass and the
                         // publish: UpdateDevices swaps the array lock-free,
@@ -1035,17 +1016,7 @@ public sealed partial class LightingEngine : IDisposable
                 {
                     try
                     {
-                        // On software rendering a shader pin keeps its last canvas between budgeted renders.
-                        var budgeted = render.Effect is Gpu.ShaderEffect && SoftwareRenderProbe?.Invoke() == true;
-                        if (!budgeted || !render.Rendered || render.Budget.ShouldRender(render.Effect, Environment.TickCount64, FrameIntervalMs))
-                        {
-                            var t0 = budgeted ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-                            render.Effect.RenderFrame(render.Canvas, nowMs);
-                            if (budgeted)
-                            {
-                                render.Budget.Record(Environment.TickCount64, System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds);
-                            }
-                        }
+                        render.Effect.RenderFrame(render.Canvas, nowMs);
                         render.Rendered = true;
                     }
                     catch (Exception ex)
@@ -1111,7 +1082,6 @@ public sealed partial class LightingEngine : IDisposable
                 try { render.Effect?.Dispose(); } catch { /* best-effort */ }
             }
             render.Effect = built;
-            render.Budget.Reset();
             render.Tag = tag;
             render.Failed = built is null;
             render.RetryAtMs = nowMs + PinRetryMs;
