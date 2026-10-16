@@ -292,6 +292,19 @@ public class BlobCachePolicyTests
         Assert.False(BlobCachePolicy.GrantsNonAdminWrite(aces, out _));
     }
 
+    [Theory]
+    [InlineData("S-1-5-18", true)]
+    [InlineData("S-1-5-32-544", true)]
+    [InlineData("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", true)]
+    [InlineData("S-1-5-32-545", false)]
+    [InlineData("S-1-5-21-1-2-3-1001", false)]
+    [InlineData("S-1-3-0", false)]
+    [InlineData(null, false)]
+    public void Only_admin_owners_are_accepted(string? sid, bool expected)
+    {
+        Assert.Equal(expected, BlobCachePolicy.IsAdminOwner(sid));
+    }
+
     [Fact]
     public void An_empty_list_grants_nothing()
     {
