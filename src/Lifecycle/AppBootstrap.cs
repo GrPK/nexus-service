@@ -70,7 +70,7 @@ internal static class AppBootstrap
                         ? $"[gpu] warmup: GPU shader engine ready in {sw.ElapsedMilliseconds}ms on '{gpu.Renderer}'"
                         : $"[gpu] warmup: no GPU context after {sw.ElapsedMilliseconds}ms "
                           + $"({(gpu.Failed ? "init failed" : "still initializing")}; shader effects stay dark "
-                          + "until it lands, static colours, LED highlight, game sync and firmware-owned "
+                          + "until it lands, static colours, LED highlight and firmware-owned "
                           + "lighting are unaffected)");
                     WatchForLateContext(app, gpu, sw);
                 }

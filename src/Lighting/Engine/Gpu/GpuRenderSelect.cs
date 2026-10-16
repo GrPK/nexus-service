@@ -27,7 +27,7 @@ namespace Nexus.Service.Lighting.Engine.Gpu;
 /// returns; a boot that finds the marker still present knows the previous boot
 /// died initializing that card. There is no CPU fallback: if no card works the
 /// GPU is latched off (shader effects don't render; static colours, LED
-/// highlight, game sync and firmware-owned lighting are unaffected) and the
+/// highlight and firmware-owned lighting are unaffected) and the
 /// service stays up. The latch always carries a re-probe time, because the
 /// driver behind it can fail context creation intermittently and a permanent
 /// latch would turn "sometimes" into "never".
@@ -310,7 +310,7 @@ internal static class GpuRenderSelect
             ? $"[gpu] warmup: GPU shader engine ready in {sw.ElapsedMilliseconds}ms on '{gpu.Renderer}'"
             : $"[gpu] warmup: no GPU context after {sw.ElapsedMilliseconds}ms "
               + $"({(gpu.Failed ? "init failed" : "still initializing")}; shader effects stay dark until it "
-              + "lands, static colours, LED highlight, game sync and firmware-owned lighting are unaffected)");
+              + "lands, static colours, LED highlight and firmware-owned lighting are unaffected)");
         if (gpu.Available)
         {
             SaveState(GpuSelectState.Working(stateName));

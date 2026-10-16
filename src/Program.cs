@@ -686,7 +686,6 @@ app.MapBenchmarkEndpoints();
 app.MapLightingEndpoints();
 app.MapLightingSceneEndpoints();
 app.MapKeyReactiveEndpoints();
-app.MapGameSyncEndpoints();
 app.MapWebcamEndpoints();
 app.MapObsEndpoints();
 app.MapTwitchEndpoints();
