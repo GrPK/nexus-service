@@ -1420,6 +1420,14 @@ public sealed class DevicesSettings
     public Dictionary<string, List<ChainEntry>> PortChains { get; set; } = new();
 
     /// <summary>
+    /// Cap on frame pushes per second, keyed by lighting card id; an absent key means no cap.
+    /// Values come from <see cref="Nexus.Service.Lighting.DeviceRateCap.AllowedHz"/>. Replaced
+    /// wholesale on write, never mutated, because RgbBridge reads it lock-free. Deliberately
+    /// outside LightingDevicePrefs so layout presets never capture or overwrite it.
+    /// </summary>
+    public Dictionary<string, int> LightingMaxRates { get; set; } = new();
+
+    /// <summary>
     /// GPU zones on the attached Strimer harness: 6 for the triple 8-pin (the default) or 4
     /// for the dual. The controller reports nothing that distinguishes them, so this is the
     /// user's choice; a wrong value stretches the LED map over a strip that is not there.
@@ -1640,8 +1648,6 @@ public sealed class LightingDevicePreference
     /// <summary>Negative is cooler, positive warmer.</summary>
     public float AdjustTemperature { get; set; }
     public float AdjustSaturation { get; set; } = 1f;
-    /// <summary>Cap on frame pushes per second to this device. Null means no cap; see <see cref="Nexus.Service.Lighting.DeviceRateCap.AllowedHz"/>.</summary>
-    public int? MaxRateHz { get; set; }
 }
 
 public sealed class MotherboardLedChannel

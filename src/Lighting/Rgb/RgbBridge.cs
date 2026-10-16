@@ -2406,6 +2406,7 @@ public sealed class RgbBridge : IDisposable
         var uncontrolled = settings.Devices.UncontrolledLightingDevices;
         var uncontrolledCount = uncontrolled.Count;
         var devicePrefs = settings.Devices.LightingDevicePrefs;
+        var maxRates = settings.Devices.LightingMaxRates;
         var globalBrightness = MasterBrightness.Effective(settings.Lighting);
         var nowTicks = DateTime.UtcNow.Ticks;
 
@@ -2480,10 +2481,6 @@ public sealed class RgbBridge : IDisposable
                 {
                     devBrightness = pref.Brightness;
                     adjust = Nexus.Service.Lighting.DeviceColorAdjust.For(pref);
-                    if (pref.MaxRateHz is int capHz && capHz > 0)
-                    {
-                        FoldCap(_physCapsHz, dev.PhysicalIndex, capHz);
-                    }
                 }
                 else
                 {
@@ -2492,6 +2489,10 @@ public sealed class RgbBridge : IDisposable
             }
             catch (InvalidOperationException) { devBrightness = 100; }
             var brightnessMul = Math.Min(Math.Clamp(devBrightness, 0, 100) / 100.0, globalBrightness);
+            if (maxRates.Count > 0 && maxRates.TryGetValue(dev.Id, out var capHz) && capHz > 0)
+            {
+                FoldCap(_physCapsHz, dev.PhysicalIndex, capHz);
+            }
 
             if (isOff)
             {

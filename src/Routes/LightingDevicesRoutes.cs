@@ -261,7 +261,6 @@ public static partial class DevicesRoutes
                 AdjustBlue = kv.Value.AdjustBlue,
                 AdjustTemperature = kv.Value.AdjustTemperature,
                 AdjustSaturation = kv.Value.AdjustSaturation,
-                MaxRateHz = kv.Value.MaxRateHz,
             };
         }
         return copy;
@@ -927,15 +926,19 @@ public static partial class DevicesRoutes
             }
             store.Update(s =>
             {
+                var rates = new Dictionary<string, int>(s.Devices.LightingMaxRates);
                 foreach (var id in ids)
                 {
-                    if (!s.Devices.LightingDevicePrefs.TryGetValue(id, out var pref) || pref is null)
+                    if (body.MaxRateHz is int hz)
                     {
-                        pref = new Nexus.Service.Persistence.LightingDevicePreference();
-                        s.Devices.LightingDevicePrefs[id] = pref;
+                        rates[id] = hz;
                     }
-                    pref.MaxRateHz = body.MaxRateHz;
+                    else
+                    {
+                        rates.Remove(id);
+                    }
                 }
+                s.Devices.LightingMaxRates = rates;
             });
             CaptureDeviceStateIntoActive(store);
             return Results.Ok(ApiResponse.Ok());

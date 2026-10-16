@@ -34,7 +34,7 @@ public class DeviceMaxRateTests : IDisposable
         Assert.True(card.RateCapSupported);
         Assert.Null(card.MaxRateHz);
 
-        settings.Devices.LightingDevicePrefs[card.Id] = new LightingDevicePreference { MaxRateHz = 10 };
+        settings.Devices.LightingMaxRates[card.Id] = 10;
         var capped = Assert.Single(OpenRgbZoneSupport.BuildCards(new[] { Gpu() }, settings, isInit: true).Devices);
         Assert.Equal(10, capped.MaxRateHz);
     }
@@ -45,10 +45,10 @@ public class DeviceMaxRateTests : IDisposable
         var path = Path.Combine(_dir, "settings.json");
         using (var store = new JsonConfigStore(path))
         {
-            store.Update(s => s.Devices.LightingDevicePrefs["dev"] = new LightingDevicePreference { MaxRateHz = 5 });
+            store.Update(s => s.Devices.LightingMaxRates["dev"] = 5);
             store.FlushNow();
         }
         var loaded = new JsonConfigStore(path).Load();
-        Assert.Equal(5, loaded.Devices.LightingDevicePrefs["dev"].MaxRateHz);
+        Assert.Equal(5, loaded.Devices.LightingMaxRates["dev"]);
     }
 }
