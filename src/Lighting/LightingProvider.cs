@@ -1602,7 +1602,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             return;
         }
         EnsureRgbActive();
-        _engine.FrameIntervalMs = 16;
         // Do NOT overwrite _screenPP from body. The post-process holder is the
         // authoritative live state; it was loaded from settings at construction
         // and is mutated only by the /lighting/screen/effect endpoint. If a
