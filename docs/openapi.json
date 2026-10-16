@@ -9639,6 +9639,25 @@
         }
       }
     },
+    "/diagnostics/gpu/level-sense": {
+      "get": {
+        "tags": [
+          "Nexus"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LevelSenseResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/diagnostics/gpu/level-sense/calibrate": {
       "post": {
         "tags": [
@@ -19847,6 +19866,71 @@
           }
         }
       },
+      "GpuLevelSenseState": {
+        "required": [
+          "gpuId",
+          "name",
+          "calibrating",
+          "calibratedAtMs"
+        ],
+        "type": "object",
+        "properties": {
+          "gpuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "calibrating": {
+            "type": "boolean"
+          },
+          "calibratedAtMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "sag": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "lean": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "x": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "y": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "float"
+          }
+        }
+      },
       "GpuThrottleInfo": {
         "required": [
           "active",
@@ -20917,6 +21001,17 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          }
+        }
+      },
+      "LevelSenseResponse": {
+        "type": "object",
+        "properties": {
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GpuLevelSenseState"
             }
           }
         }

@@ -236,21 +236,28 @@ internal sealed class AstralGpuSupplement
     }
 
     /// <summary>
-    /// Every GPU with a G-sensor: whether a calibration is being taken, and when
-    /// the saved one was taken (null before the first is saved).
+    /// Every GPU with a G-sensor: whether a calibration is being taken, when the
+    /// saved one was taken (null before the first is saved), and the latest
+    /// reading against it, the same values its Level Sense sensors carry.
     /// </summary>
     public IReadOnlyList<GpuLevelSenseState> GetLevelSenseStates()
     {
-        var cards = new List<(string HwIdentifier, string Name, string Key, bool Calibrating)>();
+        var cards = new List<(GpuLevelSenseState State, string Key)>();
         lock (_lock)
         {
             foreach (var state in _states.Values)
             {
                 if (state.LevelSense is { } levelSense)
                 {
-                    cards.Add((state.HwIdentifier,
+                    var deviation = levelSense.Deviation;
+                    var posture = levelSense.Posture;
+                    cards.Add((new GpuLevelSenseState(
+                        state.HwIdentifier,
                         AstralAibVendors.EnrichName(state.HwName, state.SubSystemId, state.LastReadout.HasValue),
-                        LevelSenseKey(state.AdapterIndex, state.SubSystemId), levelSense.IsCalibrating));
+                        levelSense.IsCalibrating,
+                        null,
+                        posture?.Sag, posture?.Lean, deviation?.X, deviation?.Y),
+                        LevelSenseKey(state.AdapterIndex, state.SubSystemId)));
                 }
             }
         }
@@ -258,12 +265,12 @@ internal sealed class AstralGpuSupplement
         // The store is read outside _lock, as everywhere else here.
         var saved = _store?.Load().AstralLevelSense;
         var result = new List<GpuLevelSenseState>(cards.Count);
-        foreach (var (hwIdentifier, name, key, calibrating) in cards)
+        foreach (var (card, key) in cards)
         {
             long? calibratedAt = saved is not null && saved.TryGetValue(key, out var calibration) && calibration is not null
                 ? calibration.CalibratedAtMs
                 : null;
-            result.Add(new GpuLevelSenseState(hwIdentifier, name, calibrating, calibratedAt));
+            result.Add(card with { CalibratedAtMs = calibratedAt });
         }
         return result;
     }

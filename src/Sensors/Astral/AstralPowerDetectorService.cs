@@ -8,7 +8,6 @@ using Nexus.Service.Models.Sensors;
 using Nexus.Service.Persistence;
 using Nexus.Service.Platform;
 using Nexus.Service.Platform.Power;
-using Nexus.Service.Widgets;
 
 namespace Nexus.Service.Sensors.Astral;
 
@@ -45,7 +44,6 @@ public sealed class AstralPowerDetectorService : BackgroundService
 
     private readonly ISensorProvider _sensors;
     private readonly IConfigStore _store;
-    private readonly AppRegistry? _apps;
     private readonly TimeProvider _time;
     private readonly DateTimeOffset _startedUtc;
     private readonly object _lock = new();
@@ -62,17 +60,16 @@ public sealed class AstralPowerDetectorService : BackgroundService
     /// <summary>Performs the shutdown with its reason; false when it could not be started. Tests substitute it.</summary>
     internal Func<string, bool> ShutdownSink { get; set; }
 
-    public AstralPowerDetectorService(ISensorProvider sensors, IConfigStore store, ISystemPowerProvider power, AppRegistry? apps = null)
-        : this(sensors, store, power, apps, TimeProvider.System)
+    public AstralPowerDetectorService(ISensorProvider sensors, IConfigStore store, ISystemPowerProvider power)
+        : this(sensors, store, power, TimeProvider.System)
     {
     }
 
     internal AstralPowerDetectorService(
-        ISensorProvider sensors, IConfigStore store, ISystemPowerProvider power, AppRegistry? apps, TimeProvider time)
+        ISensorProvider sensors, IConfigStore store, ISystemPowerProvider power, TimeProvider time)
     {
         _sensors = sensors;
         _store = store;
-        _apps = apps;
         _time = time;
         _startedUtc = time.GetUtcNow();
 #if DEBUG
@@ -418,12 +415,8 @@ public sealed class AstralPowerDetectorService : BackgroundService
         return true;
     }
 
-    // The card's page in the dashboard: the device app made for ROG Astral cards, when one is installed.
-    private string? PagePath()
-    {
-        var app = _apps?.All().FirstOrDefault(e => e.Manifest.Requires == AppPresence.Astral);
-        return app is null ? null : $"/system/device/app-device-{app.Id}";
-    }
+    // The card's page in the dashboard, where its Devices entry leads.
+    private static string PagePath() => "/system/device/curated-" + Nexus.Service.Devices.Handlers.AstralHandler.HandlerId;
 
     private PowerDetectorNotice CountdownNotice(AstralPowerDetector.Countdown countdown)
     {

@@ -34,15 +34,6 @@ public sealed class AppManifest
     [JsonPropertyName("category")]
     public string? Category { get; set; }
 
-    /// <summary>
-    /// Optional hardware the app is for (see <c>AppPresence</c>), e.g.
-    /// <c>"gpu.levelsense"</c> for a ROG Astral card's G-sensor. While it is
-    /// not detected the app keeps no category, so a device app is not listed
-    /// under Devices; once it is, the listing takes the device's name.
-    /// </summary>
-    [JsonPropertyName("requires")]
-    public string? Requires { get; set; }
-
     [JsonPropertyName("author")]
     public AppManifestAuthor? Author { get; set; }
 

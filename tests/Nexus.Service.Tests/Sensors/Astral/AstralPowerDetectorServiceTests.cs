@@ -72,7 +72,7 @@ public class AstralPowerDetectorServiceTests
 
         public Rig()
         {
-            Service = new AstralPowerDetectorService(Sensors, Store, new NoPower(), null, Time);
+            Service = new AstralPowerDetectorService(Sensors, Store, new NoPower(), Time);
             Service.NoticeRaised += Notices.Add;
             Service.ShutdownSink = reason =>
             {
