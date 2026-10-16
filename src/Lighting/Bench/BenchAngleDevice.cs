@@ -9,7 +9,7 @@ internal static unsafe partial class AngleContext
     internal static AngleHandles BenchCreateOnDevice(nint d3d11Device, int width, int height)
     {
         EnsureLoaded();
-        var display = DisplayOnDevice(d3d11Device, out _, out _);
+        var display = DisplayOnDevice(d3d11Device, out var eglDevice, out _, out _);
         if (display == null)
         {
             throw new InvalidOperationException("ANGLE refused the device");
@@ -38,7 +38,7 @@ internal static unsafe partial class AngleContext
         {
             throw Fail("pbuffer or make-current failed");
         }
-        return new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface);
+        return new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface, 0, eglDevice);
     }
 }
 #endif

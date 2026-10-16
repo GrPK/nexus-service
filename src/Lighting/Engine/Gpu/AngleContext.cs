@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 namespace Nexus.Service.Lighting.Engine.Gpu;
 
 /// <summary>What one ANGLE context owns. Pbuffer only: no window exists.</summary>
-internal readonly record struct AngleHandles(IntPtr Display, IntPtr Context, IntPtr Surface, nint Device = 0)
+internal readonly record struct AngleHandles(IntPtr Display, IntPtr Context, IntPtr Surface, nint Device = 0, nint EglDevice = 0)
 {
     public bool Created => Context != IntPtr.Zero;
 }
@@ -287,6 +287,7 @@ internal static unsafe partial class AngleContext
         void* context = null;
         void* surface = null;
         nint ownedDevice = 0;
+        nint ownedEglDevice = 0;
         int major = 0, minor = 0;
         try
         {
@@ -311,7 +312,7 @@ internal static unsafe partial class AngleContext
                 throw new InvalidOperationException($"no usable adapter LUID in '{target.Luid}'");
             }
             attribs[n] = EglNone;
-            display = ownDevice ? TryPreventThreadingDisplay(target, out ownedDevice, out major, out minor) : null;
+            display = ownDevice ? TryPreventThreadingDisplay(target, out ownedDevice, out ownedEglDevice, out major, out minor) : null;
             if (display == null)
             {
                 display = _eglGetPlatformDisplayExt(EglPlatformAngleAngle, null, attribs);
@@ -357,11 +358,11 @@ internal static unsafe partial class AngleContext
             }
             GpuContext.Log($"[gpu] ANGLE EGL {major}.{minor} vendor='{Str(_eglQueryString(display, EglVendor))}' "
                 + $"version='{Str(_eglQueryString(display, EglVersion))}' target='{target.Description}'");
-            return new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface, ownedDevice);
+            return new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface, ownedDevice, ownedEglDevice);
         }
         catch
         {
-            Destroy(new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface, ownedDevice));
+            Destroy(new AngleHandles((IntPtr)display, (IntPtr)context, (IntPtr)surface, ownedDevice, ownedEglDevice));
             throw;
         }
     }
@@ -388,6 +389,14 @@ internal static unsafe partial class AngleContext
                 _eglDestroyContext((void*)h.Display, (void*)h.Context);
             }
             _eglTerminate((void*)h.Display);
+        }
+        catch (Exception)
+        {
+        }
+        // The EGL device holds its own reference on the D3D device, so it goes first, after the display that used it.
+        ReleaseEglDevice(h.EglDevice);
+        try
+        {
             D3dDeviceFactory.Release(h.Device);
         }
         catch (Exception)

@@ -561,7 +561,7 @@ internal static partial class LightingBench
             if (led is null || blocking)
             {
                 e.Class = "needs-canvas";
-                e.Detail = led is null ? buildError : "source reads neighbouring pixels or a texture";
+                e.Detail = led is null ? buildError : "source reads neighboring pixels or a texture";
             }
             else
             {

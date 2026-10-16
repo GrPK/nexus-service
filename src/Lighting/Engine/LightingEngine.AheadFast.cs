@@ -51,7 +51,18 @@ public sealed partial class LightingEngine
     /// </summary>
     private FastWindow TryFastWindow(AheadRequest req, IEffect effect)
     {
-        var result = TryFastWindowCore(req, effect);
+        FastWindow result;
+        try
+        {
+            result = TryFastWindowCore(req, effect);
+        }
+        catch
+        {
+            // Same exit as the canvas path: the window is over, and no frame of it came from the other path.
+            _aheadActive = null;
+            req.Done.Set();
+            throw;
+        }
         if (result != FastWindow.Done)
         {
             _aheadCanvasWindows++;
@@ -60,9 +71,13 @@ public sealed partial class LightingEngine
         return result;
     }
 
-    /// <summary>Once a minute while windows are being served: how many went through each path.</summary>
+    /// <summary>At most once a minute, and only when the counts moved: how many windows went through each path. Silent where the window path cannot run.</summary>
     private void LogAheadCounters()
     {
+        if (!LedSpaceGate.Enabled)
+        {
+            return;
+        }
         var now = Environment.TickCount64;
         if (now - _aheadCounterLogMs < 60_000)
         {
@@ -82,7 +97,8 @@ public sealed partial class LightingEngine
     private FastWindow TryFastWindowCore(AheadRequest req, IEffect effect)
     {
         _aheadSpot = null;
-        if (!(LedSpaceGate.Enabled || AheadFastForTest) || FullFrameSampling)
+        var fullFrameAtStart = FullFrameSampling;
+        if (!(LedSpaceGate.Enabled || AheadFastForTest) || fullFrameAtStart)
         {
             return FastWindow.NotUsed;
         }
@@ -108,8 +124,7 @@ public sealed partial class LightingEngine
         for (var d = 0; d < first.Length; d++)
         {
             var dev = first[d];
-            if (dev.TestPattern is not null || dev.HighlightLeds is { Count: > 0 }
-                || (scene is not null && scene.Placements.ContainsKey(dev.Id))
+            if ((scene is not null && scene.Placements.ContainsKey(dev.Id))
                 || (slots is not null && slots.ContainsKey(dev.Id)))
             {
                 return FastWindow.NotUsed;
@@ -197,6 +212,7 @@ public sealed partial class LightingEngine
             return FastWindow.SpotCheck;
         }
 
+        var sampled = new DeviceFrame[frames][];
         try
         {
             _aheadPinned.Clear();
@@ -224,16 +240,25 @@ public sealed partial class LightingEngine
                 _sampleCanvas = _aheadCanvas;
                 SampleDevicesFromCanvas(shadow, pinned: _aheadPinned, pinFullFrame: _aheadPinFullFrame);
                 ApplyLedColorLocks(shadow);
-                foreach (var dev in shadow)
-                {
-                    dev.Publish();
-                }
-                req.Rendered[req.NextFrame++] = shadow;
+                sampled[i] = shadow;
             }
         }
         finally
         {
             _sampleCanvas = _canvas;
+        }
+        // Sampling reads these live. Nothing is published yet, so a flip during the window sends it to the canvas path whole.
+        if (FullFrameSampling != fullFrameAtStart || !ReferenceEquals(_scene, scene) || !ReferenceEquals(_stackSlots, slots))
+        {
+            return FastWindow.NotUsed;
+        }
+        for (var i = 0; i < frames; i++)
+        {
+            foreach (var dev in sampled[i])
+            {
+                dev.Publish();
+            }
+            req.Rendered[req.NextFrame++] = sampled[i];
         }
         Interlocked.Increment(ref _aheadFastWindows);
         return FastWindow.Done;
