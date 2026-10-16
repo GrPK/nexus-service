@@ -815,6 +815,7 @@ public sealed partial class LightingEngine : IDisposable
                         var devices = _devices;
                         // The main effect and the pinned looks read back together, closed before any canvas is sampled.
                         var liveBatch = effect is Gpu.ShaderEffect liveShader ? Gpu.ReadbackBatch.TryBegin(liveShader.Context) : null;
+                        var markRendered = false;
                         try
                         {
                             if (!_frozen || Volatile.Read(ref _frozenRenderedEpoch) != epoch)
@@ -826,7 +827,7 @@ public sealed partial class LightingEngine : IDisposable
                                 // A shader still compiling drew nothing of its own: keep asking until it does.
                                 if (effect is not Gpu.ShaderEffect { IsRenderPending: true })
                                 {
-                                    Volatile.Write(ref _frozenRenderedEpoch, epoch);
+                                    markRendered = true;
                                 }
                             }
                             RenderPins(effect, devices);
@@ -834,6 +835,11 @@ public sealed partial class LightingEngine : IDisposable
                         finally
                         {
                             liveBatch?.Dispose();
+                        }
+                        // Only once the readback landed: a reset context leaves the old canvas, which must be drawn again.
+                        if (markRendered && liveBatch?.Lost != true)
+                        {
+                            Volatile.Write(ref _frozenRenderedEpoch, epoch);
                         }
                         // After RenderPins, which updates pinned looks in place.
                         TrackAheadParams(effect);
@@ -1651,8 +1657,16 @@ public sealed partial class LightingEngine : IDisposable
             }
             finally
             {
-                batch?.Dispose();
                 _sampleCanvas = _canvas;
+                try
+                {
+                    batch?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    // Already resolved on the normal path, so this only runs while another exception unwinds; keep that one.
+                    Gpu.GpuContext.Log($"[lighting-engine] look-ahead batch close failed: {ex.Message}");
+                }
             }
             if (req.NextFrame == req.TickMs.Length)
             {

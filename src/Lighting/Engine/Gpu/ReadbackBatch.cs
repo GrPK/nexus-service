@@ -74,22 +74,8 @@ internal sealed class ReadbackBatch : IDisposable
 
     public static ReadbackBatch? Current => _current;
 
-    /// <summary>Entries queued and not yet applied.</summary>
-    internal int Pending
-    {
-        get
-        {
-            var n = 0;
-            foreach (var e in _entries)
-            {
-                if (!e.Applied)
-                {
-                    n++;
-                }
-            }
-            return n;
-        }
-    }
+    /// <summary>True when a queued read did not land in its canvas since this batch opened.</summary>
+    public bool Lost { get; private set; }
 
     /// <summary>Group the next queued renders belong to; <see cref="Apply"/> converts one group at a time.</summary>
     public int Group { get; set; }
@@ -118,6 +104,7 @@ internal sealed class ReadbackBatch : IDisposable
         _ctx = ctx;
         _entries.Clear();
         _resolvedOnce = false;
+        Lost = false;
         Group = 0;
     }
 
@@ -214,6 +201,7 @@ internal sealed class ReadbackBatch : IDisposable
             }
             e.Applied = true;
             _entries[i] = e;
+            Lost |= !e.Ok;
             // Canvas resized outside what was rendered: drop the frame, as the synchronous path does.
             if (e.Ok && e.Canvas.Width == _w && e.Canvas.Height == _h)
             {
