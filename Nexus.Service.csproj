@@ -179,11 +179,12 @@
 
   <!-- OpenAPI document generation for docs/openapi.json (the REST-route
        inventory). The .NET 10 stack is AOT-compatible; the doc is produced by
-       the emit-openapi CLI path, and MapOpenApi() is DEBUG-only so a release
-       build exposes no endpoint. AspNetCore.OpenApi tracks the ASP.NET runtime;
+       the emit-openapi CLI path. The generator, MapOpenApi() and both packages
+       are Debug-only, so a release build carries none of them.
+       AspNetCore.OpenApi tracks the ASP.NET runtime;
        Microsoft.OpenApi is pinned directly to 2.7.5 (overriding the 2.0.0 the
        former pulls transitively) to clear advisory GHSA-v5pm-xwqc-g5wc. -->
-  <ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
     <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
   </ItemGroup>

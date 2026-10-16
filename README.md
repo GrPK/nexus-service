@@ -183,8 +183,10 @@ it whenever a route is added, removed or renamed:
 dotnet run -- --emit-openapi docs/openapi.json
 ```
 
-The flag starts the host only far enough to register endpoints. A `DEBUG`
-build also serves the document at `/openapi/v1.json`. The committed copy is
+The flag starts the host only far enough to register endpoints. The
+generator exists only in `Debug` builds (the default for `dotnet run`); a
+release build neither accepts `--emit-openapi` nor ships the OpenAPI packages.
+A `DEBUG` build also serves the document at `/openapi/v1.json`. The committed copy is
 the release flavour; dev-tools-only routes appear only when regenerated with
 `-p:DevTools=true`.
 
