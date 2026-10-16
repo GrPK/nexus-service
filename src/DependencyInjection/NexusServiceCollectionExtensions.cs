@@ -55,6 +55,7 @@ public static class NexusServiceCollectionExtensions
 #endif
         services.AddSingleton<MultiplexHub>();
         services.AddSingleton<LightingOutputHub>();
+        services.AddSingleton<ScreenPreviewHub>();
         services.AddSingleton<Nexus.Service.Monitoring.MonitoringBroadcaster>();
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Monitoring.MonitoringBroadcaster>());
         services.AddHostedService<Nexus.Service.Activity.MediaTopicPublisher>();
