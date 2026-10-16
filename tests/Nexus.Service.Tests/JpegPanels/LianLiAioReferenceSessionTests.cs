@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Peripherals.JpegPanels;
 using Xunit;
@@ -19,7 +21,7 @@ public class LianLiAioReferenceSessionTests
     private const int ReportLength = 1024;
 
     private static LianLiAioHandshake Session(List<int>? sleeps = null, List<string>? order = null) =>
-        new("lianli-hydroshift-lcd", 24, referenceSession: true, ms =>
+        new("lianli-hydroshift-lcd", 24, referenceSession: true, (ms, _) =>
         {
             sleeps?.Add(ms);
             order?.Add("sleep");
@@ -249,6 +251,106 @@ public class LianLiAioReferenceSessionTests
         Assert.Equal(2, hub.FrameFailures);
     }
 
+    [Fact]
+    public void The_frame_failure_log_fires_first_time_and_is_rate_limited()
+    {
+        using var hub = new JpegPanelHub(JpegPanelModel.HydroShiftLcd);
+
+        Assert.True(hub.TryClaimFailureLog(0));
+        Assert.False(hub.TryClaimFailureLog(1000));
+        Assert.False(hub.TryClaimFailureLog(9_999));
+        Assert.True(hub.TryClaimFailureLog(10_000));
+        // A tick clock that has just started must not be swallowed by the initial state either.
+        using var fresh = new JpegPanelHub(JpegPanelModel.HydroShiftLcd);
+        Assert.True(fresh.TryClaimFailureLog(5));
+    }
+
+    [Fact]
+    public void A_rejected_reclaim_after_reset_drops_the_handle_so_the_worker_re_attaches()
+    {
+        var model = JpegPanelModel.HydroShiftLcd with { Handshake = Session() };
+        using var hub = new JpegPanelHub(model);
+        var device = new FakeDevice { LcdUnavailable = true };
+        Assert.True(hub.Attach(device));
+        Assert.True(hub.IsConnected);
+
+        // The reset re-enumerates USB: the reset is acknowledged, then the handle dies.
+        device.OnWrite = w =>
+        {
+            if (w[0] == 0x01 && w[1] == 0x8E)
+            {
+                device.FailWrites = true;
+            }
+        };
+        long t = Environment.TickCount64 + 100_000;
+        var session = (IJpegPanelSession)model.Handshake!;
+        Assert.True(session.Tick(device, ReportLength, t));
+        Assert.True(session.Tick(device, ReportLength, t + 2000));
+        Assert.False(session.Tick(device, ReportLength, t + 4000));
+    }
+
+    [Fact]
+    public void The_hub_marks_itself_detached_when_the_session_reports_a_dead_handle()
+    {
+        var model = JpegPanelModel.HydroShiftLcd with { Handshake = Session() };
+        using var hub = new JpegPanelHub(model);
+        var device = new FakeDevice();
+        Assert.True(hub.Attach(device));
+        device.FailWrites = true;
+
+        // Keepalive writes fail three ticks in a row.
+        for (int i = 0; i < 3 && hub.IsConnected; i++)
+        {
+            hub.Tick();
+            Thread.Sleep(1100);
+        }
+
+        Assert.False(hub.IsConnected);
+    }
+
+    [Fact]
+    public void Attach_releases_the_hub_lock_across_pauses_and_queues_a_brightness_set_meanwhile()
+    {
+        JpegPanelHub? hub = null;
+        bool reachable = false;
+        bool applied = true;
+        var handshake = new LianLiAioHandshake("lianli-hydroshift-lcd", 24, true, (_, _) =>
+        {
+            // Another thread must get the lock while attach is pausing.
+            reachable = Task.Run(() => hub!.Serial).Wait(2000);
+            if (reachable)
+            {
+                applied = Task.Run(() => hub!.SetBrightness(40)).Result;
+            }
+        }, () => 0);
+        hub = new JpegPanelHub(JpegPanelModel.HydroShiftLcd with { Handshake = handshake });
+        using var _ = hub;
+        var device = new FakeDevice();
+
+        Assert.True(hub.Attach(device));
+
+        Assert.True(reachable);
+        Assert.False(applied);
+        var claim = device.Writes.Last(w => w[0] == 0x02 && w[1] == 0x0C);
+        Assert.Equal(40, claim[12]);
+        Assert.Equal(0x01, claim[11]);
+    }
+
+    [Fact]
+    public void Cancelling_during_a_pause_aborts_attach_and_closes_the_handle()
+    {
+        using var cts = new CancellationTokenSource();
+        var handshake = new LianLiAioHandshake("lianli-hydroshift-lcd", 24, true, (_, _) => cts.Cancel(), () => 0);
+        using var hub = new JpegPanelHub(JpegPanelModel.HydroShiftLcd with { Handshake = handshake });
+        var device = new FakeDevice();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => hub.Attach(device, cts.Token));
+
+        Assert.False(hub.IsConnected);
+        Assert.True(device.Disposed);
+        Assert.DoesNotContain(device.Writes, w => w[0] == 0x02 && w[1] == 0x0C);
+    }
+
     private static byte[] AResponse(byte cmd, string text)
     {
         var frame = new byte[64];
@@ -326,6 +428,7 @@ public class LianLiAioReferenceSessionTests
         public bool GetFeature(Span<byte> buffer) => false;
         public bool GetInputReport(Span<byte> buffer) => false;
         public bool SetOutputReport(ReadOnlySpan<byte> report) => false;
-        public void Dispose() { }
+        public bool Disposed { get; private set; }
+        public void Dispose() => Disposed = true;
     }
 }

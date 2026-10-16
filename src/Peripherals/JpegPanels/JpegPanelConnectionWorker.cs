@@ -21,6 +21,7 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
 {
     private const int ConnectPollMs = 5000;
     private const int PresencePollMs = 2000;
+    private const int PresenceSlackMs = 100;
 
     private readonly IHidEnumerator _hid;
     private readonly JpegPanelHub _hub;
@@ -79,7 +80,7 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
                     }
                 }
 
-                if (!_hub.Attach(device))
+                if (!_hub.Attach(device, stoppingToken))
                 {
                     await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
                     continue;
@@ -125,7 +126,9 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
     private bool PresenceHolds(ref long nextCheckMs)
     {
         long now = Environment.TickCount64;
-        if (now < nextCheckMs)
+        // The loop delay can equal the probe period, and the tick clock is coarse, so a
+        // wake a few ms early must still probe rather than wait a whole extra period.
+        if (now + PresenceSlackMs < nextCheckMs)
         {
             return true;
         }

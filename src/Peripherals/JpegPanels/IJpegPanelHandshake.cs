@@ -62,5 +62,12 @@ public interface IJpegPanelSession
     /// <summary>How often <see cref="Tick"/> should run while attached.</summary>
     int TickIntervalMs { get; }
 
-    void Tick(IHidDevice device, int reportLength, long nowMs);
+    /// <summary>False when the handle is dead and the hub should drop it so the worker re-attaches.</summary>
+    bool Tick(IHidDevice device, int reportLength, long nowMs);
+
+    /// <summary>
+    /// <see cref="IJpegPanelHandshake.OnAttach"/> for a session that pauses: <paramref name="gate"/>
+    /// is the hub's lock, released across each pause, and <paramref name="cancel"/> ends the pauses on shutdown.
+    /// </summary>
+    bool Attach(IHidDevice device, int reportLength, object? gate, System.Threading.CancellationToken cancel);
 }

@@ -28,7 +28,7 @@ public sealed class JpegPanelHub : IDisposable
 
     private IHidDevice? _device;
     private long _frameFailures;
-    private long _lastFailureLogMs = long.MinValue;
+    private long _lastFailureLogMs = long.MinValue / 2;
     private volatile bool _attached;
     private bool _disposed;
 
@@ -56,9 +56,11 @@ public sealed class JpegPanelHub : IDisposable
     {
         lock (_lock)
         {
-            if (_device != null && _attached && _model.Handshake is IJpegPanelSession session)
+            if (_device != null && _attached && _model.Handshake is IJpegPanelSession session
+                && !session.Tick(_device, _model.ReportLength, Environment.TickCount64))
             {
-                session.Tick(_device, _model.ReportLength, Environment.TickCount64);
+                // Marked detached so the connection worker closes this handle and runs a full attach.
+                _attached = false;
             }
         }
     }
@@ -73,7 +75,7 @@ public sealed class JpegPanelHub : IDisposable
     /// Takes ownership of an open HID handle and runs the model's init sequence. Returns
     /// false when the init writes fail, which is the worker's signal to drop the handle.
     /// </summary>
-    public bool Attach(IHidDevice device)
+    public bool Attach(IHidDevice device, CancellationToken cancel = default)
     {
         lock (_lock)
         {
@@ -81,11 +83,27 @@ public sealed class JpegPanelHub : IDisposable
             _device = device;
             _attached = false;
 
-            if (_model.Handshake is { } handshake && !handshake.OnAttach(device, _model.ReportLength))
+            if (_model.Handshake is { } handshake)
             {
-                _device?.Dispose();
-                _device = null;
-                return false;
+                bool ok;
+                try
+                {
+                    // A session releases the lock across its pauses, so the handle may be
+                    // detached or disposed meanwhile; only the same handle may go live.
+                    ok = handshake is IJpegPanelSession session
+                        ? session.Attach(device, _model.ReportLength, _lock, cancel)
+                        : handshake.OnAttach(device, _model.ReportLength);
+                }
+                catch
+                {
+                    DropIfCurrentLocked(device);
+                    throw;
+                }
+                if (!ok || !ReferenceEquals(_device, device))
+                {
+                    DropIfCurrentLocked(device);
+                    return false;
+                }
             }
 
             if (_model.InitReports is { } inits)
@@ -105,6 +123,15 @@ public sealed class JpegPanelHub : IDisposable
             _attached = true;
             return true;
         }
+    }
+
+    private void DropIfCurrentLocked(IHidDevice device)
+    {
+        if (ReferenceEquals(_device, device))
+        {
+            _device = null;
+        }
+        device.Dispose();
     }
 
     public void Detach()
@@ -205,15 +232,24 @@ public sealed class JpegPanelHub : IDisposable
         }
     }
 
+    /// <summary>True at most once per interval; the first call always wins.</summary>
+    internal bool TryClaimFailureLog(long nowMs)
+    {
+        if (nowMs - _lastFailureLogMs < FailureLogIntervalMs)
+        {
+            return false;
+        }
+        _lastFailureLogMs = nowMs;
+        return true;
+    }
+
     private void NoteFailureLocked(string reason)
     {
         Interlocked.Increment(ref _frameFailures);
-        long now = Environment.TickCount64;
-        if (now - _lastFailureLogMs < FailureLogIntervalMs)
+        if (!TryClaimFailureLog(Environment.TickCount64))
         {
             return;
         }
-        _lastFailureLogMs = now;
         ServiceLog.Warn($"[{_model.HandlerId}] frame failed: {reason}; failures so far {FrameFailures}");
     }
 

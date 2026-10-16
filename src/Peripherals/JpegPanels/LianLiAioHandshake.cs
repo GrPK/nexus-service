@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using System.Threading;
 using Nexus.Service.Peripherals.Hid;
 using Nexus.Service.Platform;
 
@@ -65,6 +66,9 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
     private const int PostHandshakeDelayMs = 2000;
 
     private const int KeepaliveIntervalMs = 1000;
+
+    /// <summary>Consecutive failed status writes before the handle counts as dead.</summary>
+    private const int DeadHandleTicks = 3;
     private const int HandshakeTimeoutMs = 1000;
     private const int FirmwareAttempts = 3;
     private const int FirmwareRetryDelayMs = 2000;
@@ -93,7 +97,10 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
     private readonly string _handlerId;
     private readonly byte _fps;
     private readonly bool _referenceSession;
-    private readonly Action<int> _sleep;
+    private readonly Action<int, CancellationToken> _sleep;
+    private object? _gate;
+    private CancellationToken _cancel;
+    private int _tickWriteFailures;
     private readonly Func<long> _clock;
     private byte[]? _report;
 
@@ -112,11 +119,11 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
     /// Off keeps the bare firmware-then-claim attach the Galahad II family was verified with.
     /// </param>
     public LianLiAioHandshake(string handlerId, int fps, bool referenceSession = false)
-        : this(handlerId, fps, referenceSession, System.Threading.Thread.Sleep, () => Environment.TickCount64)
+        : this(handlerId, fps, referenceSession, WaitCancellable, () => Environment.TickCount64)
     {
     }
 
-    internal LianLiAioHandshake(string handlerId, int fps, bool referenceSession, Action<int> sleep, Func<long> clock)
+    internal LianLiAioHandshake(string handlerId, int fps, bool referenceSession, Action<int, CancellationToken> sleep, Func<long> clock)
     {
         _handlerId = handlerId;
         _fps = (byte)Math.Clamp(fps, 1, 60);
@@ -125,13 +132,67 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
         _clock = clock;
     }
 
+    private static void WaitCancellable(int ms, CancellationToken cancel)
+    {
+        if (cancel.WaitHandle.WaitOne(ms))
+        {
+            cancel.ThrowIfCancellationRequested();
+        }
+    }
+
+    /// <summary>
+    /// Waits without holding the hub's lock, so brightness and serial reads do not stall
+    /// behind the settle pauses, and ends early with <see cref="OperationCanceledException"/>
+    /// on shutdown.
+    /// </summary>
+    private void Pause(int ms)
+    {
+        _cancel.ThrowIfCancellationRequested();
+        var gate = _gate;
+        if (gate != null)
+        {
+            Monitor.Exit(gate);
+        }
+        try
+        {
+            _sleep(ms, _cancel);
+        }
+        finally
+        {
+            if (gate != null)
+            {
+                Monitor.Enter(gate);
+            }
+        }
+        _cancel.ThrowIfCancellationRequested();
+    }
+
     public int SettleMs => _referenceSession ? SettleDelayMs : 0;
 
     public int TickIntervalMs => _referenceSession ? KeepaliveIntervalMs : 0;
 
-    public bool OnAttach(IHidDevice device, int reportLength)
+    public bool OnAttach(IHidDevice device, int reportLength) =>
+        Attach(device, reportLength, null, CancellationToken.None);
+
+    public bool Attach(IHidDevice device, int reportLength, object? gate, CancellationToken cancel)
+    {
+        _gate = gate;
+        _cancel = cancel;
+        try
+        {
+            return AttachCore(device, reportLength);
+        }
+        finally
+        {
+            _gate = null;
+            _cancel = CancellationToken.None;
+        }
+    }
+
+    private bool AttachCore(IHidDevice device, int reportLength)
     {
         var report = Buffer(reportLength);
+        _tickWriteFailures = 0;
 
         // The one two-way exchange this panel offers, so the only evidence the handle reaches
         // the panel rather than just the HID stack.
@@ -142,7 +203,7 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
             firmware = ReadFirmware(device, report);
             if (firmware == null && attempt < attempts)
             {
-                _sleep(FirmwareRetryDelayMs);
+                Pause(FirmwareRetryDelayMs);
             }
         }
         if (firmware != null)
@@ -162,7 +223,7 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
             {
                 ServiceLog.Warn($"[{_handlerId}] status handshake not answered; continuing to application mode");
             }
-            _sleep(PostHandshakeDelayMs);
+            Pause(PostHandshakeDelayMs);
         }
 
         if (!SendLcdControl(device, report, ModeApplication, _brightness))
@@ -242,37 +303,43 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
     /// availability check with reset recovery. Both ride the hub's lock, so neither
     /// interleaves with a frame.
     /// </summary>
-    public void Tick(IHidDevice device, int reportLength, long nowMs)
+    public bool Tick(IHidDevice device, int reportLength, long nowMs)
     {
         if (!_referenceSession)
         {
-            return;
+            return true;
         }
         var report = Buffer(reportLength);
         if (nowMs - _lastKeepaliveMs >= KeepaliveIntervalMs)
         {
             _lastKeepaliveMs = nowMs;
-            SendHandshake(device, report, readReply: false);
+            _tickWriteFailures = SendHandshake(device, report, readReply: false) ? 0 : _tickWriteFailures + 1;
+            if (_tickWriteFailures >= DeadHandleTicks)
+            {
+                ServiceLog.Warn($"[{_handlerId}] status writes keep failing; dropping the handle to re-attach");
+                return false;
+            }
         }
 
         if (nowMs - _lastRecoveryMs < RecoveryCooldownMs || nowMs - _lastFrameMs < StreamActiveWindowMs)
         {
-            return;
+            return true;
         }
-        CheckAndRecover(device, report, nowMs);
+        return CheckAndRecover(device, report, nowMs);
     }
 
-    private void CheckAndRecover(IHidDevice device, byte[] report, long nowMs)
+    /// <summary>False when the handle can no longer reach the panel, so the hub must re-attach from scratch.</summary>
+    private bool CheckAndRecover(IHidDevice device, byte[] report, long nowMs)
     {
         bool? available = IsLcdAvailable(device, report);
         if (available == true)
         {
             _unavailableCount = 0;
-            return;
+            return true;
         }
         if (++_unavailableCount < UnavailableThreshold)
         {
-            return;
+            return true;
         }
         _unavailableCount = 0;
         _lastRecoveryMs = nowMs;
@@ -280,16 +347,21 @@ public sealed class LianLiAioHandshake : IJpegPanelHandshake, IJpegPanelBrightne
         if (ResetDevice(device, report))
         {
             ServiceLog.Info($"[{_handlerId}] panel reset; reclaiming the glass");
-            _sleep(PostResetDelayMs);
+            _sleep(PostResetDelayMs, CancellationToken.None);
         }
         else
         {
             ServiceLog.Warn($"[{_handlerId}] panel reset failed; reclaiming the glass anyway");
         }
-        if (SendLcdControl(device, report, ModeApplication, _brightness))
+        // A reset that re-enumerates USB leaves this handle dead: the claim write fails, and
+        // only a fresh attach (settle included) reopens the panel.
+        if (!SendLcdControl(device, report, ModeApplication, _brightness))
         {
-            DrainAck(device);
+            ServiceLog.Warn($"[{_handlerId}] reclaim after reset was rejected; dropping the handle to re-attach");
+            return false;
         }
+        DrainAck(device);
+        return true;
     }
 
     /// <summary>
