@@ -723,8 +723,8 @@ public sealed class LightingSettings
     public string RenderGpu { get; set; } = "auto";
     /// <summary>Which API creates the lighting GL context on Windows: "angle"
     /// (default on win-x64: OpenGL ES 3 on Direct3D 11 through the bundled
-    /// ANGLE), "wgl" (direct OpenGL, also what win-arm64 uses) or "glfw" (the
-    /// pre-3.0.15 path). The last two are fallbacks if a driver refuses ANGLE.
+    /// ANGLE), "wgl" (direct OpenGL, also what win-arm64 uses, a fallback if a
+    /// driver refuses ANGLE). A stored "glfw" from older builds resolves like unset.
     /// Restart-to-apply. Ignored elsewhere: macOS uses CGL and Linux EGL.</summary>
     public string RenderBackend { get; set; } = "angle";
     /// <summary>

@@ -160,15 +160,9 @@
 
   <!-- Cross-platform OpenGL for GPU-rendered lighting effects. Silk.NET binds to
        the native GL driver via P/Invoke (AOT-safe). Windows creates its context
-       against WGL directly (WinWglContext); GLFW stays for the RenderBackend
-       escape, and is what the pre-3.0.15 path used. OpenTK.redist.glfw ships the
-       GLFW native blob - referenced with GeneratePathProperty so the
-       CopyGlfwNative target below finds the per-RID dll/dylib without
-       hard-coding a version in the path. -->
+       against WGL directly (WinWglContext). -->
   <ItemGroup>
-    <PackageReference Include="Silk.NET.GLFW" Version="2.22.0" />
     <PackageReference Include="Silk.NET.OpenGL" Version="2.22.0" />
-    <PackageReference Include="OpenTK.redist.glfw" Version="3.3.0-pre20200830200122" GeneratePathProperty="true" />
   </ItemGroup>
 
   <!-- System.IO.Ports: serial-port IO for HYTE NP50 (CDC virtual COM). The
@@ -242,23 +236,6 @@
     <PackageReference Include="HarfBuzzSharp.NativeAssets.Win32" Version="14.2.1.301" ExcludeAssets="all" />
     <PackageReference Include="HarfBuzzSharp.NativeAssets.macOS" Version="14.2.1.301" ExcludeAssets="all" />
   </ItemGroup>
-
-  <!-- AOT publish strips native assets from `runtimes/<rid>/native/` that aren't
-       statically referenced. Silk.NET loads GLFW via dynamic P/Invoke, so we
-       manually copy the native into the publish dir. -->
-  <Target Name="CopyGlfwNative" AfterTargets="Publish">
-    <ItemGroup>
-      <_GlfwWin Include="$(PkgOpenTK_redist_glfw)\runtimes\win-x64\native\glfw3.dll" />
-      <_GlfwMac Include="$(PkgOpenTK_redist_glfw)\runtimes\osx\native\libglfw.3.dylib" />
-      <_GlfwLinux Include="$(PkgOpenTK_redist_glfw)\runtimes\linux-x64\native\libglfw.so.3" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_GlfwWin)" DestinationFolder="$(PublishDir)"
-          Condition="$(RuntimeIdentifier.StartsWith('win')) AND Exists('@(_GlfwWin)')" />
-    <Copy SourceFiles="@(_GlfwMac)" DestinationFolder="$(PublishDir)"
-          Condition="$(RuntimeIdentifier.StartsWith('osx')) AND Exists('@(_GlfwMac)')" />
-    <Copy SourceFiles="@(_GlfwLinux)" DestinationFolder="$(PublishDir)"
-          Condition="$(RuntimeIdentifier.StartsWith('linux')) AND Exists('@(_GlfwLinux)')" />
-  </Target>
 
   <!-- icon.ico is embedded in the exe via <ApplicationIcon> above (Win32
        resource ID 32512). TrayIcon.cs and the OS taskbar load it from there;

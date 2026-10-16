@@ -11,7 +11,7 @@ namespace Nexus.Service.Tests.Lighting.Gpu;
 /// every shader-rendered effect black until a restart.
 ///
 /// The init body is substituted throughout - a real GL init is host-dependent
-/// and would put concurrent glfwInit calls into a parallelized suite.
+/// and would put concurrent GL init calls into a parallelized suite.
 /// </summary>
 public class GpuContextInitLatchTests
 {
@@ -123,7 +123,7 @@ public class GpuContextInitLatchTests
         Start(gpu);
         gpu.WaitForInit(TimeSpan.FromMilliseconds(50));
 
-        // A second GLFW init beside a live one shares process-global state.
+        // A second GL init beside a live one shares process-global state.
         Assert.False(gpu.ResetForRetry());
         gate.Set();
     }
@@ -326,7 +326,7 @@ public class GpuContextInitLatchTests
 
     // The Windows GL backend defaults to ANGLE: Intel's OpenGL ICD spins a core for
     // the life of the process under the service account, which ANGLE's D3D11 path
-    // never loads. "wgl" and "glfw" stay reachable as fallbacks.
+    // never loads. "wgl" stays reachable as a fallback.
     [Fact]
     public void Windows_gl_backend_defaults_to_angle()
     {

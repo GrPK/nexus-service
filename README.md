@@ -146,7 +146,7 @@ dotnet publish -c Release -r linux-x64 -o publish-linux
   (unmodified, from the Electron v43.7.7 win32-x64 release; license in
   `ANGLE-LICENSE.txt`) and publishes to `<publish>/angle/`. They are the default
   Windows lighting renderer (`Lighting.RenderBackend` = `angle`, OpenGL ES 3 on
-  Direct3D 11); `wgl` and `glfw` remain as fallbacks and win-arm64 uses `wgl`.
+  Direct3D 11); `wgl` remains as a fallback and win-arm64 uses `wgl`.
   Setting `Lighting.RenderGpu` to `software` (ANGLE only) renders shaders on the
   CPU through ANGLE WARP, with no hardware probe; it applies after a restart.
 - `Bundled/<rid>/skia/libSkiaSharp` is a raster-only Skia build with HarfBuzz
