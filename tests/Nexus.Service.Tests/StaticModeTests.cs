@@ -58,6 +58,14 @@ public class StaticModeTests : IDisposable
     };
 
     [Fact]
+    public void A_removed_game_sync_mode_arriving_at_runtime_persists_as_static()
+    {
+        _provider.SetSync("gamesync");
+
+        Assert.Equal("static", _store.Load().Lighting.Sync);
+    }
+
+    [Fact]
     public void StartStatic_persists_the_mode_and_selection()
     {
         _provider.StartStatic(new StaticHeadlessStart { Effect = "gradientlinear", Persist = true });

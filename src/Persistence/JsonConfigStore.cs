@@ -88,6 +88,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                 {
                     _cached.FeaturesOnboardingCompleted = true;
                     Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.KeepMiceOn(_cached);
+                    _cached.Lighting.GameSyncRemovedNotice = true;
                     pinsMigrated = true;
                 }
                 if (_cached.SchemaVersion < NexusSettings.CurrentSchemaVersion)
@@ -112,6 +113,11 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
                         recovered = true;
                     }
                     if (NormalizeDeckInstanceModes(_cached))
+                    {
+                        recovered = true;
+                    }
+                    // A downgrade to an older build can write the removed mode back at the current schema version.
+                    if (Nexus.Service.Lighting.RemovedSyncModes.Apply(_cached.Lighting))
                     {
                         recovered = true;
                     }
@@ -222,6 +228,7 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
     /// widget's inline layout config does the same (DeckModesMigration).
     /// v19: ConflictWhitelistMigration.
     /// v20: ConflictWhitelistMigration.KeepThirdPartyDevicesOn.
+    /// v23: the removed Game Sync mode becomes static; an upgrade sets GameSyncRemovedNotice.
     /// </summary>
     private static void Migrate(NexusSettings doc)
     {
@@ -317,6 +324,15 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         if (doc.SchemaVersion < 22)
         {
             Nexus.Service.Lighting.Rgb.OpenRgbGamepadDefaults.KeepMiceOn(doc);
+        }
+        if (doc.SchemaVersion < 23)
+        {
+            if (doc.Lighting is { } lighting)
+            {
+                Nexus.Service.Lighting.RemovedSyncModes.Apply(lighting);
+                // Migrate never runs on a fresh install, so this reaches only an upgrade.
+                lighting.GameSyncRemovedNotice = true;
+            }
         }
         doc.SchemaVersion = NexusSettings.CurrentSchemaVersion;
     }

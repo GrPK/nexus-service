@@ -148,7 +148,7 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         return _engine.Frozen ? "static" : _engine.CurrentEffectName;
     }
 
-    public void SetSync(string sync) => _store.Update(s => s.Lighting.Sync = sync);
+    public void SetSync(string sync) => _store.Update(s => s.Lighting.Sync = RemovedSyncModes.Normalize(sync));
 
     public bool IsPaused => _engine.Paused;
 
