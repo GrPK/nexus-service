@@ -189,6 +189,10 @@ public sealed class RgbBridge : IDisposable
     private readonly ConcurrentDictionary<int, RgbColor[]> _lastPushed = new();
     private readonly ConcurrentDictionary<int, long> _lastPushTicks = new();
     private const long HeartbeatMs = 1000;
+    // Lowest user cap among the zones sharing a physical push, rebuilt every frame.
+    private readonly Dictionary<int, int> _physCapsHz = new();
+    private PushRateLimiter<int>? _pushLimiter;
+    private PushRateLimiter<int> PushLimiter => _pushLimiter ??= new PushRateLimiter<int>(FlushCappedPhysical);
     // Reused across frames - set of physical indices that had at least one zone
     // written in the current OnFrame. Cleared at the start of every frame.
     // Only touched inside OnFrame which the engine serialises, so a plain HashSet
@@ -1789,7 +1793,7 @@ public sealed class RgbBridge : IDisposable
     /// Compares as bytes: RgbColor has no IEquatable, so Span.SequenceEqual over
     /// the structs themselves would fall back to reflective ValueType.Equals and
     /// cost more than the push it saves.</summary>
-    private bool ShouldPush(int physIdx, RgbColor[] buf)
+    private bool ShouldPush(int physIdx, RgbColor[] buf, int capHz = 0)
     {
         var now = Environment.TickCount64;
         if (_lastPushed.TryGetValue(physIdx, out var last)
@@ -1802,11 +1806,35 @@ public sealed class RgbBridge : IDisposable
             return false;
         }
 
+        // After the dedupe so an identical frame never spends the gap. A frame
+        // dropped here is not recorded as pushed, so the trailing flush or the
+        // next differing frame still delivers it.
+        if (capHz > 0 && !PushLimiter.TryPass(physIdx, capHz))
+        {
+            return false;
+        }
+
         var copy = last is not null && last.Length == buf.Length ? last : new RgbColor[buf.Length];
         buf.AsSpan().CopyTo(copy);
         _lastPushed[physIdx] = copy;
         _lastPushTicks[physIdx] = now;
         return true;
+    }
+
+    /// <summary>Zones sharing one physical push take the lowest cap among them.</summary>
+    internal static void FoldCap(Dictionary<int, int> caps, int physIdx, int capHz)
+    {
+        caps[physIdx] = caps.TryGetValue(physIdx, out var prev) ? Math.Min(prev, capHz) : capHz;
+    }
+
+    // The limiter already spent the gap, so this bypasses it and sends the newest buffer.
+    private void FlushCappedPhysical(int physIdx)
+    {
+        if (IsActive && _controller.IsConnected
+            && _physBuffers.TryGetValue(physIdx, out var buf) && ShouldPush(physIdx, buf))
+        {
+            _ = _controller.PushFrameAsync(physIdx, buf);
+        }
     }
 
     private void SyncPhysicalBuffers(IReadOnlyList<RgbDevice> devices)
@@ -2392,6 +2420,7 @@ public sealed class RgbBridge : IDisposable
         var nowTicks = DateTime.UtcNow.Ticks;
 
         _touchedPhysicals.Clear();
+        _physCapsHz.Clear();
         ComputeFullyUncontrolledPhysicals(deviceFrames, _bridgeFrameIds, uncontrolled, _physFullyUncontrolled);
 
         var deviceCount = frame[pos++];
@@ -2461,6 +2490,10 @@ public sealed class RgbBridge : IDisposable
                 {
                     devBrightness = pref.Brightness;
                     adjust = Nexus.Service.Lighting.DeviceColorAdjust.For(pref);
+                    if (pref.MaxRateHz is int capHz && capHz > 0)
+                    {
+                        FoldCap(_physCapsHz, dev.PhysicalIndex, capHz);
+                    }
                 }
                 else
                 {
@@ -2530,7 +2563,8 @@ public sealed class RgbBridge : IDisposable
 
         foreach (var physIdx in _touchedPhysicals)
         {
-            if (_physBuffers.TryGetValue(physIdx, out var buf) && ShouldPush(physIdx, buf))
+            if (_physBuffers.TryGetValue(physIdx, out var buf)
+                && ShouldPush(physIdx, buf, _physCapsHz.GetValueOrDefault(physIdx)))
             {
                 _ = _controller.PushFrameAsync(physIdx, buf);
             }

@@ -261,6 +261,7 @@ public static partial class DevicesRoutes
                 AdjustBlue = kv.Value.AdjustBlue,
                 AdjustTemperature = kv.Value.AdjustTemperature,
                 AdjustSaturation = kv.Value.AdjustSaturation,
+                MaxRateHz = kv.Value.MaxRateHz,
             };
         }
         return copy;
@@ -889,6 +890,33 @@ public static partial class DevicesRoutes
                     }
                 }
             }
+            CaptureDeviceStateIntoActive(store);
+            return Results.Ok(ApiResponse.Ok());
+        }).AllowPanel();
+
+        // Per-device cap on frame pushes. Applied by RgbBridge on its next frame.
+        app.MapPost("/devices/lighting-devices/max-rate", (
+            SetLightingDeviceMaxRateBody body,
+            Nexus.Service.Persistence.IConfigStore store,
+            FeatureGates gates) =>
+        {
+            if (!gates.Lighting)
+            {
+                return Results.Conflict(new FeatureDisabledResponse { Feature = FeatureNames.Lighting });
+            }
+            if (string.IsNullOrEmpty(body.Id) || !Nexus.Service.Lighting.DeviceRateCap.IsValid(body.MaxRateHz))
+            {
+                return Results.BadRequest(ApiResponse.Fail("Invalid id or maxRateHz."));
+            }
+            store.Update(s =>
+            {
+                if (!s.Devices.LightingDevicePrefs.TryGetValue(body.Id, out var pref) || pref is null)
+                {
+                    pref = new Nexus.Service.Persistence.LightingDevicePreference();
+                    s.Devices.LightingDevicePrefs[body.Id] = pref;
+                }
+                pref.MaxRateHz = body.MaxRateHz;
+            });
             CaptureDeviceStateIntoActive(store);
             return Results.Ok(ApiResponse.Ok());
         }).AllowPanel();

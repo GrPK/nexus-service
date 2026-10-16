@@ -1640,6 +1640,8 @@ public sealed class LightingDevicePreference
     /// <summary>Negative is cooler, positive warmer.</summary>
     public float AdjustTemperature { get; set; }
     public float AdjustSaturation { get; set; } = 1f;
+    /// <summary>Cap on frame pushes per second to this device. Null means no cap; see <see cref="Nexus.Service.Lighting.DeviceRateCap.AllowedHz"/>.</summary>
+    public int? MaxRateHz { get; set; }
 }
 
 public sealed class MotherboardLedChannel

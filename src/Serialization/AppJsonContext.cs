@@ -549,6 +549,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Models.Lighting.LightingPauseResponse))]
 [JsonSerializable(typeof(Nexus.Service.Models.Devices.LightingColorAdjustResponse))]
 [JsonSerializable(typeof(Nexus.Service.Models.Devices.SetLightingColorAdjustBody))]
+[JsonSerializable(typeof(Nexus.Service.Models.Devices.SetLightingDeviceMaxRateBody))]
 [JsonSerializable(typeof(SetLightingDeviceColor))]
 [JsonSerializable(typeof(DevicePinsResponse))]
 [JsonSerializable(typeof(SetDevicePinsBody))]
