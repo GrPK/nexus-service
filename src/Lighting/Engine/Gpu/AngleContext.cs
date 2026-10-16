@@ -78,10 +78,10 @@ internal static unsafe partial class AngleContext
     // EGL_ANDROID_blob_cache: ANGLE hands every compiled program to the set callback and
     // asks the get callback before compiling. One process-wide store, shared across contexts.
     private const long ProgramCacheCapBytes = 128L * 1024 * 1024;
-    private const int MaxBlobKeyBytes = 256;
+    private const int MaxBlobKeyBytes = 64;
     private static readonly DiskBlobCache ProgramCache = new(
-        Path.Combine(BlobCacheKey.CacheRoot(), "angle-programs"),
-        ProgramCacheCapBytes, "angle-programs", BlobCacheKey.Get);
+        Path.Combine(BlobCachePolicy.CacheRoot(), "angle-programs"),
+        ProgramCacheCapBytes, BlobCachePolicy.Allowed);
     // ANGLE may link on its own worker threads, so the size-query/copy memo is per thread.
     [ThreadStatic]
     private static string? _lastGetName;
