@@ -42,6 +42,9 @@ public sealed class JpegPanelHub : IDisposable
 
     public bool IsConnected => _attached;
 
+    /// <summary>Tick clock; replaced in tests.</summary>
+    internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
+
     /// <summary>Frames that did not reach the panel since this hub was created: a rejected report or a refused pre-frame step.</summary>
     public long FrameFailures => Interlocked.Read(ref _frameFailures);
 
@@ -57,7 +60,7 @@ public sealed class JpegPanelHub : IDisposable
         lock (_lock)
         {
             if (_device != null && _attached && _model.Handshake is IJpegPanelSession session
-                && !session.Tick(_device, _model.ReportLength, Environment.TickCount64))
+                && !session.Tick(_device, _model.ReportLength, Clock()))
             {
                 // Marked detached so the connection worker closes this handle and runs a full attach.
                 _attached = false;

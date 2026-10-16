@@ -27,6 +27,7 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
     private readonly JpegPanelHub _hub;
     private readonly DeviceControlGate _gate;
     private readonly HardwarePresence _presence;
+    private readonly AttachBackoff _backoff = new(() => Environment.TickCount64);
 
     /// <summary>Latched so a retry every few seconds does not repeat the miss.</summary>
     private bool _missLogged;
@@ -46,6 +47,11 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
         {
             try
             {
+                if (_backoff.DelayMs > 0)
+                {
+                    await Task.Delay((int)_backoff.DelayMs, stoppingToken).ConfigureAwait(false);
+                }
+
                 if (!_gate.IsEnabled(model.HandlerId))
                 {
                     await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
@@ -82,11 +88,17 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
 
                 if (!_hub.Attach(device, stoppingToken))
                 {
+                    NoteFailedCycle("attach failed");
                     await Task.Delay(ConnectPollMs, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
-                ServiceLog.Info($"[{model.HandlerId}] connected: {model.Name}, {model.Width}x{model.Height}");
+                bool quiet = _backoff.Failures > 0;
+                if (!quiet)
+                {
+                    ServiceLog.Info($"[{model.HandlerId}] connected: {model.Name}, {model.Width}x{model.Height}");
+                }
+                long connectedMs = Environment.TickCount64;
                 try
                 {
                     int tickMs = _hub.TickIntervalMs;
@@ -101,12 +113,24 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
                         {
                             _hub.Tick();
                         }
+                        if (_hub.IsConnected && Environment.TickCount64 - connectedMs >= AttachBackoff.HealthyAfterMs)
+                        {
+                            _backoff.NoteHealthy();
+                        }
                     }
                 }
                 finally
                 {
+                    bool dropped = !_hub.IsConnected && !stoppingToken.IsCancellationRequested && _gate.IsEnabled(model.HandlerId);
                     _hub.Detach();
-                    ServiceLog.Info($"[{model.HandlerId}] disconnected");
+                    if (dropped)
+                    {
+                        NoteFailedCycle("handle dropped");
+                    }
+                    else if (!quiet)
+                    {
+                        ServiceLog.Info($"[{model.HandlerId}] disconnected");
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -120,6 +144,15 @@ public sealed class JpegPanelConnectionWorker : BackgroundService
             }
         }
         _hub.Detach();
+    }
+
+    private void NoteFailedCycle(string what)
+    {
+        int report = _backoff.NoteFailure();
+        if (report > 0)
+        {
+            ServiceLog.Warn($"[{_hub.Model.HandlerId}] {what}; {report} failed cycle(s) since the last report, next attempt in {_backoff.DelayMs / 1000} s");
+        }
     }
 
     /// <summary>The presence probe keeps its own cadence even when the loop ticks faster for session traffic.</summary>

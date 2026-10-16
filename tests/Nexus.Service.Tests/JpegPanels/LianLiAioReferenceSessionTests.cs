@@ -294,6 +294,8 @@ public class LianLiAioReferenceSessionTests
     {
         var model = JpegPanelModel.HydroShiftLcd with { Handshake = Session() };
         using var hub = new JpegPanelHub(model);
+        long now = 0;
+        hub.Clock = () => now;
         var device = new FakeDevice();
         Assert.True(hub.Attach(device));
         device.FailWrites = true;
@@ -301,8 +303,8 @@ public class LianLiAioReferenceSessionTests
         // Keepalive writes fail three ticks in a row.
         for (int i = 0; i < 3 && hub.IsConnected; i++)
         {
+            now += 1100;
             hub.Tick();
-            Thread.Sleep(1100);
         }
 
         Assert.False(hub.IsConnected);
@@ -349,6 +351,49 @@ public class LianLiAioReferenceSessionTests
         Assert.False(hub.IsConnected);
         Assert.True(device.Disposed);
         Assert.DoesNotContain(device.Writes, w => w[0] == 0x02 && w[1] == 0x0C);
+    }
+
+    [Fact]
+    public void Backoff_doubles_per_failed_cycle_up_to_the_cap_and_clears_when_healthy()
+    {
+        long now = 0;
+        var backoff = new AttachBackoff(() => now);
+        Assert.Equal(0, backoff.DelayMs);
+
+        var delays = new List<long>();
+        for (int i = 0; i < 9; i++)
+        {
+            backoff.NoteFailure();
+            delays.Add(backoff.DelayMs);
+        }
+
+        Assert.Equal(new long[] { 5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000, 300_000 }, delays);
+        now += 100_000;
+        Assert.Equal(200_000, backoff.DelayMs);
+
+        backoff.NoteHealthy();
+        Assert.Equal(0, backoff.DelayMs);
+        backoff.NoteFailure();
+        Assert.Equal(5_000, backoff.DelayMs);
+    }
+
+    [Fact]
+    public void Repeat_failures_collapse_into_one_summary_per_interval()
+    {
+        long now = 0;
+        var backoff = new AttachBackoff(() => now);
+
+        Assert.Equal(1, backoff.NoteFailure());
+        int silent = 0;
+        for (int i = 0; i < 5; i++)
+        {
+            now += 60_000;
+            silent += backoff.NoteFailure();
+        }
+        Assert.Equal(0, silent);
+
+        now += AttachBackoff.SummaryIntervalMs;
+        Assert.Equal(6, backoff.NoteFailure());
     }
 
     private static byte[] AResponse(byte cmd, string text)
