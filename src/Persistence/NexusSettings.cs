@@ -962,7 +962,7 @@ public sealed class PresetAppBinding
 public sealed class LightingPresetLook
 {
     /// <summary><see cref="LightingSettings.Sync"/> at capture time: an animate
-    /// effect key, or "static" / "screen" / "media" / "music" / "gamesync" / "none".</summary>
+    /// effect key, or "static" / "screen" / "media" / "music" / "none".</summary>
     public string Sync { get; set; } = "";
     public string AnimateEffect { get; set; } = "";
     public string StaticEffect { get; set; } = "";

@@ -6,7 +6,6 @@ using Nexus.Service.Activity;
 using Nexus.Service.Lifecycle;
 using Nexus.Service.Lighting.Engine;
 using Nexus.Service.Lighting.Engine.Effects;
-using Nexus.Service.Lighting.GameSync;
 using Nexus.Service.Lighting.Engine.Gpu;
 using Nexus.Service.Lighting.Rgb;
 using Nexus.Service.Lighting.Capture;
@@ -60,7 +59,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     private readonly MediaLibrary _media;
     private readonly IMonitorEnumerator _monitors;
     private readonly IScreenFrameSource? _frameSource;
-    private readonly GameSyncGameScanner? _scanner;
     private readonly IBeatsProvider? _beats;
 
     // Serializes audio-capture reconcile so two near-simultaneous effect
@@ -79,13 +77,9 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
     private readonly PostProcessState _screenPP = new();
     private readonly PostProcessState _mediaPP = new();
 
-    // Shared GameSyncEffect instance. Kept alive across StartGameSync calls so
-    // frames that arrive while the effect is already running are not dropped.
-    private GameSyncEffect? _gameSyncEffect;
-
     private readonly FeatureGates _gates;
 
-    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, GameSyncGameScanner? scanner = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null, MultiplexHub? panelHub = null)
+    public LightingProvider(IConfigStore store, LightingEngine engine, LightingOutputHub hub, GpuContext gpu, MediaLibrary media, IMonitorEnumerator monitors, IScreenFrameSource? frameSource = null, RgbBridge? rgb = null, IBeatsProvider? beats = null, FeatureGates? gates = null, Nexus.Service.Lighting.CustomEffects.CustomEffectStore? customEffects = null, MultiplexHub? panelHub = null)
     {
         _panelHub = panelHub;
         _gates = gates ?? FeatureGates.AllEnabled;
@@ -105,7 +99,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         _media = media;
         _monitors = monitors;
         _frameSource = frameSource;
-        _scanner = scanner;
         _beats = beats;
 
         var s = _store.Load().Lighting;
@@ -118,7 +111,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
         // Any settings write can move a pinned effect's look, the pin set, or the mirrored screen.
         _store.OnChanged += RefreshPinnedLooks;
         RefreshPinnedLooks();
-        _scanner?.OnScanComplete = OnGameScanComplete;
         // A store that was unreadable at boot registers its sources late; a custom effect
         // restored meanwhile is running the rainbow stand-in until this rebuilds it.
         customEffects?.Recovered += () =>
@@ -1680,102 +1672,6 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
             s.Lighting.MediaEffect.FlipY = flipY;
             LightingPresetLooks.CaptureIntoActive(s);
         });
-    }
-
-    // Fires on the scanner's background thread after each scan completes.
-    // Ensures the GSI cfg is present when Game Sync is active and a supported
-    // GSI game was found, without requiring the user to re-toggle.
-    private void OnGameScanComplete(IReadOnlyList<DetectedGame> games)
-    {
-        if (!string.Equals(GetSync(), "gamesync", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        var hasGsiGame = false;
-        foreach (var g in games)
-        {
-            if (g.EmitsGsi)
-            {
-                hasGsiGame = true;
-                break;
-            }
-        }
-
-        if (!hasGsiGame)
-        {
-            return;
-        }
-
-        var token = _store.Load().Auth?.Token ?? "";
-        if (token.Length > 0)
-        {
-            GsiConfigInstaller.EnsureInstalled(token);
-        }
-    }
-
-    public void StartGameSync()
-    {
-        if (!_gates.Lighting)
-        {
-            return;
-        }
-        EnsureRgbActive();
-        // Reuse the existing effect instance so frames ingested before the
-        // mode selection round-trip arrives are not lost.
-        if (_gameSyncEffect is null || _engine.CurrentEffect != _gameSyncEffect)
-        {
-            _gameSyncEffect = new GameSyncEffect();
-            _engine.SetEffect(_gameSyncEffect);
-        }
-        // Clear per-session signal so a stale app name or last-seen time
-        // from a previous Game Sync session does not bleed into the new one.
-        _gameSyncEffect.Reset();
-        _store.Update(s =>
-        {
-            s.Lighting.Sync = "gamesync";
-            LightingPresetLooks.CaptureIntoActive(s);
-        });
-
-        // Deploy shim DLLs into System32/SysWOW64. Idempotent and guarded by
-        // an elevation check; skipped on macOS/Linux (NotApplicable).
-        var shimResult = GameSyncShimInstaller.EnsureInstalled();
-        switch (shimResult)
-        {
-            case ChromaShimInstallResult.Installed:
-                ServiceLog.Info("[chroma-shim] shim DLLs installed");
-                break;
-            case ChromaShimInstallResult.AlreadyCurrent:
-                ServiceLog.Info("[chroma-shim] shim DLLs already current");
-                break;
-            case ChromaShimInstallResult.SynapseConflict:
-                ServiceLog.Warn("[chroma-shim] Razer Chroma SDK present; shim not installed");
-                break;
-            case ChromaShimInstallResult.NotElevated:
-                ServiceLog.Warn("[chroma-shim] not elevated; shim install skipped");
-                break;
-            case ChromaShimInstallResult.BundleMissing:
-                ServiceLog.Info("[chroma-shim] bundled shim DLLs not found; Game Sync stays inactive");
-                break;
-            case ChromaShimInstallResult.Failed:
-                ServiceLog.Error("[chroma-shim] shim install failed");
-                break;
-        }
-
-        var token = _store.Load().Auth?.Token ?? "";
-        if (token.Length > 0)
-        {
-            GsiConfigInstaller.EnsureInstalled(token);
-        }
-    }
-
-    public GameSyncEffect? ActiveGameSyncEffect()
-    {
-        if (_engine.CurrentEffect is GameSyncEffect eff)
-        {
-            return eff;
-        }
-        return null;
     }
 
     public bool StartMedia(string mediaId)
