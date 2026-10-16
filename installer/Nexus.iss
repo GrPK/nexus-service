@@ -115,6 +115,10 @@ ErrorExecutingProgram=Setup could not run this file:%n%1%n%n{#AntivirusCause}%n%
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; BeforeInstall: UnlockTarget
 
+[UninstallDelete]
+; GPU shader-program and thumbnail caches the service writes beside the exe.
+Type: filesandordirs; Name: "{app}\cache"
+
 [Icons]
 ; Launch shortcut -> Nexus.exe (no args; routes through WindowsLauncher.Run to
 ; start/recover the service and open the dashboard). A .lnk to the exe is what

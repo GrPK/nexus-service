@@ -9,17 +9,16 @@ using System.Threading;
 namespace Nexus.Service.Lighting.Engine.Gpu;
 
 /// <summary>
-/// Size-capped directory of opaque blobs addressed by a hex name: the backing
-/// store for ANGLE's compiled-program cache and for rendered thumbnails.
+/// Size-capped directory of opaque blobs addressed by a lowercase hex name: the
+/// backing store for ANGLE's compiled-program cache and for rendered
+/// thumbnails.
 ///
-/// Trust: what is read back is fed to a GPU driver or served as an image, and
-/// the directory is writable by other local accounts, so no ACL is relied on.
-/// Every file is HMAC-SHA256(key, purpose | name | data) followed by the data;
-/// a missing, short or mismatching tag is a miss and the file is deleted. The
-/// key never leaves the service (see <see cref="BlobCacheKey"/>); with no key
-/// the cache is off. A directory that is a reparse point is refused.
+/// Trust: what is read back is fed to a GPU driver or served as an image, so the
+/// directory must not be writable by other accounts. That is decided once by
+/// <see cref="BlobCachePolicy"/>; when it says no, the cache is off (every read
+/// misses, every write is dropped). Only hex-named files are indexed.
 ///
-/// Initialization (key, scan, wipe) runs on a background thread; until it
+/// Initialization (policy, scan) runs on a background thread; until it
 /// completes every read misses and every write is dropped. Reads use an
 /// in-memory index, so a miss costs no file access. Writes are queued, capped
 /// by bytes, and written by one background thread, which also evicts the least
@@ -27,20 +26,17 @@ namespace Nexus.Service.Lighting.Engine.Gpu;
 /// </summary>
 internal sealed class DiskBlobCache
 {
-    private const int TagBytes = 32;
     public const long DefaultMaxQueuedBytes = 16L * 1024 * 1024;
 
     private readonly string _dir;
     private readonly long _capBytes;
     private readonly long _maxQueuedBytes;
-    private readonly string _purpose;
-    private readonly Func<BlobKey?> _keyProvider;
+    private readonly Func<bool> _trusted;
     private readonly object _gate = new();
     private readonly Dictionary<string, (long Length, long LastUsed)> _index = new(StringComparer.Ordinal);
     private readonly Dictionary<string, byte[]> _queued = new(StringComparer.Ordinal);
     private readonly Queue<string> _writeOrder = new();
     private readonly ManualResetEventSlim _ready = new(false);
-    private byte[]? _key;
     private volatile bool _enabled;
     private long _clock;
     private long _total;
@@ -48,14 +44,12 @@ internal sealed class DiskBlobCache
     private bool _writerStarted;
     private int _writing;
 
-    /// <param name="purpose">Mixed into every tag, so a valid file of one cache is not valid in another.</param>
-    /// <param name="keyProvider">Called once on the init thread; null result disables the cache.</param>
-    public DiskBlobCache(string dir, long capBytes, string purpose, Func<BlobKey?> keyProvider, long maxQueuedBytes = DefaultMaxQueuedBytes)
+    /// <param name="trusted">Called once on the init thread; false disables the cache.</param>
+    public DiskBlobCache(string dir, long capBytes, Func<bool> trusted, long maxQueuedBytes = DefaultMaxQueuedBytes)
     {
         _dir = dir;
         _capBytes = capBytes;
-        _purpose = purpose;
-        _keyProvider = keyProvider;
+        _trusted = trusted;
         _maxQueuedBytes = maxQueuedBytes;
         new Thread(Initialize) { IsBackground = true, Name = "nexus-blob-init" }.Start();
     }
@@ -67,6 +61,23 @@ internal sealed class DiskBlobCache
 
     /// <summary>Block until initialization finished. For tests.</summary>
     public bool WaitReady(TimeSpan timeout) => _ready.Wait(timeout) && _enabled;
+
+    /// <summary>True for the only names the cache stores: lowercase hex, 16 to 128 characters. Anything else in the directory is ignored, and a caller-supplied name outside this form can never reach the file system.</summary>
+    public static bool IsCacheName(string name)
+    {
+        if (name.Length is < 16 or > 128)
+        {
+            return false;
+        }
+        foreach (var c in name)
+        {
+            if (c is not ((>= '0' and <= '9') or (>= 'a' and <= 'f')))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /// <summary>Lowercase hex of the bytes: a file-name-safe address for a binary key.</summary>
     public static string HexName(ReadOnlySpan<byte> key) => Convert.ToHexString(key).ToLowerInvariant();
@@ -80,7 +91,7 @@ internal sealed class DiskBlobCache
 
     public byte[]? TryGet(string name)
     {
-        if (!Enabled)
+        if (!Enabled || !IsCacheName(name))
         {
             return null;
         }
@@ -97,27 +108,21 @@ internal sealed class DiskBlobCache
             _index[name] = (entry.Length, ++_clock);
         }
         var path = Path.Combine(_dir, name);
-        byte[] file;
         try
         {
-            file = File.ReadAllBytes(path);
+            return File.ReadAllBytes(path);
         }
         catch
         {
+            Forget(name, path);
             return null;
         }
-        var data = Open(name, file);
-        if (data is null)
-        {
-            Forget(name, path);
-        }
-        return data;
     }
 
     /// <summary>Queue a write; returns at once. Dropped when the cache is not ready, the value is empty or over the cap, or the pending bytes are at their limit.</summary>
     public void Put(string name, ReadOnlySpan<byte> value)
     {
-        if (!Enabled || value.Length == 0 || value.Length + TagBytes > _capBytes)
+        if (!Enabled || !IsCacheName(name) || value.Length == 0 || value.Length > _capBytes)
         {
             return;
         }
@@ -159,34 +164,6 @@ internal sealed class DiskBlobCache
     // Test seam: runs on the writer thread just before the named entry is written.
     internal Action<string>? BeforeWrite { get; set; }
 
-    private byte[] Seal(string name, byte[] data)
-    {
-        var tag = Tag(name, data);
-        var file = new byte[TagBytes + data.Length];
-        tag.CopyTo(file, 0);
-        data.CopyTo(file, TagBytes);
-        return file;
-    }
-
-    private byte[]? Open(string name, byte[] file)
-    {
-        if (file.Length <= TagBytes)
-        {
-            return null;
-        }
-        var data = file.AsSpan(TagBytes).ToArray();
-        var tag = Tag(name, data);
-        return CryptographicOperations.FixedTimeEquals(tag, file.AsSpan(0, TagBytes)) ? data : null;
-    }
-
-    private byte[] Tag(string name, byte[] data)
-    {
-        using var h = IncrementalHash.CreateHMAC(HashAlgorithmName.SHA256, _key!);
-        h.AppendData(Encoding.UTF8.GetBytes(_purpose + "|" + name + "|"));
-        h.AppendData(data);
-        return h.GetHashAndReset();
-    }
-
     private void Forget(string name, string path)
     {
         try
@@ -222,11 +199,10 @@ internal sealed class DiskBlobCache
             try
             {
                 BeforeWrite?.Invoke(name);
-                var file = Seal(name, value);
-                length = file.Length;
+                length = value.Length;
                 var path = Path.Combine(_dir, name);
                 var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                File.WriteAllBytes(tmp, file);
+                File.WriteAllBytes(tmp, value);
                 File.Move(tmp, path, overwrite: true);
                 ok = true;
             }
@@ -301,12 +277,10 @@ internal sealed class DiskBlobCache
     {
         try
         {
-            var key = _keyProvider();
-            if (key is not { } k)
+            if (!_trusted())
             {
                 return;
             }
-            _key = k.Key;
             System.IO.Directory.CreateDirectory(_dir);
             var info = new DirectoryInfo(_dir);
             if (IsReparse(info) || (info.Parent is { } parent && IsReparse(parent)))
@@ -320,11 +294,15 @@ internal sealed class DiskBlobCache
             {
                 foreach (var f in files)
                 {
-                    if (k.Fresh || f.Name.EndsWith(".tmp", StringComparison.Ordinal) || (f.Attributes & FileAttributes.ReparsePoint) != 0)
+                    if (f.Name.EndsWith(".tmp", StringComparison.Ordinal))
                     {
                         try
                         { f.Delete(); }
                         catch { }
+                        continue;
+                    }
+                    if (!IsCacheName(f.Name) || (f.Attributes & FileAttributes.ReparsePoint) != 0)
+                    {
                         continue;
                     }
                     _index[f.Name] = (f.Length, ++_clock);

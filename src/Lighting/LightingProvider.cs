@@ -649,8 +649,8 @@ public sealed partial class LightingProvider : ILightingProvider, IDisposable
 
     // Rendered thumbnails survive a restart. Shared by every provider and created on first use, which starts its background init.
     private static readonly Lazy<Engine.Gpu.DiskBlobCache> ThumbnailDiskLazy = new(() => new Engine.Gpu.DiskBlobCache(
-        System.IO.Path.Combine(Engine.Gpu.BlobCacheKey.CacheRoot(), "lighting-thumbnails"),
-        ThumbnailDiskCapBytes, "lighting-thumbnails", Engine.Gpu.BlobCacheKey.Get));
+        System.IO.Path.Combine(Engine.Gpu.BlobCachePolicy.CacheRoot(), "lighting-thumbnails"),
+        ThumbnailDiskCapBytes, Engine.Gpu.BlobCachePolicy.Allowed));
 
     private (byte[] Bytes, string Tag)? CaptureAnimateThumbnailCore(string key, int slot, bool skipCache, bool frozen)
     {

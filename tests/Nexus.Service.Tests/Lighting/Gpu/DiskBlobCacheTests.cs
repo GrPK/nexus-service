@@ -9,8 +9,8 @@ namespace Nexus.Service.Tests.Lighting.Gpu;
 public sealed class DiskBlobCacheTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "nexus-blobcache-" + Guid.NewGuid().ToString("N"));
-    private static readonly byte[] KeyA = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
-    private static readonly byte[] KeyB = Enumerable.Range(101, 32).Select(i => (byte)i).ToArray();
+    private static string N(string seed) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(seed))).ToLowerInvariant()[..40];
 
     public void Dispose()
     {
@@ -19,9 +19,9 @@ public sealed class DiskBlobCacheTests : IDisposable
         catch { }
     }
 
-    private DiskBlobCache Make(long cap = 1024, byte[]? key = null, bool fresh = false, long maxQueued = DiskBlobCache.DefaultMaxQueuedBytes, string purpose = "p")
+    private DiskBlobCache Make(long cap = 1024, long maxQueued = DiskBlobCache.DefaultMaxQueuedBytes)
     {
-        var c = new DiskBlobCache(_dir, cap, purpose, () => new BlobKey(key ?? KeyA, fresh), maxQueued);
+        var c = new DiskBlobCache(_dir, cap, () => true, maxQueued);
         Assert.True(c.WaitReady(TimeSpan.FromSeconds(10)));
         return c;
     }
@@ -31,145 +31,111 @@ public sealed class DiskBlobCacheTests : IDisposable
     {
         var c = Make();
 
-        Assert.Null(c.TryGet("aa"));
-        c.Put("aa", new byte[] { 1, 2, 3 });
+        Assert.Null(c.TryGet(N("aa")));
+        c.Put(N("aa"), new byte[] { 1, 2, 3 });
         c.Flush();
 
-        Assert.Equal(new byte[] { 1, 2, 3 }, c.TryGet("aa"));
-        Assert.Equal(35, new FileInfo(Path.Combine(_dir, "aa")).Length);
-    }
-
-    [Fact]
-    public void No_key_means_no_cache()
-    {
-        var c = new DiskBlobCache(_dir, 1024, "p", () => null);
-
-        Assert.False(c.WaitReady(TimeSpan.FromSeconds(10)));
-        c.Put("aa", new byte[] { 1 });
-        c.Flush();
-        Assert.Null(c.TryGet("aa"));
+        Assert.Equal(new byte[] { 1, 2, 3 }, c.TryGet(N("aa")));
+        Assert.Equal(3, new FileInfo(Path.Combine(_dir, N("aa"))).Length);
     }
 
     [Fact]
     public void Oversize_and_empty_values_are_not_stored()
     {
-        var c = Make(cap: 40);
+        var c = Make(cap: 8);
 
-        c.Put("big", new byte[9]);
-        c.Put("empty", ReadOnlySpan<byte>.Empty);
+        c.Put(N("big"), new byte[9]);
+        c.Put(N("empty"), ReadOnlySpan<byte>.Empty);
         c.Flush();
 
-        Assert.Null(c.TryGet("big"));
-        Assert.Null(c.TryGet("empty"));
+        Assert.Null(c.TryGet(N("big")));
+        Assert.Null(c.TryGet(N("empty")));
     }
 
     [Fact]
-    public void A_tampered_file_is_rejected_and_deleted()
+    public void Names_outside_the_hex_form_never_reach_the_file_system()
     {
         var c = Make();
-        c.Put("t", new byte[] { 1, 2, 3, 4 });
-        c.Flush();
-        var path = Path.Combine(_dir, "t");
-        var bytes = File.ReadAllBytes(path);
-        bytes[^1] ^= 0xFF;
-        File.WriteAllBytes(path, bytes);
 
-        Assert.Null(c.TryGet("t"));
-        Assert.False(File.Exists(path));
+        c.Put("../escape", new byte[] { 1 });
+        c.Put("short", new byte[] { 1 });
+        c.Put(new string('A', 40), new byte[] { 1 });
+        c.Flush();
+
+        Assert.Null(c.TryGet("../escape"));
+        Assert.Null(c.TryGet(new string('A', 40)));
+        Assert.Empty(new DirectoryInfo(_dir).EnumerateFiles());
+    }
+
+    [Fact]
+    public void Only_hex_named_files_are_indexed_at_init()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllBytes(Path.Combine(_dir, N("ab")), new byte[] { 1 });
+        File.WriteAllBytes(Path.Combine(_dir, "notes.txt"), new byte[] { 2 });
+        File.WriteAllBytes(Path.Combine(_dir, new string('Z', 40)), new byte[] { 3 });
+
+        var c = Make();
+
+        Assert.Equal(new byte[] { 1 }, c.TryGet(N("ab")));
+        Assert.Null(c.TryGet("notes.txt"));
+        Assert.Null(c.TryGet(new string('Z', 40)));
+    }
+
+    [Fact]
+    public void An_untrusted_directory_means_no_cache()
+    {
+        var c = new DiskBlobCache(_dir, 1024, () => false);
+
+        Assert.False(c.WaitReady(TimeSpan.FromSeconds(10)));
+        c.Put(N("aa"), new byte[] { 1 });
+        c.Flush();
+        Assert.Null(c.TryGet(N("aa")));
+        Assert.False(Directory.Exists(_dir));
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(5)]
-    [InlineData(32)]
-    public void A_planted_short_or_unsigned_file_is_rejected_and_deleted(int length)
+    [InlineData("0123456789abcdef", true)]
+    [InlineData("0123456789abcde", false)]
+    [InlineData("0123456789ABCDEF", false)]
+    [InlineData("0123456789abcdeg", false)]
+    [InlineData("", false)]
+    public void Cache_name_form(string name, bool expected)
     {
-        var c = Make();
-        File.WriteAllBytes(Path.Combine(_dir, "planted"), new byte[length]);
-        var again = Make();
-
-        Assert.Null(again.TryGet("planted"));
-        Assert.False(File.Exists(Path.Combine(_dir, "planted")));
-        _ = c;
-    }
-
-    [Fact]
-    public void A_planted_file_with_a_forged_tag_is_rejected()
-    {
-        var c = Make();
-        File.WriteAllBytes(Path.Combine(_dir, "forged"), new byte[40]);
-        var again = Make();
-
-        Assert.Null(again.TryGet("forged"));
-        Assert.False(File.Exists(Path.Combine(_dir, "forged")));
-    }
-
-    [Fact]
-    public void A_file_written_under_another_key_or_purpose_is_rejected()
-    {
-        var a = Make();
-        a.Put("k", new byte[] { 7 });
-        a.Flush();
-
-        Assert.Null(Make(key: KeyB).TryGet("k"));
-        Assert.Null(Make(purpose: "other").TryGet("k"));
-    }
-
-    [Fact]
-    public void A_file_moved_to_another_name_is_rejected()
-    {
-        var c = Make();
-        c.Put("one", new byte[] { 7 });
-        c.Flush();
-        File.Copy(Path.Combine(_dir, "one"), Path.Combine(_dir, "two"));
-
-        Assert.Null(Make().TryGet("two"));
-    }
-
-    [Fact]
-    public void A_fresh_key_wipes_the_cache()
-    {
-        var c = Make();
-        c.Put("k", new byte[] { 7 });
-        c.Flush();
-
-        var fresh = Make(fresh: true);
-
-        Assert.Null(fresh.TryGet("k"));
-        Assert.Empty(new DirectoryInfo(_dir).EnumerateFiles());
+        Assert.Equal(expected, DiskBlobCache.IsCacheName(name));
     }
 
     [Fact]
     public void Exceeding_the_cap_evicts_least_recently_used_first()
     {
-        var c = Make(cap: 3 * 42 + 5);
-        c.Put("old", new byte[10]);
-        c.Put("mid", new byte[10]);
-        c.Put("new", new byte[10]);
+        var c = Make(cap: 35);
+        c.Put(N("old"), new byte[10]);
+        c.Put(N("mid"), new byte[10]);
+        c.Put(N("new"), new byte[10]);
         c.Flush();
-        Assert.NotNull(c.TryGet("old"));
+        Assert.NotNull(c.TryGet(N("old")));
 
-        c.Put("extra", new byte[10]);
+        c.Put(N("extra"), new byte[10]);
         c.Flush();
 
-        Assert.Null(c.TryGet("mid"));
-        Assert.NotNull(c.TryGet("old"));
-        Assert.NotNull(c.TryGet("new"));
-        Assert.NotNull(c.TryGet("extra"));
+        Assert.Null(c.TryGet(N("mid")));
+        Assert.NotNull(c.TryGet(N("old")));
+        Assert.NotNull(c.TryGet(N("new")));
+        Assert.NotNull(c.TryGet(N("extra")));
     }
 
     [Fact]
     public void Overwriting_a_name_does_not_double_count_its_size()
     {
-        var c = Make(cap: 60);
+        var c = Make(cap: 25);
 
         for (var i = 0; i < 5; i++)
         {
-            c.Put("same", new byte[20]);
+            c.Put(N("same"), new byte[20]);
             c.Flush();
         }
 
-        Assert.NotNull(c.TryGet("same"));
+        Assert.NotNull(c.TryGet(N("same")));
     }
 
     [Fact]
@@ -189,13 +155,13 @@ public sealed class DiskBlobCacheTests : IDisposable
             }
         };
 
-        c.Put("k", new byte[] { 1 });
+        c.Put(N("k"), new byte[] { 1 });
         Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
-        c.Put("k", new byte[] { 2 });
+        c.Put(N("k"), new byte[] { 2 });
         release.Set();
         c.Flush();
 
-        Assert.Equal(new byte[] { 2 }, Make().TryGet("k"));
+        Assert.Equal(new byte[] { 2 }, Make().TryGet(N("k")));
     }
 
     [Fact]
@@ -205,26 +171,26 @@ public sealed class DiskBlobCacheTests : IDisposable
         var release = new System.Threading.ManualResetEventSlim();
         c.BeforeWrite = _ => release.Wait(TimeSpan.FromSeconds(10));
 
-        c.Put("a", new byte[60]);
-        c.Put("b", new byte[60]);
-        c.Put("c", new byte[30]);
+        c.Put(N("a"), new byte[60]);
+        c.Put(N("b"), new byte[60]);
+        c.Put(N("c"), new byte[30]);
         release.Set();
         c.Flush();
 
-        Assert.NotNull(c.TryGet("a"));
-        Assert.Null(c.TryGet("b"));
-        Assert.NotNull(c.TryGet("c"));
+        Assert.NotNull(c.TryGet(N("a")));
+        Assert.Null(c.TryGet(N("b")));
+        Assert.NotNull(c.TryGet(N("c")));
     }
 
     [Fact]
     public void A_queued_write_is_readable_before_it_reaches_disk_and_survives_a_new_instance()
     {
         var c = Make();
-        c.Put("k", new byte[] { 9 });
-        Assert.Equal(new byte[] { 9 }, c.TryGet("k"));
+        c.Put(N("k"), new byte[] { 9 });
+        Assert.Equal(new byte[] { 9 }, c.TryGet(N("k")));
         c.Flush();
 
-        Assert.Equal(new byte[] { 9 }, Make().TryGet("k"));
+        Assert.Equal(new byte[] { 9 }, Make().TryGet(N("k")));
     }
 
     [Fact]
@@ -263,47 +229,72 @@ public sealed class DiskBlobCacheTests : IDisposable
     }
 }
 
-public sealed class BlobCacheKeyTests : IDisposable
+public class BlobCachePolicyTests
 {
-    private readonly string _dir = Path.Combine(Path.GetTempPath(), "nexus-blobkey-" + Guid.NewGuid().ToString("N"));
+    private const string System_ = "S-1-5-18";
+    private const string Admins = "S-1-5-32-544";
+    private const string Users = "S-1-5-32-545";
+    private const string Everyone = "S-1-1-0";
+    private const string AuthenticatedUsers = "S-1-5-11";
+    private const string Interactive = "S-1-5-4";
+    private const string Installer = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
 
-    public void Dispose()
+    private const int ReadExecute = 0x1 | 0x8 | 0x20 | 0x80 | 0x20000;
+    private const int FullControl = 0x1F01FF;
+
+    [Fact]
+    public void A_stock_program_files_list_is_accepted()
     {
-        try
-        { Directory.Delete(_dir, true); }
-        catch { }
+        var aces = new[]
+        {
+            new AceInfo(System_, true, FullControl),
+            new AceInfo(Admins, true, FullControl),
+            new AceInfo(Installer, true, FullControl),
+            new AceInfo(Users, true, ReadExecute),
+            new AceInfo("S-1-3-0", true, FullControl),
+        };
+
+        Assert.False(BlobCachePolicy.GrantsNonAdminWrite(aces, out _));
+    }
+
+    [Theory]
+    [InlineData(Users, 0x2)]
+    [InlineData(Users, 0x4)]
+    [InlineData(Users, 0x10000)]
+    [InlineData(Users, 0x40)]
+    [InlineData(Users, 0x40000)]
+    [InlineData(Users, 0x80000)]
+    [InlineData(Users, 0x100)]
+    [InlineData(Users, 0x10)]
+    [InlineData(Users, FullControl)]
+    [InlineData(Users, 0x40000000)]
+    [InlineData(Everyone, 0x2)]
+    [InlineData(AuthenticatedUsers, 0x4)]
+    [InlineData(Interactive, 0x10000)]
+    [InlineData("S-1-5-21-1-2-3-1001", FullControl)]
+    public void Write_like_rights_for_a_non_admin_are_refused(string sid, int rights)
+    {
+        var aces = new[] { new AceInfo(System_, true, FullControl), new AceInfo(sid, true, rights) };
+
+        Assert.True(BlobCachePolicy.GrantsNonAdminWrite(aces, out var found));
+        Assert.Equal(sid, found);
     }
 
     [Fact]
-    public void A_missing_key_is_generated_fresh_and_then_reloaded_stable()
+    public void Deny_entries_and_read_only_grants_do_not_count()
     {
-        var path = Path.Combine(_dir, "k.key");
+        var aces = new[]
+        {
+            new AceInfo(Users, false, FullControl),
+            new AceInfo(Everyone, true, ReadExecute),
+        };
 
-        var first = BlobCacheKey.Load(path, dpapi: false);
-        var second = BlobCacheKey.Load(path, dpapi: false);
-
-        Assert.True(first!.Value.Fresh);
-        Assert.False(second!.Value.Fresh);
-        Assert.Equal(first.Value.Key, second.Value.Key);
-        Assert.Equal(32, first.Value.Key.Length);
+        Assert.False(BlobCachePolicy.GrantsNonAdminWrite(aces, out _));
     }
 
     [Fact]
-    public void A_damaged_key_file_is_replaced_and_reported_fresh()
+    public void An_empty_list_grants_nothing()
     {
-        var path = Path.Combine(_dir, "k.key");
-        var first = BlobCacheKey.Load(path, dpapi: false);
-        File.WriteAllBytes(path, new byte[5]);
-
-        var again = BlobCacheKey.Load(path, dpapi: false);
-
-        Assert.True(again!.Value.Fresh);
-        Assert.NotEqual(first!.Value.Key, again.Value.Key);
-    }
-
-    [Fact]
-    public void Windows_protection_is_refused_off_the_service()
-    {
-        Assert.Null(BlobCacheKey.Load(Path.Combine(_dir, "k.key"), dpapi: true));
+        Assert.False(BlobCachePolicy.GrantsNonAdminWrite(System.Array.Empty<AceInfo>(), out _));
     }
 }
