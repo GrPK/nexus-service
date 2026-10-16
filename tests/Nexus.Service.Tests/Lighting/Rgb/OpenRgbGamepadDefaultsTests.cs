@@ -16,7 +16,7 @@ public class OpenRgbGamepadDefaultsTests
     {
         var held = OpenRgbGamepadDefaults.HeldOffDetectors(new NexusSettings());
 
-        Assert.Equal(new[] { "GameSir Nova 2 Lite", "Sony DualSense", "Sony DualSense Edge", "Sony DualShock 4" }, held);
+        Assert.Equal(new[] { "Corsair Katar Pro", "Corsair Katar Pro V2", "Corsair Katar Pro XT", "GameSir Nova 2 Lite", "Sony DualSense", "Sony DualSense Edge", "Sony DualShock 4" }, held);
     }
 
     [Fact]
@@ -142,5 +142,34 @@ public class OpenRgbGamepadDefaultsTests
     {
         Assert.True(UsbTopologyFilter.TryParseVidPid("054C:0CE6:serial", out var vid, out var pid));
         Assert.True(OpenRgbGamepadDefaults.IsHeldOff(new NexusSettings(), vid, pid));
+    }
+
+    [Theory]
+    [InlineData("Corsair Katar Pro", 0x1B93)]
+    [InlineData("Corsair Katar Pro V2", 0x1BBA)]
+    [InlineData("Corsair Katar Pro XT", 0x1BAC)]
+    public void Katar_is_held_off_for_a_settings_file_that_never_opted_in(string detector, int pid)
+    {
+        var settings = new NexusSettings();
+
+        Assert.Contains(detector, OpenRgbGamepadDefaults.HeldOffDetectors(settings));
+        Assert.True(OpenRgbGamepadDefaults.IsHeldOff(settings, 0x1B1C, pid));
+    }
+
+    [Fact]
+    public void Katar_card_renders_as_an_off_mouse_and_opt_in_survives_a_reload()
+    {
+        var settings = new NexusSettings();
+        var key = OpenRgbGamepadDefaults.KeyOf("Corsair Katar Pro XT");
+        OpenRgbGamepadDefaults.ApplyPresence(settings, Present("Corsair Katar Pro XT"));
+
+        var card = Assert.Single(OpenRgbZoneSupport.BuildCards(Array.Empty<RgbDevice>(), settings, isInit: false).Devices);
+        Assert.Equal("mouse", card.Type);
+        Assert.Contains(key, settings.Devices.UncontrolledLightingDevices);
+
+        OpenRgbGamepadDefaults.AllowFor(settings, key);
+        Assert.DoesNotContain("Corsair Katar Pro XT", OpenRgbGamepadDefaults.HeldOffDetectors(settings));
+        Assert.False(OpenRgbGamepadDefaults.IsHeldOff(settings, 0x1B1C, 0x1BAC));
+        Assert.False(OpenRgbGamepadDefaults.ApplyPresence(settings, Present("Corsair Katar Pro XT")));
     }
 }

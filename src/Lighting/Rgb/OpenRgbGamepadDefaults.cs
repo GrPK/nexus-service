@@ -5,20 +5,24 @@ using Nexus.Service.Persistence;
 namespace Nexus.Service.Lighting.Rgb;
 
 /// <summary>
-/// Game controllers whose OpenRGB detectors stay disabled until the user turns
-/// the controller's card on: the Sony detectors open the gamepad's own HID
+/// Game controllers and mice whose OpenRGB detectors stay disabled until the user turns
+/// the device's card on: the Sony detectors open the gamepad's own HID
 /// interface and write its output report, which fights games and Steam Input
-/// for the controller. A present controller shows as a detector-excluded card
+/// for the controller; the Katar detectors switch the mouse to software mode. A present controller shows as a detector-excluded card
 /// keyed by <see cref="KeyOf"/>; turning that card on records the detector in
 /// <see cref="DevicesSettings.OpenRgbGamepadDetectorsAllowed"/>.
 /// </summary>
 public static class OpenRgbGamepadDefaults
 {
     /// <param name="Detector">REGISTER_*_DETECTOR name in nexus-rgb/openrgb-headless, verbatim.</param>
-    public sealed record Entry(string Detector, string Vendor, int VendorId, int ProductId);
+    /// <param name="Type">OpenRGB device type of the synthesized card.</param>
+    public sealed record Entry(string Detector, string Vendor, int VendorId, int ProductId, uint Type = GamepadType);
 
     /// <summary>OpenRGB DEVICE_TYPE_GAMEPAD.</summary>
     private const uint GamepadType = 10;
+
+    /// <summary>OpenRGB DEVICE_TYPE_MOUSE.</summary>
+    private const uint MouseType = 6;
 
     private const string KeyPrefix = "openrgb-gamepad-";
 
@@ -30,6 +34,10 @@ public static class OpenRgbGamepadDefaults
         new("Sony DualSense", "Sony", 0x054C, 0x0CE6),
         new("Sony DualSense Edge", "Sony", 0x054C, 0x0DF2),
         new("GameSir Nova 2 Lite", "GameSir", 0x3537, 0x100F),
+        // Software render mode on these mice stops their clicks until re-enumeration.
+        new("Corsair Katar Pro", "Corsair", 0x1B1C, 0x1B93, MouseType),
+        new("Corsair Katar Pro V2", "Corsair", 0x1B1C, 0x1BBA, MouseType),
+        new("Corsair Katar Pro XT", "Corsair", 0x1B1C, 0x1BAC, MouseType),
     };
 
     /// <summary>Exclusion key of a detector's synthesized card.</summary>
@@ -131,7 +139,7 @@ public static class OpenRgbGamepadDefaults
                     DeviceName = detector,
                     Vendor = VendorOf(detector),
                     LedCount = 1,
-                    Type = GamepadType,
+                    Type = TypeOf(detector),
                 };
                 if (!nextUncontrolled.Contains(key))
                     nextUncontrolled.Add(key);
@@ -161,6 +169,16 @@ public static class OpenRgbGamepadDefaults
             s.Devices.OpenRgbGamepadDetectorsAllowed = new List<string>(s.Devices.OpenRgbGamepadDetectorsAllowed) { e.Detector };
             return;
         }
+    }
+
+    private static uint TypeOf(string detector)
+    {
+        foreach (var e in Entries)
+        {
+            if (e.Detector == detector)
+                return e.Type;
+        }
+        return GamepadType;
     }
 
     private static string VendorOf(string detector)
