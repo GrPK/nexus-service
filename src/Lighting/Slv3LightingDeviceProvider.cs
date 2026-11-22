@@ -609,6 +609,15 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
         _ => null,
     };
 
+    /// <summary>
+    /// A TL chain's up/down swap: a TL Flex chain keeps it with its Flex settings, where the Flex LCD
+    /// page sets it too; any other TL chain keeps it with its wireless lighting.
+    /// </summary>
+    internal static bool TlUpDownSwap(NexusSettings settings, Slv3FanInfo fan, LianLiWirelessChainLighting? lighting) =>
+        FlexFamilyOf(fan) == FlexFamily.TlFlex
+            ? settings.Devices.FlexUnits.TryGetValue(fan.Mac.ToUpperInvariant(), out var look) && look.UpDownSwap
+            : lighting?.UpDownSwap ?? false;
+
     /// <summary>Zones of a Flex chain in segment order: the zone id suffix, the wired-Flex zone key and its label. TL keeps the inner and outer ids.</summary>
     internal static (string Suffix, string Key, string Label)[] FlexZonesOf(FlexFamily family)
     {

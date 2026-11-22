@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
 using Nexus.Service.Models;
+using Nexus.Service.Peripherals.LianLiFlex;
 using Nexus.Service.Peripherals.LianLiWireless;
 using Nexus.Service.Persistence;
 using Nexus.Service.Serialization;
@@ -28,6 +29,18 @@ public sealed class Slv3LightingModeDto
     public int ColorsMin { get; set; }
     public int ColorsMax { get; set; }
     public bool Mergeable { get; set; }
+    /// <summary>TL chains: the colours the effect plays with none picked (L-Connect's defaults); empty when it draws its own.</summary>
+    public string[] DefaultColors { get; set; } = Array.Empty<string>();
+}
+
+/// <summary>One half's own look on a TL chain.</summary>
+public sealed class Slv3HalfLightingDto
+{
+    public string Mode { get; set; } = "";
+    public int Speed { get; set; }
+    public int Direction { get; set; }
+    public int Brightness { get; set; }
+    public string[] Colors { get; set; } = Array.Empty<string>();
 }
 
 public sealed class Slv3LaneDto
@@ -67,6 +80,16 @@ public sealed class Slv3ChainLightingDto
     public bool ArgbCableConnected { get; set; }
     /// <summary>The chain reports it is playing its motherboard input.</summary>
     public bool PlayingMotherboardArgb { get; set; }
+    /// <summary>TL chains: each half of a fan can play a look of its own (L-Connect's Up / Down scope).</summary>
+    public bool SupportsScope { get; set; }
+    /// <summary>TL chains: the look of LED 0..12 of each fan when it has one of its own; null plays the chain look.</summary>
+    public Slv3HalfLightingDto? Up { get; set; }
+    /// <summary>TL chains: the look of LED 13..25 of each fan when it has one of its own; null plays the chain look.</summary>
+    public Slv3HalfLightingDto? Down { get; set; }
+    /// <summary>TL chains: "up" or "down" when that half was set last, whose speed both halves play at; null after a whole-fan look.</summary>
+    public string? LastScope { get; set; }
+    /// <summary>TL chains: the two halves of each fan exchanged; null for other chains.</summary>
+    public bool? UpDownSwap { get; set; }
 }
 
 public sealed class Slv3LightingResponse
@@ -86,6 +109,14 @@ public sealed class Slv3ChainLightingRequest
     public bool? Merge { get; set; }
     public Slv3LaneDto[]? LaneSettings { get; set; }
     public bool? MotherboardArgb { get; set; }
+    /// <summary>
+    /// TL chains: "up" or "down" puts the look fields on that half of each fan only, the other half
+    /// keeping its look (L-Connect's Up / Down scope); "all" or null puts them on the whole fan, which
+    /// drops both halves' own looks.
+    /// </summary>
+    public string? Scope { get; set; }
+    /// <summary>TL chains: exchange the two halves of each fan (L-Connect's Up/Down swap).</summary>
+    public bool? UpDownSwap { get; set; }
 }
 
 /// <summary>A HydroShift II screen's settings, as saved or defaulted.</summary>
@@ -289,12 +320,14 @@ public static partial class Slv3Routes
             {
                 return Results.NotFound(ApiResponse.Fail("chain not found"));
             }
-            var error = ValidateLightingRequest(body, chain.Value.Modes, chain.Value.PerLane);
+            var tl = IsTlChain(chain.Value);
+            var error = ValidateLightingRequest(body, chain.Value.Modes, chain.Value.PerLane, tl);
             if (error is not null)
             {
                 return Results.BadRequest(ApiResponse.Fail(error));
             }
             var key = mac.ToUpperInvariant();
+            var tlFlex = tl && Nexus.Service.Lighting.Slv3LightingDeviceProvider.FlexFamilyOf(chain.Value.Fan) == FlexFamily.TlFlex;
             // The frame writer reads these settings without a lock, so the
             // patched cable and the map holding it are built aside and swapped
             // in by reference.
@@ -302,37 +335,20 @@ public static partial class Slv3Routes
             {
                 var current = s.Devices.LianLiWireless.Chains;
                 current.TryGetValue(key, out var old);
-                old ??= new LianLiWirelessChainLighting();
-                var lanes = old.Lanes;
-                if (body.LaneSettings is not null)
+                s.Devices.LianLiWireless.Chains = new Dictionary<string, LianLiWirelessChainLighting>(current)
                 {
-                    lanes = new List<LianLiWirelessLane>(body.LaneSettings.Length);
-                    foreach (var lane in body.LaneSettings)
-                    {
-                        lanes.Add(new LianLiWirelessLane
-                        {
-                            Mode = lane.Mode,
-                            Direction = Math.Clamp(lane.Direction, 0, 1),
-                            Color = lane.Color,
-                        });
-                    }
-                }
-                var next = new Dictionary<string, LianLiWirelessChainLighting>(current)
-                {
-                    [key] = new LianLiWirelessChainLighting
-                    {
-                        Mode = body.Mode ?? old.Mode,
-                        EffectMode = body.Mode is not null && body.Mode != LianLiWirelessChainLighting.ModeCustom ? body.Mode : old.EffectMode,
-                        Speed = body.Speed.HasValue ? Math.Clamp(body.Speed.Value, 0, Slv3StrimerEffects.SpeedLevels - 1) : old.Speed,
-                        Direction = body.Direction.HasValue ? Math.Clamp(body.Direction.Value, 0, 1) : old.Direction,
-                        Brightness = body.Brightness.HasValue ? Math.Clamp(body.Brightness.Value, 0, 4) : old.Brightness,
-                        Colors = body.Colors is not null ? new List<string>(body.Colors) : old.Colors,
-                        Merge = body.Merge ?? old.Merge,
-                        Lanes = lanes,
-                        MotherboardArgb = body.MotherboardArgb ?? old.MotherboardArgb,
-                    },
+                    [key] = PatchChainLighting(old ?? new LianLiWirelessChainLighting(), body, tlFlex),
                 };
-                s.Devices.LianLiWireless.Chains = next;
+                if (tlFlex && body.UpDownSwap is { } flexSwap)
+                {
+                    // A TL Flex chain keeps its swap with its Flex settings, as the Flex LCD page stores it.
+                    s.Devices.FlexUnits.TryGetValue(key, out var look);
+                    s.Devices.FlexUnits = new Dictionary<string, LianLiFlexUnitSettings>(s.Devices.FlexUnits, StringComparer.Ordinal)
+                    {
+                        [key] = LianLiFlexRoutes.Patch(
+                            look ?? new LianLiFlexUnitSettings(), new LianLiFlexChainLightingRequest { UpDownSwap = flexSwap }, FlexFamily.TlFlex),
+                    };
+                }
             });
             if (body.MotherboardArgb.HasValue) lighting.OnHubStateUpdated();
             Nexus.Service.Sockets.PanelTopics.BroadcastLighting(mux);
@@ -341,6 +357,9 @@ public static partial class Slv3Routes
     }
 
     private const string DefaultEffect = "rainbow";
+    private const string ScopeAll = "all";
+    private const string ScopeUp = "up";
+    private const string ScopeDown = "down";
     private const int MaxChainColors = 6;
     private const int MaxStrimerLanes = 6;
 
@@ -404,6 +423,81 @@ public static partial class Slv3Routes
         return fan.FanCount > 0 && modes.Count > 0 ? new LightingChain(fan, modes, PerLane: false) : null;
     }
 
+    /// <summary>
+    /// One chain's settings after a validated patch. On a TL chain a look with scope "up" or "down"
+    /// goes to that half only and marks it the half set last; a whole-fan look drops both halves'
+    /// own looks, as L-Connect's whole-fan scope sets both halves.
+    /// </summary>
+    internal static LianLiWirelessChainLighting PatchChainLighting(LianLiWirelessChainLighting old, Slv3ChainLightingRequest body, bool tlFlex = false)
+    {
+        var lanes = old.Lanes;
+        if (body.LaneSettings is not null)
+        {
+            lanes = new List<LianLiWirelessLane>(body.LaneSettings.Length);
+            foreach (var lane in body.LaneSettings)
+            {
+                lanes.Add(new LianLiWirelessLane
+                {
+                    Mode = lane.Mode,
+                    Direction = Math.Clamp(lane.Direction, 0, 1),
+                    Color = lane.Color,
+                });
+            }
+        }
+        var half = body.Scope is ScopeUp or ScopeDown;
+        var wholeLook = !half && ((body.Mode is not null && body.Mode != LianLiWirelessChainLighting.ModeCustom)
+            || body.Speed.HasValue || body.Direction.HasValue || body.Brightness.HasValue || body.Colors is not null);
+        return new LianLiWirelessChainLighting
+        {
+            Mode = half ? old.Mode : body.Mode ?? old.Mode,
+            EffectMode = !half && body.Mode is not null && body.Mode != LianLiWirelessChainLighting.ModeCustom ? body.Mode : old.EffectMode,
+            Speed = !half && body.Speed.HasValue ? Math.Clamp(body.Speed.Value, 0, Slv3StrimerEffects.SpeedLevels - 1) : old.Speed,
+            Direction = !half && body.Direction.HasValue ? Math.Clamp(body.Direction.Value, 0, 1) : old.Direction,
+            Brightness = !half && body.Brightness.HasValue ? Math.Clamp(body.Brightness.Value, 0, 4) : old.Brightness,
+            Colors = !half && body.Colors is not null ? new List<string>(body.Colors) : old.Colors,
+            Merge = body.Merge ?? old.Merge,
+            Lanes = lanes,
+            MotherboardArgb = body.MotherboardArgb ?? old.MotherboardArgb,
+            Up = body.Scope == ScopeUp ? PatchHalf(old.Up ?? HalfOf(old), body) : wholeLook ? null : old.Up,
+            Down = body.Scope == ScopeDown ? PatchHalf(old.Down ?? HalfOf(old), body) : wholeLook ? null : old.Down,
+            LastScope = half ? body.Scope : wholeLook ? null : old.LastScope,
+            UpDownSwap = !tlFlex && body.UpDownSwap is { } swap ? swap : old.UpDownSwap,
+        };
+    }
+
+    private static bool IsTlChain(LightingChain chain) =>
+        !chain.PerLane && Slv3FanEffects.IsTlFamily(Slv3Protocol.ClassifyFanFamily((byte)chain.Fan.FanType));
+
+    /// <summary>A half's first own look: the chain look it played until now.</summary>
+    private static LianLiFlexZoneSettings HalfOf(LianLiWirelessChainLighting chain) => new()
+    {
+        Mode = chain.Mode is LianLiWirelessChainLighting.ModeCustom or LianLiWirelessChainLighting.ModePerLane
+            ? chain.EffectMode ?? DefaultEffect
+            : chain.Mode,
+        Speed = chain.Speed,
+        Direction = chain.Direction,
+        Brightness = chain.Brightness,
+        Colors = new List<string>(chain.Colors),
+    };
+
+    private static LianLiFlexZoneSettings PatchHalf(LianLiFlexZoneSettings half, Slv3ChainLightingRequest body) => new()
+    {
+        Mode = body.Mode ?? half.Mode,
+        Speed = body.Speed.HasValue ? Math.Clamp(body.Speed.Value, 0, Slv3StrimerEffects.SpeedLevels - 1) : half.Speed,
+        Direction = body.Direction.HasValue ? Math.Clamp(body.Direction.Value, 0, 1) : half.Direction,
+        Brightness = body.Brightness.HasValue ? Math.Clamp(body.Brightness.Value, 0, 4) : half.Brightness,
+        Colors = body.Colors is not null ? new List<string>(body.Colors) : half.Colors,
+    };
+
+    private static Slv3HalfLightingDto? HalfDto(LianLiFlexZoneSettings? half) => half is null ? null : new()
+    {
+        Mode = half.Mode,
+        Speed = half.Speed,
+        Direction = half.Direction,
+        Brightness = half.Brightness,
+        Colors = half.Colors.ToArray(),
+    };
+
     private static LightingChain? FindLightingChain(Slv3Hub hub, string mac)
     {
         foreach (var fan in hub.State.Fans)
@@ -417,8 +511,27 @@ public static partial class Slv3Routes
     }
 
     internal static string? ValidateLightingRequest(
-        Slv3ChainLightingRequest body, IReadOnlyList<Slv3StrimerEffectInfo> modes, bool perLane)
+        Slv3ChainLightingRequest body, IReadOnlyList<Slv3StrimerEffectInfo> modes, bool perLane, bool tl = false)
     {
+        if (body.Scope is not null)
+        {
+            if (body.Scope is not (ScopeAll or ScopeUp or ScopeDown))
+            {
+                return "invalid scope";
+            }
+            if (!tl)
+            {
+                return "scope not supported";
+            }
+            if (body.Scope != ScopeAll && body.Mode is not null && !modes.Any(m => m.Key == body.Mode))
+            {
+                return "unknown mode";
+            }
+        }
+        if (body.UpDownSwap is not null && !tl)
+        {
+            return "up/down swap not supported";
+        }
         if (body.Mode is not null
             && body.Mode != LianLiWirelessChainLighting.ModeCustom
             && !(perLane && body.Mode == LianLiWirelessChainLighting.ModePerLane)
@@ -466,6 +579,7 @@ public static partial class Slv3Routes
                 continue;
             }
             var isStrimer = chain.PerLane;
+            var tl = IsTlChain(chain);
             var (lanes, ledsPerLane) = isStrimer ? Slv3Protocol.StrimerGeometryFor((byte)fan.DevType) : (0, 0);
             var ls = settings.Devices.LianLiWireless.Chains.TryGetValue(fan.Mac.ToUpperInvariant(), out var stored)
                 ? stored
@@ -482,6 +596,7 @@ public static partial class Slv3Routes
                     ColorsMin = m.ColorsMin,
                     ColorsMax = m.ColorsMax,
                     Mergeable = m.Mergeable,
+                    DefaultColors = tl ? Slv3FanEffects.TlDefaultColors(m.Key).Select(c => $"#{c.R:X2}{c.G:X2}{c.B:X2}").ToArray() : Array.Empty<string>(),
                 };
             }
             var laneDtos = new Slv3LaneDto[ls.Lanes.Count];
@@ -512,6 +627,11 @@ public static partial class Slv3Routes
                 MotherboardArgb = ls.MotherboardArgb,
                 ArgbCableConnected = fan.ArgbCableConnected,
                 PlayingMotherboardArgb = fan.PlayingMotherboardArgb,
+                SupportsScope = tl,
+                Up = tl ? HalfDto(ls.Up) : null,
+                Down = tl ? HalfDto(ls.Down) : null,
+                LastScope = tl ? ls.LastScope : null,
+                UpDownSwap = tl ? Nexus.Service.Lighting.Slv3LightingDeviceProvider.TlUpDownSwap(settings, fan, ls) : null,
             });
         }
 

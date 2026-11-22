@@ -11,6 +11,7 @@ namespace Nexus.Service.Peripherals.LianLiWireless;
 /// mode's motion, colour cycling and timing is baked into the buffer up front.
 /// Only the whole-fan render scope is implemented; a fan's ring positions all
 /// show the same content rather than splitting into inner/outer sub-groups.
+/// TL chains are drawn apart, as L-Connect draws them (<see cref="RenderTl"/>).
 /// </summary>
 public static partial class Slv3FanEffects
 {
@@ -47,6 +48,11 @@ public static partial class Slv3FanEffects
             throw new ArgumentException($"Fan count must be 1..{MaxFans}", nameof(fanCount));
         }
         var info = Find(family, key) ?? throw new ArgumentException($"Unknown fan effect key '{key}' for {family}", nameof(key));
+        if (IsTlFamily(family))
+        {
+            var look = new Slv3TlLook(key, speed, direction, 4, colors);
+            return RenderTl(family, fanCount, look, look, downSetLast: false, upDownSwap: false);
+        }
         var renderer = merge && info.Mergeable ? MergedRenderers[key] : Renderers[family][key];
 
         var ledsPerFan = Slv3Protocol.LedsPerFanFor(family);
@@ -109,10 +115,6 @@ public static partial class Slv3FanEffects
         var sl = BuildSlRenderers();
         map[Slv3FanFamily.Slv3Led] = sl;
         map[Slv3FanFamily.Slv3Lcd] = sl;
-        var tl = BuildTlRenderers();
-        map[Slv3FanFamily.Tlv2Led] = tl;
-        map[Slv3FanFamily.Tlv2Lcd] = tl;
-        map[Slv3FanFamily.TlFlex] = tl;
         var slInf = BuildSlInfRenderers();
         map[Slv3FanFamily.SlInf] = slInf;
         map[Slv3FanFamily.SlInfFlex] = slInf;
