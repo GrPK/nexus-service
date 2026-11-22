@@ -1706,6 +1706,7 @@ public sealed class DevicesSettings
     public AsiahorseUmbraSettings AsiahorseUmbra { get; set; } = new();
     public HydroShift2LightingSettings HydroShift2Lighting { get; set; } = new();
     public HydroShift2CurveSettings HydroShift2Curve { get; set; } = new();
+    public HydroShift2CurveLightingSettings HydroShift2CurveLighting { get; set; } = new();
     public CorsairSettings Corsair { get; set; } = new();
     public NollieSettings Nollie { get; set; } = new();
     /// <summary>
@@ -2333,6 +2334,28 @@ public sealed class HydroShift2LightingSettings
     /// <summary>Level on the ring's brightness scale, up to <c>HydroShift2RingEffects.MaxLevel</c>.</summary>
     public int Brightness { get; set; } = 4;
     /// <summary>"#RRGGBB" palette; missing entries fall back to the effect's defaults.</summary>
+    public List<string> Colors { get; set; } = new();
+}
+
+/// <summary>
+/// The HydroShift II OLED Curved edge LEDs: "canvas" follows the Lighting page, any other mode is one of
+/// L-Connect's edge effects, which Nexus renders and streams the way L-Connect does.
+/// </summary>
+public sealed class HydroShift2CurveLightingSettings
+{
+    public const string CanvasMode = "canvas";
+
+    /// <summary>Canvas by default, so the edge keeps following the Lighting page until an effect is picked.</summary>
+    public string Mode { get; set; } = CanvasMode;
+    /// <summary>Last mode other than the Lighting page one, restored when Lighting page control is turned off.</summary>
+    public string? EffectMode { get; set; }
+    /// <summary>Level 0..<c>HydroShift2CurveEdgeEffects.MaxLevel</c>: L-Connect's speed slider at 0, 25, 50, 75 or 100.</summary>
+    public int Speed { get; set; } = 3;
+    /// <summary>0 clockwise, 1 counter-clockwise (L-Connect's reverse).</summary>
+    public int Direction { get; set; }
+    /// <summary>Level 0..<c>HydroShift2CurveEdgeEffects.MaxLevel</c>: L-Connect's brightness slider at 0, 25, 50, 75 or 100.</summary>
+    public int Brightness { get; set; } = 4;
+    /// <summary>"#RRGGBB" palette, up to six; empty plays the effect's L-Connect colours.</summary>
     public List<string> Colors { get; set; } = new();
 }
 

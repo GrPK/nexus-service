@@ -55,6 +55,8 @@ public sealed class HydroShift2CurveBoard : BackgroundService
     private bool? _loggedFollow;
     private byte[]? _leds;
     private bool _ledsDirty;
+    /// <summary>Released when a new LED frame is set, so it goes out at the effect's pace rather than the next tick.</summary>
+    private readonly SemaphoreSlim _ledsWake = new(0, 1);
     private int _tilt;
     private int _slide;
     private int _targetTilt;
@@ -128,6 +130,14 @@ public sealed class HydroShift2CurveBoard : BackgroundService
             _leds = rgb.ToArray();
             _ledsDirty = true;
         }
+        try
+        {
+            if (_ledsWake.CurrentCount == 0) _ledsWake.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // Another frame already woke the loop; it sends the newest one.
+        }
     }
 
     /// <summary>Sets where the head should go; either axis may be left as it is with null.</summary>
@@ -192,7 +202,8 @@ public sealed class HydroShift2CurveBoard : BackgroundService
                 {
                     ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] board tick failed: {ex.Message}");
                 }
-                await Task.Delay(TickMs, stoppingToken).ConfigureAwait(false);
+                // Every job in Tick is time-gated, so an early wake for a new LED frame only sends the frame.
+                await _ledsWake.WaitAsync(TickMs, stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
