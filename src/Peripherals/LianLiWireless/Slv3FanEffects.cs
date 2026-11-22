@@ -11,8 +11,7 @@ namespace Nexus.Service.Peripherals.LianLiWireless;
 /// mode's motion, colour cycling and timing is baked into the buffer up front.
 /// Only the whole-fan render scope is implemented; a fan's ring positions all
 /// show the same content rather than splitting into inner/outer sub-groups.
-/// TL chains are the exception to the hand-drawn renderers: they play the Flex TL
-/// generators, which draw each 13-LED half of a fan as L-Connect does.
+/// TL chains are drawn apart, as L-Connect draws them (<see cref="RenderTl"/>).
 /// </summary>
 public static partial class Slv3FanEffects
 {
@@ -49,11 +48,16 @@ public static partial class Slv3FanEffects
             throw new ArgumentException($"Fan count must be 1..{MaxFans}", nameof(fanCount));
         }
         var info = Find(family, key) ?? throw new ArgumentException($"Unknown fan effect key '{key}' for {family}", nameof(key));
+        if (IsTlFamily(family))
+        {
+            var look = new Slv3TlLook(key, speed, direction, 4, colors);
+            return RenderTl(family, fanCount, look, look, downSetLast: false, upDownSwap: false);
+        }
         var renderer = merge && info.Mergeable ? MergedRenderers[key] : Renderers[family][key];
 
         var ledsPerFan = Slv3Protocol.LedsPerFanFor(family);
         var ringLen = ledsPerFan / 2;
-        var ctx = new FanEffectContext(fanCount, ringLen, NormalizeDirection(direction), ClampSpeed(speed), ResolveColors(colors), colors);
+        var ctx = new FanEffectContext(fanCount, ringLen, NormalizeDirection(direction), ClampSpeed(speed), ResolveColors(colors));
         var raw = renderer(ctx);
         return Slv3WirelessEffectMath.Finalize(raw, fanCount, ledsPerFan);
     }
@@ -111,10 +115,6 @@ public static partial class Slv3FanEffects
         var sl = BuildSlRenderers();
         map[Slv3FanFamily.Slv3Led] = sl;
         map[Slv3FanFamily.Slv3Lcd] = sl;
-        var tl = BuildTlRenderers();
-        map[Slv3FanFamily.Tlv2Led] = tl;
-        map[Slv3FanFamily.Tlv2Lcd] = tl;
-        map[Slv3FanFamily.TlFlex] = tl;
         var slInf = BuildSlInfRenderers();
         map[Slv3FanFamily.SlInf] = slInf;
         map[Slv3FanFamily.SlInfFlex] = slInf;
@@ -126,14 +126,13 @@ public static partial class Slv3FanEffects
     /// <summary>Shared per-effect render state: fan-chain geometry, user intent and resolved colours.</summary>
     private readonly struct FanEffectContext
     {
-        public FanEffectContext(int fanCount, int ringLen, int direction, int speed, RgbColor[] colors, IReadOnlyList<RgbColor> picked)
+        public FanEffectContext(int fanCount, int ringLen, int direction, int speed, RgbColor[] colors)
         {
             FanCount = fanCount;
             RingLen = ringLen;
             Direction = direction;
             Speed = speed;
             Colors = colors;
-            Picked = picked;
         }
 
         public int FanCount { get; }
@@ -141,8 +140,6 @@ public static partial class Slv3FanEffects
         public int Direction { get; }
         public int Speed { get; }
         public RgbColor[] Colors { get; }
-        /// <summary>The user's colours as given, before <see cref="Colors"/> fills them up with defaults.</summary>
-        public IReadOnlyList<RgbColor> Picked { get; }
 
         public int LedsPerFan => RingLen * 2;
     }
