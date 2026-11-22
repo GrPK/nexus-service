@@ -1869,6 +1869,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.KrakenLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2LightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
+                sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
@@ -1900,6 +1901,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.KrakenLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2LightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
+                sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
@@ -2299,6 +2301,15 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Lighting.Zones.IDeviceStructureSource>(
             sp => sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>());
         services.AddHostedService<Nexus.Service.Lighting.HydroShift2CurveLightingFrameWriter>();
+        // The Universal Screen 8.8's bezel LED board (0416:8050), driven natively instead of by OpenRGB.
+        services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88LedBoard>();
+        services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88LedBoard>());
+        services.AddSingleton<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>();
+        services.AddSingleton<Nexus.Service.Lighting.ILightingFrameContributor>(
+            sp => sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>());
+        services.AddSingleton<Nexus.Service.Lighting.Zones.IDeviceStructureSource>(
+            sp => sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>());
+        services.AddHostedService<Nexus.Service.Lighting.UniversalScreen88LedLightingFrameWriter>();
     }
 
     public static IServiceCollection AddNexusWeather(this IServiceCollection services)
