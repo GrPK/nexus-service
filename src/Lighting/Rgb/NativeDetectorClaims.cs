@@ -20,6 +20,7 @@ public static class NativeDetectorClaims
     public const string Kraken = "kraken";
     public const string StreamDeck = "streamdeck";
     public const string HyteNexus = "hyte-nexus";
+    public const string UniversalScreen88 = "screen88-led";
 
     /// <param name="Key">Claim name a lighting provider asks about.</param>
     /// <param name="Detectors">REGISTER_*_DETECTOR names in nexus-rgb/openrgb-headless, verbatim.</param>
@@ -54,6 +55,8 @@ public static class NativeDetectorClaims
         new(StreamDeck, new[] { "Elgato Stream Deck MK.2" }, new[] { "streamdeck" }),
         // The older single "HYTE Nexus" detector is Legacy: the current daemon drops it as unregistered, so it is only released. macOS has no native discovery for either device.
         new(HyteNexus, new[] { "HYTE THICC Q60", "HYTE Nexus Portal NP50" }, new[] { "np50", "qseries" }, NotOnMac: true, Legacy: new[] { "HYTE Nexus" }),
+        // The Universal Screen 8.8's bezel LED board (0416:8050) is driven by UniversalScreen88LedBoard under the glass's toggle.
+        new(UniversalScreen88, new[] { "Lian Li Universal Screen" }, new[] { Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver.Id }),
     };
 
     /// <summary>
