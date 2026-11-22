@@ -792,6 +792,7 @@ app.MapTryxEndpoints();
 app.MapSlv3Endpoints();
 app.MapSlv3LcdEndpoints();
 app.MapSlv3FlexLcdEndpoints();
+app.MapLianLiSyncEndpoints();
 app.MapTlLcdEndpoints();
 app.MapLianLiFlexEndpoints();
 app.MapUpdateEndpoints();

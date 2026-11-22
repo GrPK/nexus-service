@@ -1708,6 +1708,8 @@ public sealed class DevicesSettings
     public HydroShift2CurveSettings HydroShift2Curve { get; set; } = new();
     public HydroShift2CurveLightingSettings HydroShift2CurveLighting { get; set; } = new();
     public UniversalScreen88LightingSettings UniversalScreen88Lighting { get; set; } = new();
+    /// <summary>L-Connect's Quick Sync: one effect on every Lian Li device, each device's own settings kept for when it is off.</summary>
+    public LianLiSyncSettings LianLiSync { get; set; } = new();
     public CorsairSettings Corsair { get; set; } = new();
     public NollieSettings Nollie { get; set; } = new();
     /// <summary>
@@ -2091,6 +2093,30 @@ public sealed class LianLiFlexZoneSettings
     public int Speed { get; set; } = 3;
     public int Direction { get; set; }
     public int Brightness { get; set; } = 4;
+    public List<string> Colors { get; set; } = new();
+}
+
+/// <summary>
+/// L-Connect's Quick Sync ("Sync all"): while on, every Lian Li device plays the chosen effect,
+/// mapped to its own as L-Connect maps it; each device's own settings stay as they were.
+/// </summary>
+public sealed class LianLiSyncSettings
+{
+    public bool Enabled { get; set; }
+    /// <summary>One of <c>LianLiSync.Effects</c>.</summary>
+    public string Effect { get; set; } = "rainbow";
+    /// <summary>The look each effect was last given, by effect key, as L-Connect keeps one per effect; missing ones take its defaults.</summary>
+    public Dictionary<string, LianLiSyncLook> Looks { get; set; } = new();
+}
+
+/// <summary>One Quick Sync effect's look: L-Connect's sliders as levels 0..4 (0, 25, 50, 75, 100).</summary>
+public sealed class LianLiSyncLook
+{
+    public int Speed { get; set; } = 3;
+    public int Brightness { get; set; } = 4;
+    /// <summary>0 right (clockwise), 1 left.</summary>
+    public int Direction { get; set; }
+    /// <summary>"#RRGGBB", exactly as many as the effect shows.</summary>
     public List<string> Colors { get; set; } = new();
 }
 

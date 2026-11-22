@@ -98,7 +98,8 @@ public sealed class UniversalScreen88LedLightingFrameWriter : BackgroundService
             return TickMs;
         }
         var settings = _store.Load();
-        var ls = settings.Devices.UniversalScreen88Lighting;
+        // Quick Sync stands in for the bezel's own look while it is on.
+        var ls = LianLiSync.Screen88Lighting(settings);
         if (ls.Mode != UniversalScreen88LightingSettings.CanvasMode && UniversalScreen88LedEffects.Modes.Contains(ls.Mode))
         {
             return TickEffect(settings, ls);

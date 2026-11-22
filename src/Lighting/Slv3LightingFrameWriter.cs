@@ -213,6 +213,14 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
                 rollingChains++;
                 continue;
             }
+            // Quick Sync takes every TL chain over, whatever the chain's own mode.
+            if (settings.Devices.LianLiSync.Enabled
+                && !Slv3LightingDeviceProvider.IsHydroShiftStructure(structure)
+                && SyncedTlLighting(macHex, settings) is { } synced
+                && TickPreset(macHex, structure, zones, disabled, synced.Lighting, globalBrightness, nowTicks, synced.SpeedStep))
+            {
+                continue;
+            }
             // A HydroShift II streams live even under a preset stored before presets excluded it.
             if (!Slv3LightingDeviceProvider.IsHydroShiftStructure(structure)
                 && settings.Devices.LianLiWireless.Chains.TryGetValue(macHex, out var chainLighting)
@@ -1185,9 +1193,21 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
     /// chain plays it on its own in between. False when the mode cannot be
     /// rendered, so the caller streams the engine frames instead.
     /// </summary>
+    /// <summary>A TL chain's look under Quick Sync, with L-Connect's speed step; null for any other chain.</summary>
+    private (LianLiWirelessChainLighting Lighting, int SpeedStep)? SyncedTlLighting(string macHex, NexusSettings settings)
+    {
+        var fan = FindFanInfo(macHex);
+        if (fan is null || !Slv3FanEffects.IsTlFamily(Slv3Protocol.ClassifyFanFamily((byte)fan.FanType)))
+        {
+            return null;
+        }
+        settings.Devices.LianLiWireless.Chains.TryGetValue(macHex, out var own);
+        return LianLiSync.TlLighting(settings.Devices.LianLiSync, own);
+    }
+
     private bool TickPreset(
         string macHex, DeviceStructure structure, IReadOnlyList<ResolvedZone> zones, List<string> disabled,
-        LianLiWirelessChainLighting lighting, MasterLevel globalBrightness, long nowTicks)
+        LianLiWirelessChainLighting lighting, MasterLevel globalBrightness, long nowTicks, int? tlSpeedStep = null)
     {
         var fan = FindFanInfo(macHex);
         if (fan is null)
@@ -1253,7 +1273,7 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
                 break;
             }
         }
-        var sig = PresetSignature(lighting, brightnessPercent, ledCount, presetOrder, tlSwap);
+        var sig = PresetSignature(lighting, brightnessPercent, ledCount, presetOrder, tlSwap, tlSpeedStep);
         _lastSent.TryGetValue(macHex, out var last);
         var sinceLastPushMs = _lastPushTicks.TryGetValue(macHex, out var lastPush)
             ? (nowTicks - lastPush) / TimeSpan.TicksPerMillisecond
@@ -1281,7 +1301,7 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
                 animation = isStrimer
                     ? RenderStrimerPreset(lighting, lanes, ledsPerLane)
                     : tl
-                        ? RenderTlPreset(lighting, family, fanCount, tlSwap)
+                        ? RenderTlPreset(lighting, family, fanCount, tlSwap, tlSpeedStep)
                         : Slv3FanEffects.Render(family, lighting.Mode, fanCount, lighting.Speed, lighting.Direction, ParseColors(lighting.Colors), lighting.Merge);
             }
             catch (ArgumentException)
@@ -1311,12 +1331,12 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
     }
 
     /// <summary>The chain look on both halves of each fan, or a half's own look where it has one (L-Connect's Up / Down scope).</summary>
-    internal static Slv3StrimerAnimation RenderTlPreset(LianLiWirelessChainLighting lighting, Slv3FanFamily family, int fanCount, bool swap)
+    internal static Slv3StrimerAnimation RenderTlPreset(LianLiWirelessChainLighting lighting, Slv3FanFamily family, int fanCount, bool swap, int? speedStep = null)
     {
         var chain = new Slv3TlLook(lighting.Mode, lighting.Speed, lighting.Direction, lighting.Brightness, ParseColors(lighting.Colors));
         var up = lighting.Up is { } u ? new Slv3TlLook(u.Mode, u.Speed, u.Direction, u.Brightness, ParseColors(u.Colors)) : chain;
         var down = lighting.Down is { } d ? new Slv3TlLook(d.Mode, d.Speed, d.Direction, d.Brightness, ParseColors(d.Colors)) : chain;
-        return Slv3FanEffects.RenderTl(family, fanCount, up, down, downSetLast: lighting.LastScope == "down", swap);
+        return Slv3FanEffects.RenderTl(family, fanCount, up, down, downSetLast: lighting.LastScope == "down", swap, speedStep);
     }
 
     private static Slv3StrimerAnimation RenderStrimerPreset(LianLiWirelessChainLighting lighting, int lanes, int ledsPerLane)
@@ -1352,9 +1372,10 @@ public sealed class Slv3LightingFrameWriter : IHostedService, IDisposable
             : new RgbColor(0, 0, 0);
     }
 
-    private static int PresetSignature(LianLiWirelessChainLighting lighting, int brightnessPercent, int ledCount, string? order, bool tlSwap)
+    private static int PresetSignature(LianLiWirelessChainLighting lighting, int brightnessPercent, int ledCount, string? order, bool tlSwap, int? tlSpeedStep)
     {
         var hc = new HashCode();
+        hc.Add(tlSpeedStep);
         hc.Add(lighting.Mode);
         hc.Add(lighting.Speed);
         hc.Add(lighting.Direction);

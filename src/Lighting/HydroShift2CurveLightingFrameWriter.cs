@@ -98,7 +98,8 @@ public sealed class HydroShift2CurveLightingFrameWriter : BackgroundService
             return TickMs;
         }
         var settings = _store.Load();
-        var ls = settings.Devices.HydroShift2CurveLighting;
+        // Quick Sync stands in for the edge's own look while it is on.
+        var ls = LianLiSync.CurveLighting(settings);
         if (ls.Mode != HydroShift2CurveLightingSettings.CanvasMode && HydroShift2CurveEdgeEffects.Modes.Contains(ls.Mode))
         {
             return TickEffect(settings, ls);

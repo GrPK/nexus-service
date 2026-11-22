@@ -74,8 +74,12 @@ public static partial class Slv3FanEffects
     /// and <paramref name="upDownSwap"/> exchanges the halves (RgbEffect.UpsideDown). Brightness is
     /// in the frames, so they go to the chain unscaled.
     /// </summary>
+    /// <param name="speedStep">
+    /// L-Connect's speed step (7 slowest .. 3) for the loop, when the sender fixes it rather than the
+    /// look set last: Quick Sync sends Static with no speed, which L-Connect reads as L3.
+    /// </param>
     public static Slv3StrimerAnimation RenderTl(
-        Slv3FanFamily family, int fanCount, Slv3TlLook up, Slv3TlLook down, bool downSetLast, bool upDownSwap)
+        Slv3FanFamily family, int fanCount, Slv3TlLook up, Slv3TlLook down, bool downSetLast, bool upDownSwap, int? speedStep = null)
     {
         if (!IsTlFamily(family))
         {
@@ -90,7 +94,8 @@ public static partial class Slv3FanEffects
         var upAnim = RenderTlHalf(up, upInfo, FlexScope.Up, fanCount);
         var downAnim = RenderTlHalf(down, downInfo, FlexScope.Down, fanCount);
         var (timingLook, timingInfo) = downSetLast ? (down, downInfo) : (up, upInfo);
-        var interval = (int)(FlexAnimationComposer.SpeedMultiplier(timingLook.Key, TlSpeed(timingLook, timingInfo)) * upAnim.IntervalBaseMs);
+        var step = speedStep ?? FlexAnimationComposer.SpeedMultiplier(timingLook.Key, TlSpeed(timingLook, timingInfo));
+        var interval = (int)(step * upAnim.IntervalBaseMs);
         var leds = fanCount * FlexTlEffects.LedsPerFan;
         var (frames, count) = JoinTlHalves(upAnim, downAnim, leds, interval);
         if (upDownSwap)
