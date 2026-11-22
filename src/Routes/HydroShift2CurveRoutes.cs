@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
@@ -247,6 +248,72 @@ public static partial class DevicesRoutes
                 _ => Results.BadRequest(ApiResponse.Fail("no such video")),
             };
         });
+
+        app.MapGet("/devices/lianli-hydroshift2-curve/lighting", (IConfigStore store) =>
+        {
+            var ls = store.Load().Devices.HydroShift2CurveLighting;
+            var modes = new HydroShift2CurveModeDto[HydroShift2CurveEdgeEffects.Modes.Count];
+            for (int i = 0; i < modes.Length; i++)
+            {
+                var key = HydroShift2CurveEdgeEffects.Modes[i];
+                modes[i] = new HydroShift2CurveModeDto
+                {
+                    Key = key,
+                    Colors = HydroShift2CurveEdgeEffects.ColorCount(key),
+                    DefaultColors = HydroShift2CurveEdgeEffects.DefaultColors(key).ToArray(),
+                    HasDirection = HydroShift2CurveEdgeEffects.HasDirection(key),
+                    HasSpeed = HydroShift2CurveEdgeEffects.HasSpeed(key),
+                    HasBrightness = true,
+                };
+            }
+            return Results.Json(
+                new HydroShift2CurveLightingResponse
+                {
+                    Mode = ls.Mode,
+                    EffectMode = ls.Mode != HydroShift2CurveLightingSettings.CanvasMode
+                        ? ls.Mode
+                        : ls.EffectMode ?? HydroShift2CurveEdgeEffects.Rainbow,
+                    Speed = ls.Speed,
+                    Direction = ls.Direction,
+                    Brightness = ls.Brightness,
+                    MaxLevel = HydroShift2CurveEdgeEffects.MaxLevel,
+                    Colors = ls.Colors.ToArray(),
+                    Modes = modes,
+                },
+                AppJsonContext.Default.HydroShift2CurveLightingResponse);
+        });
+
+        app.MapPut("/devices/lianli-hydroshift2-curve/lighting", (
+            HydroShift2CurveLightingRequest body,
+            IConfigStore store,
+            Nexus.Service.Sockets.MultiplexHub mux) =>
+        {
+            if (body.Mode is { } mode
+                && mode != HydroShift2CurveLightingSettings.CanvasMode
+                && !HydroShift2CurveEdgeEffects.Modes.Contains(mode))
+            {
+                return Results.BadRequest(ApiResponse.Fail("unknown mode key"));
+            }
+            if (body.Colors is { } colors && (colors.Length > 6 || Array.Exists(colors, c => !HexColor().IsMatch(c))))
+            {
+                return Results.BadRequest(ApiResponse.Fail("colors must be at most six #rrggbb values"));
+            }
+            store.Update(s =>
+            {
+                var ls = s.Devices.HydroShift2CurveLighting;
+                if (body.Mode is { } m)
+                {
+                    ls.Mode = m;
+                    if (m != HydroShift2CurveLightingSettings.CanvasMode) ls.EffectMode = m;
+                }
+                if (body.Speed is { } speed) ls.Speed = Math.Clamp(speed, 0, HydroShift2CurveEdgeEffects.MaxLevel);
+                if (body.Direction is { } direction) ls.Direction = Math.Clamp(direction, 0, 1);
+                if (body.Brightness is { } brightness) ls.Brightness = Math.Clamp(brightness, 0, HydroShift2CurveEdgeEffects.MaxLevel);
+                if (body.Colors is { } c) ls.Colors = new List<string>(c);
+            });
+            Nexus.Service.Sockets.PanelTopics.BroadcastLighting(mux);
+            return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
+        });
     }
 
     private static readonly TimeSpan DeleteStopTimeout = TimeSpan.FromSeconds(5);
@@ -335,4 +402,39 @@ public sealed class HydroShift2CurveMediaUploadResponse
 public sealed class HydroShift2CurveMediaDeleteRequest
 {
     public string? Name { get; set; }
+}
+
+public sealed class HydroShift2CurveModeDto
+{
+    public string Key { get; set; } = "";
+    /// <summary>Colour pickers the mode shows; 0 when it draws its own colours.</summary>
+    public int Colors { get; set; }
+    /// <summary>L-Connect's colours for the mode, used while the palette is empty.</summary>
+    public string[] DefaultColors { get; set; } = Array.Empty<string>();
+    public bool HasDirection { get; set; }
+    public bool HasSpeed { get; set; }
+    public bool HasBrightness { get; set; }
+}
+
+public sealed class HydroShift2CurveLightingResponse
+{
+    public string Mode { get; set; } = "";
+    /// <summary>The edge effect played when Lighting page control is off.</summary>
+    public string EffectMode { get; set; } = "";
+    public int Speed { get; set; }
+    public int Direction { get; set; }
+    public int Brightness { get; set; }
+    /// <summary>Top of the speed and brightness levels.</summary>
+    public int MaxLevel { get; set; }
+    public string[] Colors { get; set; } = Array.Empty<string>();
+    public HydroShift2CurveModeDto[] Modes { get; set; } = Array.Empty<HydroShift2CurveModeDto>();
+}
+
+public sealed class HydroShift2CurveLightingRequest
+{
+    public string? Mode { get; set; }
+    public int? Speed { get; set; }
+    public int? Direction { get; set; }
+    public int? Brightness { get; set; }
+    public string[]? Colors { get; set; }
 }
