@@ -2037,6 +2037,14 @@ public sealed class LianLiWirelessChainLighting
     public List<LianLiWirelessLane> Lanes { get; set; } = new();
     /// <summary>The chain plays the motherboard ARGB header through its sync cable instead of Nexus; null leaves the chain's own state alone.</summary>
     public bool? MotherboardArgb { get; set; }
+    /// <summary>TL chains: a look of its own for LED 0..12 of each fan (L-Connect's Up scope); null plays the chain look there.</summary>
+    public LianLiFlexZoneSettings? Up { get; set; }
+    /// <summary>TL chains: a look of its own for LED 13..25 of each fan (L-Connect's Down scope); null plays the chain look there.</summary>
+    public LianLiFlexZoneSettings? Down { get; set; }
+    /// <summary>TL chains: "up" or "down" when that half was set last, null after a whole-fan look; L-Connect plays both halves at the speed of the last one set.</summary>
+    public string? LastScope { get; set; }
+    /// <summary>TL chains: the two halves of each fan exchanged (L-Connect's Up/Down swap). A TL Flex chain keeps its swap in <see cref="DevicesSettings.FlexUnits"/>.</summary>
+    public bool UpDownSwap { get; set; }
 }
 
 /// <summary>
