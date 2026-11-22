@@ -2414,6 +2414,8 @@ public sealed class UniversalScreen88LightingSettings
     public int Brightness { get; set; } = 4;
     /// <summary>"#RRGGBB" palette, up to six; empty plays the effect's L-Connect colours.</summary>
     public List<string> Colors { get; set; } = new();
+    /// <summary>The OpenRGB ring card's Lighting page state was moved to the native card (once).</summary>
+    public bool OpenRgbCardMoved { get; set; }
 }
 
 /// <summary>The HydroShift II OLED Curved head position Nexus last drove; the motors have no position readback.</summary>

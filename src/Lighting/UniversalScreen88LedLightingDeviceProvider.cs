@@ -35,7 +35,15 @@ public sealed class UniversalScreen88LedLightingDeviceProvider :
         _board = board;
         _store = store;
         _identify = identify;
-        _board.AvailabilityChanged += () => DevicesChanged?.Invoke();
+        _board.AvailabilityChanged += () =>
+        {
+            // First sight of the native ring takes over what the Lighting page kept for OpenRGB's card.
+            if (_board.IsAvailable && UniversalScreen88LayoutMigration.NeedsApply(_store.Load()))
+            {
+                _store.Update(s => UniversalScreen88LayoutMigration.Apply(s));
+            }
+            DevicesChanged?.Invoke();
+        };
     }
 
     public bool IsConnected => _board.IsAvailable;
