@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Nexus.Service.Peripherals.LianLiFlex;
 using DeterministicRandom = Nexus.Service.Peripherals.LianLiWireless.Slv3WirelessEffectMath.DeterministicRandom;
 using RgbColor = Nexus.Service.Peripherals.Hyte.Np50.RgbColor;
 
@@ -7,72 +8,103 @@ namespace Nexus.Service.Peripherals.LianLiWireless;
 
 public static partial class Slv3FanEffects
 {
+    // L-Connect's 29 TL effects. Direction is offered where the Flex TL generators use it, and the
+    // swatch counts are the ones they read.
     private static Slv3StrimerEffectInfo[] BuildTlCatalog() => new[]
     {
-        new Slv3StrimerEffectInfo { Key = "rainbow", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 0 },
-        new Slv3StrimerEffectInfo { Key = "rainbowMorph", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 0 },
-        new Slv3StrimerEffectInfo { Key = "static", HasSpeed = false, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "breathing", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "runway", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "meteor", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "colorCycle", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 3 },
-        new Slv3StrimerEffectInfo { Key = "staggered", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 2 },
-        new Slv3StrimerEffectInfo { Key = "tide", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 2 },
-        new Slv3StrimerEffectInfo { Key = "mixing", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 2 },
-        new Slv3StrimerEffectInfo { Key = "voice", HasSpeed = false, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "door", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "render", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "ripple", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "reflect", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "tailChasing", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "paint", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "pingPong", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 2 },
-        new Slv3StrimerEffectInfo { Key = "stack", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 6 },
-        new Slv3StrimerEffectInfo { Key = "coverCycle", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 6 },
-        new Slv3StrimerEffectInfo { Key = "wave", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "racing", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 2 },
-        new Slv3StrimerEffectInfo { Key = "lottery", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 6 },
-        new Slv3StrimerEffectInfo { Key = "intertwine", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 2 },
-        new Slv3StrimerEffectInfo { Key = "meteorShower", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "collide", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 2 },
-        new Slv3StrimerEffectInfo { Key = "electricCurrent", HasSpeed = true, HasDirection = false, ColorsMin = 0, ColorsMax = 1 },
-        new Slv3StrimerEffectInfo { Key = "kaleidoscope", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 6 },
-        new Slv3StrimerEffectInfo { Key = "twinkle", HasSpeed = true, HasDirection = true, ColorsMin = 0, ColorsMax = 6 },
+        Tl("rainbow", speed: true, direction: true),
+        Tl("rainbowMorph", speed: true, direction: false),
+        Tl("static", speed: false, direction: false),
+        Tl("breathing", speed: true, direction: false),
+        Tl("runway", speed: true, direction: false),
+        Tl("meteor", speed: true, direction: true),
+        Tl("colorCycle", speed: true, direction: true),
+        Tl("staggered", speed: true, direction: false),
+        Tl("tide", speed: true, direction: false),
+        Tl("mixing", speed: true, direction: false),
+        Tl("voice", speed: false, direction: false),
+        Tl("door", speed: true, direction: false),
+        Tl("render", speed: true, direction: true),
+        Tl("ripple", speed: true, direction: false),
+        Tl("reflect", speed: true, direction: true),
+        Tl("tailChasing", speed: true, direction: true),
+        Tl("paint", speed: true, direction: true),
+        Tl("pingPong", speed: true, direction: true),
+        Tl("stack", speed: true, direction: true),
+        Tl("coverCycle", speed: true, direction: true),
+        Tl("wave", speed: true, direction: true),
+        Tl("racing", speed: true, direction: true),
+        Tl("lottery", speed: true, direction: true),
+        Tl("intertwine", speed: true, direction: false),
+        Tl("meteorShower", speed: true, direction: true),
+        Tl("collide", speed: true, direction: false),
+        Tl("electricCurrent", speed: true, direction: false),
+        Tl("kaleidoscope", speed: true, direction: false),
+        Tl("twinkle", speed: true, direction: false),
     };
 
-    private static IReadOnlyDictionary<string, Func<FanEffectContext, RawAnimation>> BuildTlRenderers() =>
-        new Dictionary<string, Func<FanEffectContext, RawAnimation>>(StringComparer.Ordinal)
+    private static Slv3StrimerEffectInfo Tl(string key, bool speed, bool direction) => new()
+    {
+        Key = key,
+        HasSpeed = speed,
+        HasDirection = direction,
+        ColorsMin = 0,
+        ColorsMax = FlexSwatchCounts.Of(FlexFamily.TlFlex, key),
+    };
+
+    private static IReadOnlyDictionary<string, Func<FanEffectContext, RawAnimation>> BuildTlRenderers()
+    {
+        var map = new Dictionary<string, Func<FanEffectContext, RawAnimation>>(StringComparer.Ordinal);
+        foreach (var info in BuildTlCatalog())
         {
-            ["rainbow"] = SlRainbow,
-            ["rainbowMorph"] = SlRainbowMorph,
-            ["static"] = SlStatic,
-            ["breathing"] = SlBreathing,
-            ["runway"] = SlRunway,
-            ["meteor"] = SlMeteor,
-            ["colorCycle"] = SlColorCycle,
-            ["staggered"] = SlStaggered,
-            ["tide"] = SlTide,
-            ["mixing"] = SlMixing,
-            ["voice"] = TlVoice,
-            ["door"] = TlDoor,
-            ["render"] = SlRender,
-            ["ripple"] = SlRipple,
-            ["reflect"] = SlReflect,
-            ["tailChasing"] = TlTailChasing,
-            ["paint"] = TlPaint,
-            ["pingPong"] = SlPingPong,
-            ["stack"] = SlStack,
-            ["coverCycle"] = TlCoverCycle,
-            ["wave"] = TlWave,
-            ["racing"] = TlRacing,
-            ["lottery"] = TlLottery,
-            ["intertwine"] = TlIntertwine,
-            ["meteorShower"] = TlMeteorShower,
-            ["collide"] = SlCollide,
-            ["electricCurrent"] = SlElectricCurrent,
-            ["kaleidoscope"] = TlKaleidoscope,
-            ["twinkle"] = SlTwinkle,
-        };
+            var key = info.Key;
+            map[key] = ctx => RenderFlexTl(key, ctx);
+        }
+        return map;
+    }
+
+    // The top level of FlexAnimationComposer.BrightnessLevel (255).
+    private const int FlexFullBrightness = 4;
+
+    /// <summary>
+    /// A wireless TL chain lays its LEDs out like a wired Flex TL unit: 26 per fan, fan after fan,
+    /// LED 0..12 the up half and 13..25 the down half. So its effects come from the Flex TL
+    /// generators, through the composer the wired units use. They are drawn at full brightness,
+    /// because the chain's brightness is applied when the frames are sent.
+    /// </summary>
+    private static RawAnimation RenderFlexTl(string key, FanEffectContext ctx)
+    {
+        var look = new FlexZoneLook(key, ctx.Speed, ctx.Direction, FlexFullBrightness, FlexTlColors(key, ctx.Picked));
+        var zones = new Dictionary<string, FlexZoneLook>(StringComparer.Ordinal) { ["all"] = look };
+        var anim = FlexAnimationComposer.Compose(FlexFamily.TlFlex, ctx.FanCount, zones, upDownSwap: false);
+        return new RawAnimation(anim.Raw, anim.Frames, anim.IntervalMs);
+    }
+
+    /// <summary>
+    /// The colours a wired Flex fan would play with the same picks: the user's, up to the effect's
+    /// swatch count, then the effect's defaults. No picks keep the defaults, or Twinkle's own table.
+    /// </summary>
+    private static IReadOnlyList<RgbColor> FlexTlColors(string key, IReadOnlyList<RgbColor> picked)
+    {
+        var defaults = FlexDefaultPalettes.For(FlexFamily.TlFlex, key);
+        var count = Math.Min(picked.Count, FlexSwatchCounts.Of(FlexFamily.TlFlex, key));
+        if (count == 0)
+        {
+            return FlexDefaultPalettes.RendersFromTable(FlexFamily.TlFlex, key) ? Array.Empty<RgbColor>() : defaults;
+        }
+        var colors = new List<RgbColor>(Math.Max(count, defaults.Count));
+        for (var i = 0; i < count; i++)
+        {
+            colors.Add(picked[i]);
+        }
+        for (var i = count; i < defaults.Count; i++)
+        {
+            colors.Add(defaults[i]);
+        }
+        return colors;
+    }
+
+    // Voice, Door and Lottery below are drawn for the SL-INF fans.
 
     /// <summary>No live audio input is available to a pre-rendered loop; stands in with an irregular pulse sequence.</summary>
     private static RawAnimation TlVoice(FanEffectContext ctx)
@@ -127,106 +159,6 @@ public static partial class Slv3FanEffects
         });
     }
 
-    /// <summary>A fixed-length arc chases continuously around the ring rather than sweeping once and resetting.</summary>
-    private static RawAnimation TlTailChasing(FanEffectContext ctx)
-    {
-        const int frameCount = 40;
-        var arcLen = Math.Max(2, ctx.RingLen / 3);
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            var head = (double)f / frameCount * ctx.RingLen;
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                for (var ringPos = 0; ringPos < ctx.RingLen; ringPos++)
-                {
-                    var pos = Slv3WirelessEffectMath.Pos(ringPos, ctx.RingLen, ctx.Direction);
-                    var behind = head - pos;
-                    behind -= ctx.RingLen * Math.Floor(behind / ctx.RingLen);
-                    if (behind <= arcLen)
-                    {
-                        SetRing(buf, f, ctx, fan, ringPos, Slv3WirelessEffectMath.Scale(ctx.Colors[0], 1.0 - behind / arcLen));
-                    }
-                }
-            }
-        });
-    }
-
-    /// <summary>Fills the ring from its start position to the end, then repeats.</summary>
-    private static RawAnimation TlPaint(FanEffectContext ctx)
-    {
-        const int frameCount = 32;
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            var filled = (double)f / frameCount * ctx.RingLen;
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                for (var ringPos = 0; ringPos < ctx.RingLen; ringPos++)
-                {
-                    if (ringPos < filled)
-                    {
-                        SetRing(buf, f, ctx, fan, ringPos, ctx.Colors[0]);
-                    }
-                }
-            }
-        });
-    }
-
-    /// <summary>The whole ring switches, one solid colour at a time, through the user palette.</summary>
-    private static RawAnimation TlCoverCycle(FanEffectContext ctx)
-    {
-        const int framesPerColor = 8;
-        const int frameCount = framesPerColor * 6;
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            var slot = f / framesPerColor;
-            var idx = ctx.Direction != 0 ? 5 - slot : slot;
-            var color = ctx.Colors[idx % 6];
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                for (var ringPos = 0; ringPos < ctx.RingLen; ringPos++)
-                {
-                    SetRing(buf, f, ctx, fan, ringPos, color);
-                }
-            }
-        });
-    }
-
-    /// <summary>A single colour's brightness follows a sine wave travelling along the ring.</summary>
-    private static RawAnimation TlWave(FanEffectContext ctx)
-    {
-        const int frameCount = 40;
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                for (var ringPos = 0; ringPos < ctx.RingLen; ringPos++)
-                {
-                    var pos = Slv3WirelessEffectMath.Pos(ringPos, ctx.RingLen, ctx.Direction);
-                    var t = (double)pos / ctx.RingLen - (double)f / frameCount;
-                    var brightness = 0.1 + 0.9 * Slv3WirelessEffectMath.Breath(t);
-                    SetRing(buf, f, ctx, fan, ringPos, Slv3WirelessEffectMath.Scale(ctx.Colors[0], brightness));
-                }
-            }
-        });
-    }
-
-    /// <summary>Two markers travel the same direction at different speeds, the faster one lapping the slower.</summary>
-    private static RawAnimation TlRacing(FanEffectContext ctx)
-    {
-        const int frameCount = 48;
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            var t = (double)f / frameCount;
-            var leadPos = (t * 1.5 * ctx.RingLen) % ctx.RingLen;
-            var trailPos = (t * ctx.RingLen) % ctx.RingLen;
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                PaintRingMarker(buf, f, ctx, fan, trailPos, 1.0, ctx.Colors[1], 0);
-                PaintRingMarker(buf, f, ctx, fan, leadPos, 1.0, ctx.Colors[0], 0);
-            }
-        });
-    }
-
     /// <summary>Random colours settle, slot-machine style, into one final colour by the end of the loop.</summary>
     private static RawAnimation TlLottery(FanEffectContext ctx)
     {
@@ -242,74 +174,6 @@ public static partial class Slv3FanEffects
                     var settled = rng.NextDouble() < settleFrac * settleFrac;
                     var color = settled ? ctx.Colors[0] : ctx.Colors[rng.NextInt(6)];
                     SetRing(buf, f, ctx, fan, ringPos, color);
-                }
-            }
-        });
-    }
-
-    /// <summary>Two colours alternate LED by LED, the alternation shifting by one position each frame.</summary>
-    private static RawAnimation TlIntertwine(FanEffectContext ctx)
-    {
-        const int frameCount = 24;
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                for (var ringPos = 0; ringPos < ctx.RingLen; ringPos++)
-                {
-                    var band = (ringPos + f) % 2;
-                    if (ctx.Direction != 0)
-                    {
-                        band = 1 - band;
-                    }
-                    SetRing(buf, f, ctx, fan, ringPos, ctx.Colors[band]);
-                }
-            }
-        });
-    }
-
-    /// <summary>Several meteor trails fall around the ring at staggered offsets instead of one at a time.</summary>
-    private static RawAnimation TlMeteorShower(FanEffectContext ctx)
-    {
-        const int frameCount = 40;
-        const int trailCount = 3;
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                for (var trail = 0; trail < trailCount; trail++)
-                {
-                    var t = (double)f / frameCount + (double)trail / trailCount;
-                    t -= Math.Floor(t);
-                    var head = t * (ctx.RingLen + 6) - 3;
-                    for (var ringPos = 0; ringPos < ctx.RingLen; ringPos++)
-                    {
-                        var pos = Slv3WirelessEffectMath.Pos(ringPos, ctx.RingLen, ctx.Direction);
-                        var dist = head - pos;
-                        if (dist >= 0 && dist <= 4)
-                        {
-                            SetRing(buf, f, ctx, fan, ringPos, Slv3WirelessEffectMath.Scale(ctx.Colors[0], 1.0 - dist / 4.0));
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    /// <summary>Hue mirrored around the ring's midpoint, the mirror axis rotating over time.</summary>
-    private static RawAnimation TlKaleidoscope(FanEffectContext ctx)
-    {
-        const int frameCount = 48;
-        return RingLoop(frameCount, ctx, Slv3StrimerEffects.ScaledInterval(ctx.Speed, 11.0), (buf, f) =>
-        {
-            var rotate = (ctx.Direction != 0 ? -1.0 : 1.0) * f / frameCount;
-            for (var fan = 0; fan < ctx.FanCount; fan++)
-            {
-                for (var ringPos = 0; ringPos < ctx.RingLen; ringPos++)
-                {
-                    var mirrored = Math.Abs(ringPos - (ctx.RingLen - 1) / 2.0);
-                    var hue = mirrored / ctx.RingLen + rotate;
-                    SetRing(buf, f, ctx, fan, ringPos, Slv3WirelessEffectMath.Hue(hue));
                 }
             }
         });

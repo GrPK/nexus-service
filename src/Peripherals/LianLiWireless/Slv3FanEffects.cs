@@ -11,6 +11,8 @@ namespace Nexus.Service.Peripherals.LianLiWireless;
 /// mode's motion, colour cycling and timing is baked into the buffer up front.
 /// Only the whole-fan render scope is implemented; a fan's ring positions all
 /// show the same content rather than splitting into inner/outer sub-groups.
+/// TL chains are the exception to the hand-drawn renderers: they play the Flex TL
+/// generators, which draw each 13-LED half of a fan as L-Connect does.
 /// </summary>
 public static partial class Slv3FanEffects
 {
@@ -51,7 +53,7 @@ public static partial class Slv3FanEffects
 
         var ledsPerFan = Slv3Protocol.LedsPerFanFor(family);
         var ringLen = ledsPerFan / 2;
-        var ctx = new FanEffectContext(fanCount, ringLen, NormalizeDirection(direction), ClampSpeed(speed), ResolveColors(colors));
+        var ctx = new FanEffectContext(fanCount, ringLen, NormalizeDirection(direction), ClampSpeed(speed), ResolveColors(colors), colors);
         var raw = renderer(ctx);
         return Slv3WirelessEffectMath.Finalize(raw, fanCount, ledsPerFan);
     }
@@ -124,13 +126,14 @@ public static partial class Slv3FanEffects
     /// <summary>Shared per-effect render state: fan-chain geometry, user intent and resolved colours.</summary>
     private readonly struct FanEffectContext
     {
-        public FanEffectContext(int fanCount, int ringLen, int direction, int speed, RgbColor[] colors)
+        public FanEffectContext(int fanCount, int ringLen, int direction, int speed, RgbColor[] colors, IReadOnlyList<RgbColor> picked)
         {
             FanCount = fanCount;
             RingLen = ringLen;
             Direction = direction;
             Speed = speed;
             Colors = colors;
+            Picked = picked;
         }
 
         public int FanCount { get; }
@@ -138,6 +141,8 @@ public static partial class Slv3FanEffects
         public int Direction { get; }
         public int Speed { get; }
         public RgbColor[] Colors { get; }
+        /// <summary>The user's colours as given, before <see cref="Colors"/> fills them up with defaults.</summary>
+        public IReadOnlyList<RgbColor> Picked { get; }
 
         public int LedsPerFan => RingLen * 2;
     }
