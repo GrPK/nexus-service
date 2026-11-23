@@ -17,19 +17,27 @@ public sealed record HydroShift2CurveMediaItem(string Name, string Label, double
 public enum HydroShift2CurveMediaDelete { Deleted, Missing, Busy }
 
 /// <summary>
-/// Videos the HydroShift II OLED Curved plays on its own decoder. Each keeps its upload and
-/// crop, and is encoded per mount (the glass's portrait framebuffer turns the opposite way
-/// when the head is flipped) the first time that mount needs it.
+/// How one glass's decoder wants its videos: where its library lives, the preview and thumbnail
+/// sizes, and the ffmpeg filter and variant file for a mount (record rotation and mirror).
 /// </summary>
-public sealed partial class HydroShift2CurveMedia
+public sealed record DecoderVideoProfile(
+    string HandlerId,
+    int PreviewWidth,
+    int PreviewHeight,
+    string ThumbScale,
+    Func<int, bool, string> MountFilter,
+    Func<int, bool, string> VariantFile);
+
+/// <summary>
+/// Videos a glass plays on its own decoder (<see cref="IDecoderVideoDriver"/>). Each keeps its upload
+/// and crop, and is encoded per mount the first time that mount needs it.
+/// </summary>
+public partial class DecoderVideoMedia
 {
     private const string SourcePrefix = "source";
     private const string MetaFile = "meta.txt";
     private const string ThumbFile = "thumb.jpg";
     private const string PreviewFile = "preview.mp4";
-    /// <summary>Preview size: half the glass, landscape, which plays in any browser.</summary>
-    private const int PreviewWidth = HydroShift2CurveProtocol.Width / 2;
-    private const int PreviewHeight = HydroShift2CurveProtocol.Height / 2;
     private const string TrashPrefix = ".deleted-";
 
     /// <summary>Longest clip kept; the glass loops whatever it gets.</summary>
@@ -43,14 +51,16 @@ public sealed partial class HydroShift2CurveMedia
     private static readonly string[] VideoExtensions = { ".mp4", ".webm", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".mpg", ".mpeg", ".gif" };
 
     private readonly string _root;
+    private readonly DecoderVideoProfile _profile;
     private readonly SemaphoreSlim _encode = new(1, 1);
     private readonly Dictionary<string, long> _failedAt = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _importing = new(StringComparer.Ordinal);
     private volatile string? _encoding;
 
-    public HydroShift2CurveMedia(string? root = null)
+    protected DecoderVideoMedia(DecoderVideoProfile profile, string? root = null)
     {
-        _root = root ?? Path.Combine(MediaLibrary.DeviceStoreDir(HydroShift2CurveLcdDriver.Id), "media");
+        _profile = profile;
+        _root = root ?? Path.Combine(MediaLibrary.DeviceStoreDir(profile.HandlerId), "media");
     }
 
     public static bool IsSafeName(string? name) => !string.IsNullOrEmpty(name) && SafeName().IsMatch(name);
@@ -115,7 +125,7 @@ public sealed partial class HydroShift2CurveMedia
             var stderr = await MediaImporter.RunFfmpeg(ThumbTimeoutSeconds, ct, new[]
             {
                 "-y", "-i", source,
-                "-vf", $"{crop.ToFfmpegCrop()},scale=320:151",
+                "-vf", $"{crop.ToFfmpegCrop()},scale={_profile.ThumbScale}",
                 "-frames:v", "1", "-q:v", "5",
                 Path.Combine(dir, ThumbFile),
             });
@@ -130,7 +140,7 @@ public sealed partial class HydroShift2CurveMedia
         }
         catch (Exception ex)
         {
-            ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] could not read upload '{label}': {ex.Message}");
+            ServiceLog.Warn($"[{_profile.HandlerId}] could not read upload '{label}': {ex.Message}");
             _importing.TryRemove(name, out _);
             Delete(name);
             return null;
@@ -139,11 +149,15 @@ public sealed partial class HydroShift2CurveMedia
 
     /// <summary>Encodes a fresh upload for the head's mount off the request; the item lists as not ready until it is done, and is dropped if it cannot be encoded.</summary>
     public void EncodeImport(string name, bool flip180, bool mirror, CancellationToken ct) =>
+        EncodeImport(name, flip180 ? 180 : 0, mirror, ct);
+
+    /// <summary>As <see cref="EncodeImport(string, bool, bool, CancellationToken)"/> for a mount given as the record rotation.</summary>
+    public void EncodeImport(string name, int rotation, bool mirror, CancellationToken ct) =>
         _ = Task.Run(async () =>
         {
             try
             {
-                var ok = await EnsureVariantAsync(name, flip180, mirror, ct).ConfigureAwait(false) is not null;
+                var ok = await EnsureVariantAsync(name, rotation, mirror, ct).ConfigureAwait(false) is not null;
                 if (ok)
                 {
                     await EnsurePreviewAsync(name, ct).ConfigureAwait(false);
@@ -159,15 +173,19 @@ public sealed partial class HydroShift2CurveMedia
                 _importing.TryRemove(name, out _);
                 if (ex is not OperationCanceledException)
                 {
-                    ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] encoding upload '{name}' failed: {ex.Message}");
+                    ServiceLog.Warn($"[{_profile.HandlerId}] encoding upload '{name}' failed: {ex.Message}");
                 }
             }
         }, CancellationToken.None);
 
     /// <summary>The glass-ready stream for this mount, encoding it first if needed; null when that fails.</summary>
-    public async Task<string?> EnsureVariantAsync(string name, bool flip180, bool mirror, CancellationToken ct)
+    public Task<string?> EnsureVariantAsync(string name, bool flip180, bool mirror, CancellationToken ct) =>
+        EnsureVariantAsync(name, flip180 ? 180 : 0, mirror, ct);
+
+    /// <summary>The glass-ready stream for a mount given as the record rotation (0, 90, 180, 270).</summary>
+    public async Task<string?> EnsureVariantAsync(string name, int rotation, bool mirror, CancellationToken ct)
     {
-        var target = VariantPath(name, flip180, mirror);
+        var target = VariantPath(name, rotation, mirror);
         if (File.Exists(target))
         {
             return target;
@@ -190,13 +208,13 @@ public sealed partial class HydroShift2CurveMedia
             var (_, crop, _) = ReadMeta(name);
             var temp = target + ".tmp";
             _encoding = name;
-            ServiceLog.Info($"[{HydroShift2CurveLcdDriver.Id}] encoding '{name}' for the glass (flip={flip180}, mirror={mirror})");
+            ServiceLog.Info($"[{_profile.HandlerId}] encoding '{name}' for the glass (rotation={rotation}, mirror={mirror})");
             // Raw Annex-B: the bundled ffmpeg has no h264 muxer, and rawvideo writes the
             // packets exactly as libx264 emits them. No B-frames, as the glass's decoder needs.
             await MediaImporter.RunFfmpeg(EncodeTimeoutSeconds, ct, new[]
             {
                 "-y", "-i", source,
-                "-vf", $"{crop.ToFfmpegCrop()},{HydroShift2CurveProtocol.MountFilter(flip180, mirror)}",
+                "-vf", $"{crop.ToFfmpegCrop()},{_profile.MountFilter(rotation, mirror)}",
                 "-r", FrameRate.ToString(CultureInfo.InvariantCulture),
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                 "-bf", "0", "-g", FrameRate.ToString(CultureInfo.InvariantCulture), "-pix_fmt", "yuv420p",
@@ -214,7 +232,7 @@ public sealed partial class HydroShift2CurveMedia
         }
         catch (Exception ex)
         {
-            ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] encoding '{name}' failed: {ex.Message}");
+            ServiceLog.Warn($"[{_profile.HandlerId}] encoding '{name}' failed: {ex.Message}");
             TryDeleteFile(target + ".tmp");
             _failedAt[target] = Environment.TickCount64;
             return null;
@@ -255,7 +273,7 @@ public sealed partial class HydroShift2CurveMedia
             await MediaImporter.RunFfmpeg(EncodeTimeoutSeconds, ct, new[]
             {
                 "-y", "-i", source,
-                "-vf", $"{crop.ToFfmpegCrop()},scale={PreviewWidth}:{PreviewHeight}:flags=lanczos",
+                "-vf", $"{crop.ToFfmpegCrop()},scale={_profile.PreviewWidth}:{_profile.PreviewHeight}:flags=lanczos",
                 "-r", FrameRate.ToString(CultureInfo.InvariantCulture),
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
                 "-an", "-movflags", "+faststart", "-t", MaxSeconds.ToString(CultureInfo.InvariantCulture),
@@ -271,7 +289,7 @@ public sealed partial class HydroShift2CurveMedia
         }
         catch (Exception ex)
         {
-            ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] preview for '{name}' failed: {ex.Message}");
+            ServiceLog.Warn($"[{_profile.HandlerId}] preview for '{name}' failed: {ex.Message}");
             TryDeleteFile(temp);
             _failedAt[target] = Environment.TickCount64;
             return null;
@@ -303,7 +321,7 @@ public sealed partial class HydroShift2CurveMedia
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] could not delete '{name}': {ex.Message}");
+            ServiceLog.Warn($"[{_profile.HandlerId}] could not delete '{name}': {ex.Message}");
             return HydroShift2CurveMediaDelete.Busy;
         }
         SweepTrash();
@@ -364,8 +382,8 @@ public sealed partial class HydroShift2CurveMedia
         return null;
     }
 
-    private string VariantPath(string name, bool flip180, bool mirror) =>
-        Path.Combine(ItemDir(name), $"glass-{(flip180 ? "flip" : "up")}{(mirror ? "-mirror" : "")}.h264");
+    private string VariantPath(string name, int rotation, bool mirror) =>
+        Path.Combine(ItemDir(name), _profile.VariantFile(rotation, mirror));
 
     /// <summary>Three lines: label, crop wire form, duration in seconds (blank when unknown).</summary>
     private void WriteMeta(string name, string label, CropRect crop, double? duration)

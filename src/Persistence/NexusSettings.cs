@@ -2349,6 +2349,19 @@ public sealed class UniversalScreen88Settings
     /// Nexus never changes the mode on its own.
     /// </summary>
     public bool? WindowsDisplay { get; set; }
+
+    public const string ScreenNexus = "nexus";
+    public const string ScreenVideo = "video";
+
+    /// <summary><see cref="ScreenNexus"/> streams the Nexus panel; <see cref="ScreenVideo"/> loops <see cref="Video"/> on the glass's own decoder, as L-Connect's video backgrounds do.</summary>
+    public string ScreenMode { get; set; } = ScreenNexus;
+    /// <summary>Media library item played in video mode.</summary>
+    public string? Video { get; set; }
+    /// <summary>Minutes between screen-saver plays; 0 is off.</summary>
+    public int ScreenSaverMinutes { get; set; }
+    public string? ScreenSaverVideo { get; set; }
+    /// <summary>Backlight percent while the screen saver plays.</summary>
+    public int ScreenSaverBrightness { get; set; } = 50;
 }
 
 /// <summary>The HydroShift II OLED Curved head position Nexus last drove; the motors have no position readback.</summary>

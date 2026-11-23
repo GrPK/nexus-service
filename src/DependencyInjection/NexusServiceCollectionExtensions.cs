@@ -1670,11 +1670,14 @@ public static class NexusServiceCollectionExtensions
                         () => sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2Aio>()?.ShowsOwnScreen == true,
                     Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver =>
                         () => sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurvePlayer>()?.OwnsGlass == true,
+                    Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver =>
+                        () => sp.GetService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player>()?.OwnsGlass == true,
                     _ => null,
                 };
                 return new Nexus.Service.Panel.Streams.BulkPanelDiscovery(
                     bulkPanelHub, sp.GetService<Nexus.Service.Panel.Streams.IVirtualMonitorHost>(), withheld,
-                    listedWhileWithheld: bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver);
+                    listedWhileWithheld: bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver
+                        or Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver);
             });
             services.AddSingleton<IDeviceHandler>(
                 _ => new Nexus.Service.Devices.Handlers.BulkPanelHandler(
@@ -1691,6 +1694,10 @@ public static class NexusServiceCollectionExtensions
             if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver curve)
             {
                 AddHydroShift2Curve(services, bulkPanelHub, curve);
+            }
+            if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver screen88Videos)
+            {
+                AddUniversalScreen88Videos(services, bulkPanelHub, screen88Videos);
             }
         }
 
@@ -2199,6 +2206,28 @@ public static class NexusServiceCollectionExtensions
         var store = sp.GetRequiredService<IConfigStore>();
         driver.OfflineModeSource = () => store.Load().Devices.UniversalScreen88.OfflineMode;
         driver.WindowsDisplaySource = () => store.Load().Devices.UniversalScreen88.WindowsDisplay;
+    }
+
+    /// <summary>The Universal Screen 8.8's video library and the player that loops a video or a screen saver on the glass's own decoder.</summary>
+    private static void AddUniversalScreen88Videos(
+        IServiceCollection services,
+        Nexus.Service.Peripherals.BulkPanels.BulkPanelHub hub,
+        Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver driver)
+    {
+        services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Media>();
+        services.AddSingleton(sp =>
+        {
+            var player = new Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player(
+                hub, driver,
+                sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Media>(),
+                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
+                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>(),
+                lockSleeping: id => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.IsLockDark(id) == true);
+            sp.GetService<Nexus.Service.Lighting.LcdLockState>()?.Changed += _ => player.Wake();
+            player.GlassOwnerChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
+            return player;
+        });
+        services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player>());
     }
 
     /// <summary>The HydroShift II's pump, fans, coolant probe and ring, which ride its LCD's bulk pipe.</summary>

@@ -14,7 +14,7 @@ namespace Nexus.Service.Peripherals.BulkPanels;
 /// the bundled OpenRGB drives. In its own Windows display mode (L-Connect's Secondary Screen,
 /// 1A86:AD21) the glass is a USB monitor and this driver never sees it.
 /// </summary>
-public sealed class UniversalScreen88Driver : IBulkPanelDriver
+public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDriver
 {
     public const string Id = "lianli-screen88";
 
@@ -36,6 +36,7 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
     private volatile bool _portrait;
     private volatile bool _halfTurn;
     private volatile bool _handshakeWanted;
+    private volatile bool _videoOwnsGlass;
     private volatile bool _retired;
     private volatile bool _sessionUp;
     private bool _writeFailureLogged;
@@ -177,6 +178,10 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
 
     public bool SendFrame(IBulkUsbPipe pipe, IHidDevice? hid, ReadOnlySpan<byte> bgra)
     {
+        if (VideoOwnsGlass)
+        {
+            return true;
+        }
         if (_jpeg is null)
         {
             return false;
@@ -232,8 +237,58 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
     }
 
     /// <summary>The glass takes half the percent (L-Connect sends 50 for 100%).</summary>
-    public bool SetBrightness(IBulkUsbPipe pipe, IHidDevice? hid, int percent) =>
+    public bool SetBrightness(IBulkUsbPipe pipe, IHidDevice? hid, int percent)
+    {
+        Brightness = Math.Clamp(percent, 0, 100);
+        return SetBacklight(pipe, Brightness);
+    }
+
+    /// <summary>The backlight percent last set, restored after a screen saver dimmed it.</summary>
+    public int Brightness { get; private set; } = 100;
+
+    /// <summary>Sets the backlight without changing the remembered <see cref="Brightness"/>.</summary>
+    public bool SetBacklight(IBulkUsbPipe pipe, int percent) =>
         Command(pipe, UniversalScreen88Protocol.CommandBrightness, stackalloc byte[] { (byte)(Math.Clamp(percent, 0, 100) / 2) });
+
+    /// <summary>While set, the glass plays a video on its own decoder and streamed frames are dropped.</summary>
+    public bool VideoOwnsGlass { get => _videoOwnsGlass; set => _videoOwnsGlass = value; }
+
+    /// <summary>This glass has no resume handshake of its own; the connection worker remakes a lost session.</summary>
+    public bool ResumePending => false;
+
+    /// <summary>L-Connect's video start (lcd207 PlayH264): the decoder stopped, the clock face down, the rate set. The chunk size is fixed.</summary>
+    public int BeginVideo(IBulkUsbPipe pipe, int frameRate)
+    {
+        Command(pipe, UniversalScreen88Protocol.CommandStopPlay, ReadOnlySpan<byte>.Empty);
+        Command(pipe, UniversalScreen88Protocol.CommandStopClock, stackalloc byte[] { 0 });
+        return Command(pipe, UniversalScreen88Protocol.CommandFrameRate, stackalloc byte[] { (byte)frameRate })
+            ? UniversalScreen88Protocol.H264Block
+            : 0;
+    }
+
+    /// <summary>Queues one chunk of video; returns the blocks the glass now holds, or null when it did not answer. This glass takes no session tick.</summary>
+    public int? SendVideoChunk(IBulkUsbPipe pipe, ReadOnlySpan<byte> chunk, bool last, uint sessionTick)
+    {
+        var reply = Exchange(pipe, UniversalScreen88Protocol.CommandStartPlay,
+            UniversalScreen88Protocol.EncodeVideoChunk(chunk, last, NextTimestamp()));
+        return reply is null ? null : UniversalScreen88Protocol.DecodeBufferedBlocks(reply);
+    }
+
+    public int? QueryVideoBuffer(IBulkUsbPipe pipe)
+    {
+        var reply = Exchange(pipe, UniversalScreen88Protocol.CommandQueryBlock, UniversalScreen88Protocol.EncodeCommand(
+            UniversalScreen88Protocol.CommandQueryBlock, ReadOnlySpan<byte>.Empty, NextTimestamp()));
+        return reply is null ? null : UniversalScreen88Protocol.DecodeBufferedBlocks(reply);
+    }
+
+    /// <summary>Stops a video and readies the glass for pushed frames again: the decoder and clock face down, the overlay layer emptied as at connect.</summary>
+    public void EndVideo(IBulkUsbPipe pipe)
+    {
+        Command(pipe, UniversalScreen88Protocol.CommandStopPlay, ReadOnlySpan<byte>.Empty);
+        Command(pipe, UniversalScreen88Protocol.CommandStopClock, stackalloc byte[] { 0 });
+        Exchange(pipe, UniversalScreen88Protocol.CommandPushPng, UniversalScreen88Protocol.EncodeImage(
+            UniversalScreen88Protocol.CommandPushPng, UniversalScreen88Protocol.EmptyOverlayPng(), NextTimestamp()));
+    }
 
     /// <summary>
     /// Hands the glass back to its own boot screen, which only a reboot brings back; it would

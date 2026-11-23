@@ -54,6 +54,50 @@ public static class UniversalScreen88Protocol
     public const byte CommandPushPng = 0x66;
     public const byte CommandStopPlay = 0x7B;
 
+    /// <summary>Tells the decoder the frame rate of the video that follows (lcd207 SetFrameRate).</summary>
+    public const byte CommandFrameRate = 0x0F;
+
+    /// <summary>One chunk of an H.264 stream for the glass's own decoder; the reply's [8] is the blocks it holds.</summary>
+    public const byte CommandStartPlay = 0x79;
+
+    /// <summary>Asks how many video blocks the decoder still holds, in the reply's [8].</summary>
+    public const byte CommandQueryBlock = 0x7A;
+
+    /// <summary>L-Connect's fixed video chunk size for this glass (lcd207 WinUsb.PlayH264).</summary>
+    public const int H264Block = 202752;
+
+    /// <summary>A video chunk: StartPlay with the chunk length big-endian at params[0..4] and the last-chunk flag at [4], then the chunk, as one transfer.</summary>
+    public static byte[] EncodeVideoChunk(ReadOnlySpan<byte> chunk, bool last, uint timestampMs)
+    {
+        Span<byte> parameters = stackalloc byte[5];
+        parameters[0] = (byte)(chunk.Length >> 24);
+        parameters[1] = (byte)(chunk.Length >> 16);
+        parameters[2] = (byte)(chunk.Length >> 8);
+        parameters[3] = (byte)chunk.Length;
+        parameters[4] = (byte)(last ? 1 : 0);
+        var header = EncodeCommand(CommandStartPlay, parameters, timestampMs);
+        var packet = new byte[header.Length + chunk.Length];
+        header.CopyTo(packet, 0);
+        chunk.CopyTo(packet.AsSpan(header.Length));
+        return packet;
+    }
+
+    /// <summary>
+    /// The ffmpeg filter that lays a clip into the 480x1920 framebuffer for a mount given as the panel
+    /// record's rotation: landscape (0) a quarter turn clockwise like pushed frames, 180 the other way,
+    /// portrait 90 untouched and 270 a half turn. Mirror flips the clip before it is turned.
+    /// </summary>
+    public static string VideoMountFilter(int rotation, bool mirror) => (((rotation % 360) + 360) % 360) switch
+    {
+        90 => $"scale={Width}:{Height}:flags=lanczos{(mirror ? ",hflip" : "")}",
+        270 => $"scale={Width}:{Height}:flags=lanczos,{(mirror ? "vflip" : "hflip,vflip")}",
+        180 => $"scale={Height}:{Width}:flags=lanczos,{(mirror ? "hflip," : "")}transpose=2",
+        _ => $"scale={Height}:{Width}:flags=lanczos,{(mirror ? "hflip," : "")}transpose=1",
+    };
+
+    /// <summary>The blocks the decoder holds, from a StartPlay or QueryBlock reply.</summary>
+    public static int DecodeBufferedBlocks(ReadOnlySpan<byte> reply) => reply.Length > 8 ? reply[8] : 0;
+
     /// <summary>
     /// Moves the glass to its own Windows display mode (the "LIANLI USB Secondary Display", 1A86:AD21),
     /// answered with the command byte; L-Connect reboots the glass right after it.
