@@ -108,9 +108,10 @@ public class DesktopModeExitTests
     };
 
     [Fact]
-    public void The_table_holds_the_curved_pair_only()
+    public void The_table_holds_the_curved_pair_and_the_universal_screen()
     {
-        var row = Assert.Single(DesktopModeTable.Rows);
+        Assert.Equal(new[] { DesktopModeTable.Curved, DesktopModeTable.Screen88 }, DesktopModeTable.Rows);
+        var row = DesktopModeTable.Curved;
         Assert.Equal((0x1A86, 0xAD23), (row.DesktopVendorId, row.DesktopProductId));
         Assert.Equal((0x1CBE, 0xA068), (row.NormalVendorId, row.NormalProductId));
         Assert.Equal((0x0416, 0x8051), (row.CompanionVendorId, row.CompanionProductId));

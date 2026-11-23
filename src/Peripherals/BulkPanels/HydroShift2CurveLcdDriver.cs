@@ -13,7 +13,7 @@ namespace Nexus.Service.Peripherals.BulkPanels;
 /// The HydroShift II OLED Curved glass. Its pump, LEDs and head motors sit on a separate
 /// USB function that <see cref="HydroShift2CurveBoard"/> drives.
 /// </summary>
-public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver
+public sealed class HydroShift2CurveLcdDriver : IBulkPanelDriver, IDecoderVideoDriver
 {
     public const string Id = "lianli-hydroshift2-curve";
 

@@ -10,13 +10,23 @@ using Nexus.Service.Platform;
 
 namespace Nexus.Service.Peripherals.BulkPanels;
 
+/// <summary>What a glass with its own decoder is set to show: the Nexus panel or a library video, and the screen saver.</summary>
+public sealed record DecoderScreenSettings(string ScreenMode, string? Video, int ScreenSaverMinutes, string? ScreenSaverVideo, int ScreenSaverBrightness)
+{
+    public const string ScreenNexus = "nexus";
+    public const string ScreenVideo = "video";
+}
+
+/// <summary>A glass mount as the panel record gives it, which library videos are encoded to match.</summary>
+public readonly record struct DecoderVideoMount(int Rotation, bool Mirror);
+
 /// <summary>
-/// Plays library videos on the HydroShift II OLED Curved's own decoder: looped in video
+/// Plays library videos on a glass's own decoder (<see cref="IDecoderVideoDriver"/>): looped in video
 /// mode, once per interval as a screen saver. While a video plays it owns the glass, so the
 /// streamed panel is withheld and its frames dropped; afterwards the glass is readied for
 /// frames again.
 /// </summary>
-public sealed class HydroShift2CurvePlayer : BackgroundService
+public class DecoderVideoPlayer : BackgroundService
 {
     private const int TickMs = 250;
     private const int BufferPollMs = 50;
@@ -27,8 +37,13 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
     public const int FrameRate = 30;
 
     private readonly BulkPanelHub _hub;
-    private readonly HydroShift2CurveLcdDriver _driver;
-    private readonly HydroShift2CurveMedia _media;
+    private const int BufferHigh = HydroShift2CurveProtocol.H264BufferHigh;
+    private const int BufferLow = HydroShift2CurveProtocol.H264BufferLow;
+
+    private readonly IDecoderVideoDriver _driver;
+    private readonly DecoderVideoMedia _media;
+    private readonly Func<NexusSettings, DecoderScreenSettings> _settings;
+    private readonly string _recordFamily;
     private readonly IConfigStore _store;
     private readonly PanelDeviceRegistry _registry;
     private readonly SemaphoreSlim _wake = new(0, 1);
@@ -44,10 +59,14 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
     private long _retryAt;
     private long _wokenAt;
 
-    public HydroShift2CurvePlayer(
-        BulkPanelHub hub, HydroShift2CurveLcdDriver driver, HydroShift2CurveMedia media, IConfigStore store, PanelDeviceRegistry registry,
-        Func<string, bool>? lockSleeping = null)
+    /// <param name="settings">The glass's screen settings from the stored settings.</param>
+    /// <param name="recordFamily">The panel record family the glass streams under.</param>
+    public DecoderVideoPlayer(
+        BulkPanelHub hub, IDecoderVideoDriver driver, DecoderVideoMedia media, IConfigStore store, PanelDeviceRegistry registry,
+        Func<NexusSettings, DecoderScreenSettings> settings, string recordFamily, Func<string, bool>? lockSleeping = null)
     {
+        _settings = settings;
+        _recordFamily = recordFamily;
         _lockSleeping = lockSleeping;
         _hub = hub;
         _driver = driver;
@@ -84,7 +103,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
     {
         if (!_hub.Exchange(pipe => _driver.ApplyOfflineMode(pipe, on), false))
         {
-            ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] offline mode {(on ? "on" : "off")} not applied now; sent at the next connect");
+            ServiceLog.Warn($"[{_driver.HandlerId}] offline mode {(on ? "on" : "off")} not applied now; sent at the next connect");
         }
     }
 
@@ -99,17 +118,20 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
         }
     }
 
-    /// <summary>How the head is mounted, from its panel record; library videos are encoded to match.</summary>
-    public (bool Flip180, bool Mirror) Mount() => MountOf(Record());
+    /// <summary>How the glass is mounted, from its panel record; library videos are encoded to match.</summary>
+    public DecoderVideoMount VideoMount() => VideoMountOf(Record());
 
-    internal static (bool Flip180, bool Mirror) MountOf(PanelDeviceRecord? record) =>
-        record is null ? (false, false) : (record.Rotation == 180, record.Mirror == true);
+    private DecoderVideoMount VideoMountOf(PanelDeviceRecord? record) =>
+        record is null ? default : new DecoderVideoMount(RotationOf(record), record.Mirror == true);
 
-    private PanelDeviceRecord? Record()
+    /// <summary>The rotation the glass's videos are encoded for; a glass that only flips maps every other rotation to 0.</summary>
+    protected virtual int RotationOf(PanelDeviceRecord record) => (((record.Rotation ?? 0) % 360) + 360) % 360;
+
+    protected PanelDeviceRecord? Record()
     {
         foreach (var record in _registry.List())
         {
-            if (record.Capabilities?.Family == HydroShift2CurveLcdDriver.Id)
+            if (record.Capabilities?.Family == _recordFamily)
             {
                 return record;
             }
@@ -134,7 +156,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             }
             catch (Exception ex)
             {
-                ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] player tick failed: {ex.Message}");
+                ServiceLog.Warn($"[{_driver.HandlerId}] player tick failed: {ex.Message}");
                 Release();
                 BackOff(tickStartedAt);
             }
@@ -153,7 +175,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
 
     private async Task TickAsync(CancellationToken ct)
     {
-        var settings = _store.Load().Devices.HydroShift2Curve;
+        var settings = _settings(_store.Load());
         if (!_hub.IsConnected)
         {
             _connected = false;
@@ -182,10 +204,10 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             // The streamed panel holds the backlight at zero; a video would only run unseen.
             return;
         }
-        if (settings.ScreenMode == HydroShift2CurveSettings.ScreenVideo && settings.Video is { } video && _media.Exists(video))
+        if (settings.ScreenMode == DecoderScreenSettings.ScreenVideo && settings.Video is { } video && _media.Exists(video))
         {
             await PlayAsync(video, loop: true, saverBacklight: null, record,
-                s => s.ScreenMode == HydroShift2CurveSettings.ScreenVideo && s.Video == video, ct).ConfigureAwait(false);
+                s => s.ScreenMode == DecoderScreenSettings.ScreenVideo && s.Video == video, ct).ConfigureAwait(false);
             return;
         }
         if (_saverMinutes > 0 && Environment.TickCount64 >= _nextSaverAt)
@@ -195,20 +217,20 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             if (settings.ScreenSaverVideo is { } saver && _media.Exists(saver) && record?.SecondaryMonitor != true)
             {
                 await PlayAsync(saver, loop: false, saverBacklight: settings.ScreenSaverBrightness, record,
-                    s => s.ScreenMode == HydroShift2CurveSettings.ScreenNexus && s.ScreenSaverMinutes > 0 && s.ScreenSaverVideo == saver, ct).ConfigureAwait(false);
+                    s => s.ScreenMode == DecoderScreenSettings.ScreenNexus && s.ScreenSaverMinutes > 0 && s.ScreenSaverVideo == saver, ct).ConfigureAwait(false);
                 ScheduleSaver(_saverMinutes, force: true);
             }
         }
     }
 
     /// <summary>Whether the play should go on; settings that act during a play apply here.</summary>
-    private bool StillWanted(Func<HydroShift2CurveSettings, bool> settingsAllow, string? recordId, (bool, bool) mount)
+    private bool StillWanted(Func<DecoderScreenSettings, bool> settingsAllow, string? recordId, DecoderVideoMount mount)
     {
         if (!_hub.IsConnected)
         {
             return false;
         }
-        var settings = _store.Load().Devices.HydroShift2Curve;
+        var settings = _settings(_store.Load());
         // A display that rebooted in sleep lost its decoder; the play starts over after the resume handshake.
         if (!settingsAllow(settings) || LockSleeping(recordId) || _driver.ResumePending)
         {
@@ -219,7 +241,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             _saverBacklight = settings.ScreenSaverBrightness;
             _hub.Exchange(pipe => _driver.SetBacklight(pipe, settings.ScreenSaverBrightness), false);
         }
-        return recordId is null || MountOf(_registry.Get(recordId)) == mount;
+        return recordId is null || VideoMountOf(_registry.Get(recordId)) == mount;
     }
 
     private bool LockSleeping(string? recordId) => recordId is not null && _lockSleeping?.Invoke(recordId) == true;
@@ -235,13 +257,13 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
     }
 
     private async Task PlayAsync(
-        string name, bool loop, int? saverBacklight, PanelDeviceRecord? record, Func<HydroShift2CurveSettings, bool> settingsAllow, CancellationToken ct)
+        string name, bool loop, int? saverBacklight, PanelDeviceRecord? record, Func<DecoderScreenSettings, bool> settingsAllow, CancellationToken ct)
     {
-        var mount = MountOf(record);
+        var mount = VideoMountOf(record);
         bool StillWanted() => this.StillWanted(settingsAllow, record?.Id, mount);
         var attemptStartedAt = Environment.TickCount64;
 
-        var path = await _media.EnsureVariantAsync(name, mount.Flip180, mount.Mirror, ct).ConfigureAwait(false);
+        var path = await _media.EnsureVariantAsync(name, mount.Rotation, mount.Mirror, ct).ConfigureAwait(false);
         if (path is null)
         {
             BackOff(attemptStartedAt);
@@ -258,7 +280,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
         _ownsGlass = true;
         _playing = name;
         RaiseGlassOwnerChanged();
-        ServiceLog.Info($"[{HydroShift2CurveLcdDriver.Id}] playing '{name}'{(loop ? " in a loop" : " once")}");
+        ServiceLog.Info($"[{_driver.HandlerId}] playing '{name}'{(loop ? " in a loop" : " once")}");
         bool accepted = false;
         bool refused = false;
         try
@@ -296,9 +318,9 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
                     var chunk = new ReadOnlyMemory<byte>(buffer, 0, read);
                     var buffered = _hub.Exchange(pipe => _driver.SendVideoChunk(pipe, chunk.Span, last, session), (int?)null);
                     // L-Connect's flow control: past a few queued blocks, poll until the decoder drains.
-                    if (buffered > HydroShift2CurveProtocol.H264BufferHigh)
+                    if (buffered > BufferHigh)
                     {
-                        while (buffered > HydroShift2CurveProtocol.H264BufferLow && StillWanted())
+                        while (buffered > BufferLow && StillWanted())
                         {
                             await Task.Delay(BufferPollMs, ct).ConfigureAwait(false);
                             buffered = _hub.Exchange(pipe => _driver.QueryVideoBuffer(pipe), (int?)null);
@@ -328,7 +350,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
             Release();
             if (refused)
             {
-                ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] the glass took none of '{name}'; retrying in {RetryAfterFailMs / 1000} s");
+                ServiceLog.Warn($"[{_driver.HandlerId}] the glass took none of '{name}'; retrying in {RetryAfterFailMs / 1000} s");
                 BackOff(attemptStartedAt);
             }
         }
@@ -360,7 +382,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
         _ownsGlass = false;
         _playing = null;
         Volatile.Read(ref _stopped).TrySetResult();
-        ServiceLog.Info($"[{HydroShift2CurveLcdDriver.Id}] video stopped, panel back on the glass");
+        ServiceLog.Info($"[{_driver.HandlerId}] video stopped, panel back on the glass");
         RaiseGlassOwnerChanged();
     }
 
@@ -379,7 +401,7 @@ public sealed class HydroShift2CurvePlayer : BackgroundService
         }
         catch (Exception ex)
         {
-            ServiceLog.Warn($"[{HydroShift2CurveLcdDriver.Id}] glass owner subscriber failed: {ex.Message}");
+            ServiceLog.Warn($"[{_driver.HandlerId}] glass owner subscriber failed: {ex.Message}");
         }
     }
 }

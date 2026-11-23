@@ -11,9 +11,10 @@ namespace Nexus.Service.Peripherals.BulkPanels;
 /// <summary>
 /// The Lian Li Universal Screen 8.8 glass, run as a full widget panel: 1920x480 when mounted
 /// landscape, 480x1920 portrait. Its 60-LED bezel is a separate USB function (0416:8050) that
-/// the bundled OpenRGB drives.
+/// the bundled OpenRGB drives. In its own Windows display mode (L-Connect's Secondary Screen,
+/// 1A86:AD21) the glass is a USB monitor and this driver never sees it.
 /// </summary>
-public sealed class UniversalScreen88Driver : IBulkPanelDriver
+public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDriver
 {
     public const string Id = "lianli-screen88";
 
@@ -31,7 +32,11 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
     private BgraJpegEncoder? _jpeg;
     private byte[] _native = Array.Empty<byte>();
     private Func<bool> _wantsPortrait = () => false;
+    private Func<bool> _wantsHalfTurn = () => false;
     private volatile bool _portrait;
+    private volatile bool _halfTurn;
+    private volatile bool _handshakeWanted;
+    private volatile bool _videoOwnsGlass;
     private volatile bool _retired;
     private volatile bool _sessionUp;
     private bool _writeFailureLogged;
@@ -59,11 +64,33 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
     /// <summary>Firmware string read at connect, or null before it.</summary>
     public string? Firmware { get; private set; }
 
-    /// <summary>The mounting the session must run at differs from the one it negotiated.</summary>
-    public bool GeometryStale => _sessionUp && _wantsPortrait() != _portrait;
+    /// <summary>
+    /// The mounting the session must run at differs from the one it negotiated, or a setting the handshake
+    /// sends (Offline Mode, the Windows display switch) changed.
+    /// </summary>
+    public bool GeometryStale => _sessionUp && (_handshakeWanted || _wantsPortrait() != _portrait || _wantsHalfTurn() != _halfTurn);
 
     /// <summary>Reads the panel record's portrait setting at each handshake.</summary>
     public void BindPortrait(Func<bool> source) => _wantsPortrait = source;
+
+    /// <summary>Reads whether the panel record turns the glass a half turn, which the firmware's own screens follow.</summary>
+    public void BindHalfTurn(Func<bool> source) => _wantsHalfTurn = source;
+
+    /// <summary>The user's Offline Mode, or null while never set in Nexus (the glass's own flag is then left as found).</summary>
+    public Func<bool?>? OfflineModeSource { get; set; }
+
+    /// <summary>
+    /// The user's choice for the glass's own Windows display mode: true moves a glass found in panel mode
+    /// into it (as L-Connect's Secondary Screen toggle), false or null leaves it in panel mode. Coming back
+    /// from that mode is <see cref="DesktopModeExit"/>'s job, and only when the user asked for it.
+    /// </summary>
+    public Func<bool?>? WindowsDisplaySource { get; set; }
+
+    /// <summary>The glass was last moved to its Windows display mode by this driver.</summary>
+    public bool SwitchedToWindowsDisplay { get; private set; }
+
+    /// <summary>Asks the worker to run the handshake again on the open pipe, so a changed setting goes out.</summary>
+    public void RequestHandshake() => _handshakeWanted = true;
 
     /// <summary>Set at shutdown once the glass is let go: no reconnect may take it back.</summary>
     public void Retire() => _retired = true;
@@ -99,13 +126,38 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
             return null;
         }
         Firmware = UniversalScreen88Protocol.DecodeVersion(version);
+        _handshakeWanted = false;
+
+        if (WindowsDisplaySource?.Invoke() == true)
+        {
+            // L-Connect's SetDesktopMode: StopPlay, SwitchToDesktop, then a reboot into the USB display identity.
+            Command(pipe, UniversalScreen88Protocol.CommandStopPlay, ReadOnlySpan<byte>.Empty);
+            var switched = Command(pipe, UniversalScreen88Protocol.CommandSwitchToDesktop, ReadOnlySpan<byte>.Empty);
+            if (switched)
+            {
+                pipe.Write(UniversalScreen88Protocol.EncodeCommand(
+                    UniversalScreen88Protocol.CommandReboot, ReadOnlySpan<byte>.Empty, NextTimestamp()));
+                SwitchedToWindowsDisplay = true;
+                ServiceLog.Info($"[{HandlerId}] moved to its Windows display mode, as set; rebooting into it");
+                return null;
+            }
+            ServiceLog.Warn($"[{HandlerId}] the glass refused the switch to its Windows display mode; staying a panel");
+        }
+        SwitchedToWindowsDisplay = false;
 
         var portrait = _wantsPortrait();
+        var halfTurn = _wantsHalfTurn();
         Command(pipe, UniversalScreen88Protocol.CommandStopPlay, ReadOnlySpan<byte>.Empty);
         Command(pipe, UniversalScreen88Protocol.CommandRotate, stackalloc byte[]
         {
-            portrait ? UniversalScreen88Protocol.RotatePortrait : UniversalScreen88Protocol.RotateLandscape,
+            UniversalScreen88Protocol.RotateValue(portrait, halfTurn, UniversalScreen88Protocol.FirmwareVersion(Firmware)),
         });
+        // L-Connect re-sends its Offline Mode on connect; Nexus does so only for a mode the user set here,
+        // and the sync-only SetClock below leaves the flag alone.
+        if (OfflineModeSource?.Invoke() is { } offline)
+        {
+            SetOfflineMode(pipe, offline);
+        }
         Exchange(pipe, UniversalScreen88Protocol.CommandSetClock,
             UniversalScreen88Protocol.EncodeSyncClock(DateTime.Now, NextTimestamp()));
         Command(pipe, UniversalScreen88Protocol.CommandStopClock, stackalloc byte[] { 0 });
@@ -116,6 +168,7 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
         _jpeg = new BgraJpegEncoder(UniversalScreen88Protocol.Width, UniversalScreen88Protocol.Height, JpegQuality);
         _native = portrait ? Array.Empty<byte>() : new byte[UniversalScreen88Protocol.Width * UniversalScreen88Protocol.Height * 4];
         _portrait = portrait;
+        _halfTurn = halfTurn;
         ServiceLog.Info($"[{HandlerId}] firmware {Firmware ?? "unknown"}, {(portrait ? "portrait" : "landscape")}");
         _sessionUp = true;
         return portrait
@@ -125,6 +178,10 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
 
     public bool SendFrame(IBulkUsbPipe pipe, IHidDevice? hid, ReadOnlySpan<byte> bgra)
     {
+        if (VideoOwnsGlass)
+        {
+            return true;
+        }
         if (_jpeg is null)
         {
             return false;
@@ -161,9 +218,77 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
         return true;
     }
 
+    /// <summary>Sets the firmware flag that shows the date and time while the PC is off, as L-Connect's toggle does.</summary>
+    public bool SetOfflineMode(IBulkUsbPipe pipe, bool on) =>
+        Exchange(pipe, UniversalScreen88Protocol.CommandSetClock, UniversalScreen88Protocol.EncodeSetClock(
+            DateTime.Now, NextTimestamp(), on ? UniversalScreen88Protocol.ClockOfflineOn : UniversalScreen88Protocol.ClockOfflineOff)) is not null;
+
+    /// <summary>
+    /// A live toggle: the mode, then the sync-only SetClock and StopClock the connect sequence ends with,
+    /// so the firmware clock face can never come up over Nexus's output.
+    /// </summary>
+    public bool ApplyOfflineMode(IBulkUsbPipe pipe, bool on)
+    {
+        bool sent = SetOfflineMode(pipe, on);
+        Exchange(pipe, UniversalScreen88Protocol.CommandSetClock,
+            UniversalScreen88Protocol.EncodeSyncClock(DateTime.Now, NextTimestamp()));
+        Command(pipe, UniversalScreen88Protocol.CommandStopClock, stackalloc byte[] { 0 });
+        return sent;
+    }
+
     /// <summary>The glass takes half the percent (L-Connect sends 50 for 100%).</summary>
-    public bool SetBrightness(IBulkUsbPipe pipe, IHidDevice? hid, int percent) =>
+    public bool SetBrightness(IBulkUsbPipe pipe, IHidDevice? hid, int percent)
+    {
+        Brightness = Math.Clamp(percent, 0, 100);
+        return SetBacklight(pipe, Brightness);
+    }
+
+    /// <summary>The backlight percent last set, restored after a screen saver dimmed it.</summary>
+    public int Brightness { get; private set; } = 100;
+
+    /// <summary>Sets the backlight without changing the remembered <see cref="Brightness"/>.</summary>
+    public bool SetBacklight(IBulkUsbPipe pipe, int percent) =>
         Command(pipe, UniversalScreen88Protocol.CommandBrightness, stackalloc byte[] { (byte)(Math.Clamp(percent, 0, 100) / 2) });
+
+    /// <summary>While set, the glass plays a video on its own decoder and streamed frames are dropped.</summary>
+    public bool VideoOwnsGlass { get => _videoOwnsGlass; set => _videoOwnsGlass = value; }
+
+    /// <summary>This glass has no resume handshake of its own; the connection worker remakes a lost session.</summary>
+    public bool ResumePending => false;
+
+    /// <summary>L-Connect's video start (lcd207 PlayH264): the decoder stopped, the clock face down, the rate set. The chunk size is fixed.</summary>
+    public int BeginVideo(IBulkUsbPipe pipe, int frameRate)
+    {
+        Command(pipe, UniversalScreen88Protocol.CommandStopPlay, ReadOnlySpan<byte>.Empty);
+        Command(pipe, UniversalScreen88Protocol.CommandStopClock, stackalloc byte[] { 0 });
+        return Command(pipe, UniversalScreen88Protocol.CommandFrameRate, stackalloc byte[] { (byte)frameRate })
+            ? UniversalScreen88Protocol.H264Block
+            : 0;
+    }
+
+    /// <summary>Queues one chunk of video; returns the blocks the glass now holds, or null when it did not answer. This glass takes no session tick.</summary>
+    public int? SendVideoChunk(IBulkUsbPipe pipe, ReadOnlySpan<byte> chunk, bool last, uint sessionTick)
+    {
+        var reply = Exchange(pipe, UniversalScreen88Protocol.CommandStartPlay,
+            UniversalScreen88Protocol.EncodeVideoChunk(chunk, last, NextTimestamp()));
+        return reply is null ? null : UniversalScreen88Protocol.DecodeBufferedBlocks(reply);
+    }
+
+    public int? QueryVideoBuffer(IBulkUsbPipe pipe)
+    {
+        var reply = Exchange(pipe, UniversalScreen88Protocol.CommandQueryBlock, UniversalScreen88Protocol.EncodeCommand(
+            UniversalScreen88Protocol.CommandQueryBlock, ReadOnlySpan<byte>.Empty, NextTimestamp()));
+        return reply is null ? null : UniversalScreen88Protocol.DecodeBufferedBlocks(reply);
+    }
+
+    /// <summary>Stops a video and readies the glass for pushed frames again: the decoder and clock face down, the overlay layer emptied as at connect.</summary>
+    public void EndVideo(IBulkUsbPipe pipe)
+    {
+        Command(pipe, UniversalScreen88Protocol.CommandStopPlay, ReadOnlySpan<byte>.Empty);
+        Command(pipe, UniversalScreen88Protocol.CommandStopClock, stackalloc byte[] { 0 });
+        Exchange(pipe, UniversalScreen88Protocol.CommandPushPng, UniversalScreen88Protocol.EncodeImage(
+            UniversalScreen88Protocol.CommandPushPng, UniversalScreen88Protocol.EmptyOverlayPng(), NextTimestamp()));
+    }
 
     /// <summary>
     /// Hands the glass back to its own boot screen, which only a reboot brings back; it would
@@ -178,7 +303,12 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver
         }
         pipe.Write(UniversalScreen88Protocol.EncodeCommand(
             UniversalScreen88Protocol.CommandStopPlay, ReadOnlySpan<byte>.Empty, NextTimestamp()));
-        if (_sessionUp)
+        if (_sessionUp && OfflineModeSource?.Invoke() == true)
+        {
+            // As the Curve: a reboot would reset the glass clock the offline face shows, so the flag goes out instead.
+            pipe.Write(UniversalScreen88Protocol.EncodeSetClock(DateTime.Now, NextTimestamp(), UniversalScreen88Protocol.ClockOfflineOn));
+        }
+        else if (_sessionUp)
         {
             pipe.Write(UniversalScreen88Protocol.EncodeCommand(
                 UniversalScreen88Protocol.CommandReboot, ReadOnlySpan<byte>.Empty, NextTimestamp()));
