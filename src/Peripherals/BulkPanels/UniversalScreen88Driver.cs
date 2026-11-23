@@ -56,6 +56,12 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDri
     public bool SupportsBrightness => true;
     public bool SupportsSecondaryMonitor => true;
     public bool SupportsPortrait => true;
+
+    /// <summary>
+    /// The Rotate values 2 and 3 (the half turns L-Connect sends) flip the pushed picture too, not only the
+    /// firmware's own screens: with the frame also flipped, a unit mounted at 180 showed the same as 0.
+    /// </summary>
+    public bool TurnsHalfItself => true;
     public bool RenegotiateOnRejectedFrames => true;
 
     /// <summary>The glass's real density (1920x480 on an 8.8 in diagonal); the monitor surface's desk-monitor estimate doubles the grid's rows.</summary>
@@ -73,7 +79,7 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDri
     /// <summary>Reads the panel record's portrait setting at each handshake.</summary>
     public void BindPortrait(Func<bool> source) => _wantsPortrait = source;
 
-    /// <summary>Reads whether the panel record turns the glass a half turn, which the firmware's own screens follow.</summary>
+    /// <summary>Reads whether the panel record turns the glass a half turn, which the glass then applies to all it shows.</summary>
     public void BindHalfTurn(Func<bool> source) => _wantsHalfTurn = source;
 
     /// <summary>The user's Offline Mode, or null while never set in Nexus (the glass's own flag is then left as found).</summary>

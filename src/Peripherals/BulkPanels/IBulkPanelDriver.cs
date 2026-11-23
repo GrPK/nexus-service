@@ -111,6 +111,12 @@ public interface IBulkPanelDriver
     /// <summary>The glass mounts either way up; <see cref="Connect"/> reports tall geometry when its record asks for portrait.</summary>
     bool SupportsPortrait => false;
 
+    /// <summary>
+    /// The glass turns its whole picture a half turn itself for a record mounted at 180 or 270 (the driver
+    /// sends it as a firmware setting), so neither the stream nor a clip may turn it again.
+    /// </summary>
+    bool TurnsHalfItself => false;
+
     /// <summary>Physical px/inch of the glass, for panels whose surface estimate is far off; null keeps the estimate.</summary>
     double? Dpi => null;
 

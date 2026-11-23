@@ -77,12 +77,13 @@ public class UniversalScreen88VideoTests
 
     [Theory]
     [InlineData(0, false, "scale=1920:480:flags=lanczos,transpose=1")]
-    [InlineData(180, false, "scale=1920:480:flags=lanczos,transpose=2")]
+    [InlineData(180, false, "scale=1920:480:flags=lanczos,transpose=1")]
     [InlineData(90, false, "scale=480:1920:flags=lanczos")]
-    [InlineData(270, false, "scale=480:1920:flags=lanczos,hflip,vflip")]
+    [InlineData(270, false, "scale=480:1920:flags=lanczos")]
     [InlineData(0, true, "scale=1920:480:flags=lanczos,hflip,transpose=1")]
+    [InlineData(180, true, "scale=1920:480:flags=lanczos,hflip,transpose=1")]
     [InlineData(90, true, "scale=480:1920:flags=lanczos,hflip")]
-    [InlineData(270, true, "scale=480:1920:flags=lanczos,vflip")]
+    [InlineData(270, true, "scale=480:1920:flags=lanczos,hflip")]
     public void Clips_are_laid_into_the_portrait_framebuffer_like_pushed_frames(int rotation, bool mirror, string filter) =>
         Assert.Equal(filter, UniversalScreen88Protocol.VideoMountFilter(rotation, mirror));
 
@@ -94,6 +95,8 @@ public class UniversalScreen88VideoTests
         Assert.Equal(HydroShift2CurveProtocol.MountFilter(true, false), HydroShift2CurveMedia.Profile.MountFilter(180, false));
         Assert.Equal("glass-r90.h264", UniversalScreen88Media.Profile.VariantFile(90, false));
         Assert.Equal("glass-r0-mirror.h264", UniversalScreen88Media.Profile.VariantFile(0, true));
+        Assert.Equal("glass-r0.h264", UniversalScreen88Media.Profile.VariantFile(180, false));
+        Assert.Equal("glass-r90-mirror.h264", UniversalScreen88Media.Profile.VariantFile(270, true));
     }
 
     [Fact]

@@ -90,16 +90,16 @@ public static class UniversalScreen88Protocol
 
     /// <summary>
     /// The ffmpeg filter that lays a clip into the 480x1920 framebuffer for a mount given as the panel
-    /// record's rotation: landscape (0) a quarter turn clockwise like pushed frames, 180 the other way,
-    /// portrait 90 untouched and 270 a half turn. Mirror flips the clip before it is turned.
+    /// record's rotation: landscape (0, 180) a quarter turn clockwise like pushed frames, portrait (90, 270)
+    /// untouched. The glass turns the half itself (the driver's Rotate), so the clip never does. Mirror flips
+    /// the clip before it is turned.
     /// </summary>
-    public static string VideoMountFilter(int rotation, bool mirror) => (((rotation % 360) + 360) % 360) switch
-    {
-        90 => $"scale={Width}:{Height}:flags=lanczos{(mirror ? ",hflip" : "")}",
-        270 => $"scale={Width}:{Height}:flags=lanczos,{(mirror ? "vflip" : "hflip,vflip")}",
-        180 => $"scale={Height}:{Width}:flags=lanczos,{(mirror ? "hflip," : "")}transpose=2",
-        _ => $"scale={Height}:{Width}:flags=lanczos,{(mirror ? "hflip," : "")}transpose=1",
-    };
+    public static string VideoMountFilter(int rotation, bool mirror) => VideoMount(rotation) == 90
+        ? $"scale={Width}:{Height}:flags=lanczos{(mirror ? ",hflip" : "")}"
+        : $"scale={Height}:{Width}:flags=lanczos,{(mirror ? "hflip," : "")}transpose=1";
+
+    /// <summary>The mount a clip is encoded for: 0 landscape or 90 portrait, as the glass turns the half itself.</summary>
+    public static int VideoMount(int rotation) => (((rotation % 360) + 360) % 360) % 180;
 
     /// <summary>The blocks the decoder holds, from a StartPlay or QueryBlock reply.</summary>
     public static int DecodeBufferedBlocks(ReadOnlySpan<byte> reply) => reply.Length > 8 ? reply[8] : 0;

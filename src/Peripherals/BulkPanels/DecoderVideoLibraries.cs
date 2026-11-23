@@ -29,7 +29,7 @@ public sealed class UniversalScreen88Media : DecoderVideoMedia
         PreviewHeight: UniversalScreen88Protocol.Width / 2,
         ThumbScale: "320:80",
         MountFilter: UniversalScreen88Protocol.VideoMountFilter,
-        VariantFile: (rotation, mirror) => $"glass-r{rotation}{(mirror ? "-mirror" : "")}.h264");
+        VariantFile: (rotation, mirror) => $"glass-r{UniversalScreen88Protocol.VideoMount(rotation)}{(mirror ? "-mirror" : "")}.h264");
 
     public UniversalScreen88Media(string? root = null)
         : base(Profile, root)
