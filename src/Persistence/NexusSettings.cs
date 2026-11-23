@@ -1706,6 +1706,7 @@ public sealed class DevicesSettings
     public AsiahorseUmbraSettings AsiahorseUmbra { get; set; } = new();
     public HydroShift2LightingSettings HydroShift2Lighting { get; set; } = new();
     public HydroShift2CurveSettings HydroShift2Curve { get; set; } = new();
+    public UniversalScreen88Settings UniversalScreen88 { get; set; } = new();
     public CorsairSettings Corsair { get; set; } = new();
     public NollieSettings Nollie { get; set; } = new();
     /// <summary>
@@ -2334,6 +2335,20 @@ public sealed class HydroShift2LightingSettings
     public int Brightness { get; set; } = 4;
     /// <summary>"#RRGGBB" palette; missing entries fall back to the effect's defaults.</summary>
     public List<string> Colors { get; set; } = new();
+}
+
+/// <summary>The Universal Screen 8.8 glass's own settings, as L-Connect's Additional page offers them.</summary>
+public sealed class UniversalScreen88Settings
+{
+    /// <summary>The glass's Offline Mode (date and time shown while the PC is off). Null until set in Nexus, so a flag set in L-Connect is left alone.</summary>
+    public bool? OfflineMode { get; set; }
+
+    /// <summary>
+    /// The glass's own Windows display mode (L-Connect's Secondary Screen): true moves a glass found in panel
+    /// mode into it, false brings one found in it back as a panel. Null, the default, leaves the glass as found:
+    /// Nexus never changes the mode on its own.
+    /// </summary>
+    public bool? WindowsDisplay { get; set; }
 }
 
 /// <summary>The HydroShift II OLED Curved head position Nexus last drove; the motors have no position readback.</summary>

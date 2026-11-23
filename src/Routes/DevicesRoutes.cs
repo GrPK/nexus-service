@@ -40,6 +40,7 @@ public static partial class DevicesRoutes
         MapDeepCoolMystiqueMediaEndpoints(app);
         MapHydroShift2Endpoints(app);
         MapHydroShift2CurveEndpoints(app);
+        MapUniversalScreen88Endpoints(app);
         MapKrakenEndpoints(app);
         MapCorsairEndpoints(app);
         MapCorsairLcdEndpoints(app);

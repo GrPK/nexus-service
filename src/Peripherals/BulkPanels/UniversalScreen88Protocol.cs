@@ -20,6 +20,17 @@ public static class UniversalScreen88Protocol
     public const int VendorId = 0x1CBE;
     public const int ProductId = 0xA088;
 
+    /// <summary>The glass in its own Windows display mode (lcd207 HIDUsb lcd88Hid), which L-Connect brings back with a HID write.</summary>
+    public const int DesktopVendorId = 0x1A86;
+    public const int DesktopProductId = 0xAD21;
+
+    /// <summary>L-Connect writes the exit as HidReport(64): report id 0 plus 64 bytes.</summary>
+    public const int DesktopReportLength = 65;
+
+    /// <summary>The bezel LED board, a USB function of its own beside the glass.</summary>
+    public const int LedBoardVendorId = 0x0416;
+    public const int LedBoardProductId = 0x8050;
+
     /// <summary>Native framebuffer: the glass shows a landscape frame only once it is turned a quarter clockwise into this.</summary>
     public const int Width = 480;
     public const int Height = 1920;
@@ -43,12 +54,62 @@ public static class UniversalScreen88Protocol
     public const byte CommandPushPng = 0x66;
     public const byte CommandStopPlay = 0x7B;
 
+    /// <summary>
+    /// Moves the glass to its own Windows display mode (the "LIANLI USB Secondary Display", 1A86:AD21),
+    /// answered with the command byte; L-Connect reboots the glass right after it.
+    /// </summary>
+    public const byte CommandSwitchToDesktop = 0x96;
+
     /// <summary>Rotate values L-Connect sends on firmware 1.2+. They turn the firmware's own screens only, never a pushed JPEG (camera-checked).</summary>
     public const byte RotatePortrait = 0;
     public const byte RotateLandscape = 1;
 
+    /// <summary>The half-turned values L-Connect adds on firmware 1.2+ (before 1.2 only portrait 0 and 2 exist).</summary>
+    public const byte RotatePortraitHalfTurn = 2;
+    public const byte RotateLandscapeHalfTurn = 3;
+
     /// <summary>SetClock mode that syncs the clock without changing whether the firmware clock face is enabled.</summary>
     private const byte ClockSyncOnly = 2;
+
+    /// <summary>SetClock modes L-Connect's Offline Mode toggle sends: the firmware shows date and time while the PC is off.</summary>
+    public const byte ClockOfflineOn = 1;
+    public const byte ClockOfflineOff = 0;
+
+    /// <summary>The firmware version L-Connect reads from "lianli88_NNNN_BBBB": build BBBB at 18 or more is (BBBB - 8) as major.minor tenths.</summary>
+    public static Version? FirmwareVersion(string? raw)
+    {
+        if (raw is null || raw.Length != 18 || !raw.StartsWith("lianli88_", StringComparison.Ordinal) || raw[13] != '_'
+            || !int.TryParse(raw.AsSpan(9, 4), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _)
+            || !int.TryParse(raw.AsSpan(14, 4), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var build)
+            || build < 18)
+        {
+            return null;
+        }
+        var tenths = build - 8;
+        return new Version(tenths / 10, tenths % 10);
+    }
+
+    /// <summary>
+    /// The Rotate value L-Connect sends for a mounting: on firmware 1.2+ portrait 0/2 and landscape 1/3 (the
+    /// second of each half-turned); before 1.2 only 0 and 2. An unknown firmware is treated as 1.2+.
+    /// </summary>
+    public static byte RotateValue(bool portrait, bool halfTurn, Version? firmware)
+    {
+        if (firmware is not null && firmware < new Version(1, 2))
+        {
+            return halfTurn ? RotatePortraitHalfTurn : RotatePortrait;
+        }
+        return portrait
+            ? (halfTurn ? RotatePortraitHalfTurn : RotatePortrait)
+            : (halfTurn ? RotateLandscapeHalfTurn : RotateLandscape);
+    }
+
+    /// <summary>SetClock with an explicit mode: <see cref="ClockOfflineOn"/> or <see cref="ClockOfflineOff"/>.</summary>
+    public static byte[] EncodeSetClock(DateTime now, uint timestampMs, byte mode) => EncodeCommand(CommandSetClock, new byte[]
+    {
+        (byte)(now.Year >> 8), (byte)now.Year, (byte)now.Month, (byte)now.Day,
+        (byte)now.Hour, (byte)now.Minute, (byte)now.Second, mode,
+    }, timestampMs);
 
     /// <summary>ASCII "slv3tuzx", used as both the DES key and the CBC IV.</summary>
     private static readonly byte[] Key = Encoding.ASCII.GetBytes("slv3tuzx");

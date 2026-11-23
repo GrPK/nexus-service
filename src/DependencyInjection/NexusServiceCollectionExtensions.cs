@@ -2172,6 +2172,7 @@ public static class NexusServiceCollectionExtensions
         var streams = sp.GetRequiredService<Nexus.Service.Panel.Streams.StreamedPanelStore>();
         string? recordId = null;
         var portrait = false;
+        var halfTurn = false;
         driver.BindPortrait(() =>
         {
             try
@@ -2185,6 +2186,7 @@ public static class NexusServiceCollectionExtensions
                     recordId = null;
                 }
                 portrait = record is not null && Nexus.Service.Panel.PanelRotation.IsPortrait(record.Rotation ?? 0);
+                halfTurn = record is not null && (record.Rotation ?? 0) is 180 or 270;
             }
             catch (Exception ex)
             {
@@ -2192,6 +2194,11 @@ public static class NexusServiceCollectionExtensions
             }
             return portrait;
         });
+        // The same read fills both answers; the half turn is asked right after the portrait one in each handshake.
+        driver.BindHalfTurn(() => halfTurn);
+        var store = sp.GetRequiredService<IConfigStore>();
+        driver.OfflineModeSource = () => store.Load().Devices.UniversalScreen88.OfflineMode;
+        driver.WindowsDisplaySource = () => store.Load().Devices.UniversalScreen88.WindowsDisplay;
     }
 
     /// <summary>The HydroShift II's pump, fans, coolant probe and ring, which ride its LCD's bulk pipe.</summary>
@@ -2288,7 +2295,16 @@ public static class NexusServiceCollectionExtensions
                 return gate.IsChosenOn(handler) || gate.HeldForMonitor(handler);
             },
             Nexus.Service.Peripherals.BulkPanels.DesktopModeExit.DescribeParents,
-            exited: _ => driver.RequestReboot()));
+            exited: row =>
+            {
+                if (row.HandlerId == Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver.Id)
+                {
+                    driver.RequestReboot();
+                }
+            },
+            // The Curve always comes back; the 8.8 only when its user asked for it as a panel again.
+            wanted: row => row.HandlerId != Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver.Id
+                || sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>().Load().Devices.UniversalScreen88.WindowsDisplay == false));
         services.AddHostedService<Nexus.Service.Peripherals.BulkPanels.DesktopModeExitWorker>();
         services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveBoard>();
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveBoard>());
