@@ -166,7 +166,7 @@ public class UniversalScreen88ScreenSettingsTests
 
     // ── back from the Windows display mode: only when asked ──
 
-    private const string Path88 = @"\\?\hid#vid_1a86&pid_ad21&mi_02#8&1&0&0000#{4d1e55b2}";
+    private const string Path88 = @"\\?\hid#vid_1a86&pid_ad21&mi_01#8&1&0&0000#{4d1e55b2}";
 
     private static UsbDeviceEntry Usb(int vid, int pid) => new() { VendorId = vid, ProductId = pid };
 
@@ -191,7 +191,7 @@ public class UniversalScreen88ScreenSettingsTests
 
         Assert.Equal(1, rig.Writes);
         Assert.Equal(DesktopModeTable.ExitReport(UniversalScreen88Protocol.DesktopReportLength), rig.LastReport);
-        Assert.Equal(65, rig.LastReport!.Length);
+        Assert.Equal(513, rig.LastReport!.Length);
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public class UniversalScreen88ScreenSettingsTests
     [Fact]
     public async Task An_interface_without_the_report_length_is_refused()
     {
-        var rig = new Rig { Wanted = true, OutputLength = 513 };
+        var rig = new Rig { Wanted = true, OutputLength = 65 };
 
         await rig.Poll();
 
@@ -257,7 +257,7 @@ public class UniversalScreen88ScreenSettingsTests
                         new HidDeviceInfo
                         {
                             VendorId = 0x1A86, ProductId = 0xAD21, Path = Path88, UsagePage = 0xFF00,
-                            InputReportByteLength = 65, OutputReportByteLength = rig.OutputLength,
+                            InputReportByteLength = rig.OutputLength, OutputReportByteLength = rig.OutputLength,
                         },
                     }
                     : Array.Empty<HidDeviceInfo>();

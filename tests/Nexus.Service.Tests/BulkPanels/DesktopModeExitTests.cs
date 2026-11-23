@@ -116,6 +116,9 @@ public class DesktopModeExitTests
         Assert.Equal((0x1CBE, 0xA068), (row.NormalVendorId, row.NormalProductId));
         Assert.Equal((0x0416, 0x8051), (row.CompanionVendorId, row.CompanionProductId));
         Assert.Equal((1, 0xFF00, 513), (row.InterfaceNumber, row.UsagePage, row.ReportLength));
+        var screen = DesktopModeTable.Screen88;
+        Assert.Equal((0x1A86, 0xAD21), (screen.DesktopVendorId, screen.DesktopProductId));
+        Assert.Equal((1, 0xFF00, 513), (screen.InterfaceNumber, screen.UsagePage, screen.ReportLength));
     }
 
     [Fact]

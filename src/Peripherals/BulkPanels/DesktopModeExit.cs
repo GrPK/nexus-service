@@ -38,31 +38,23 @@ public static class DesktopModeTable
         InterfaceNumber: 1, UsagePage: 0xFF00, ReportLength: 513);
 
     /// <summary>
-    /// The Universal Screen 8.8. Its shape comes from L-Connect's own code (the first HID interface of
-    /// 1A86:AD21, a 64-byte report after id 0), not a capture, so only the interface's output length is
-    /// matched. The user keeps the glass as a Windows display unless they ask for it back as a panel, so
-    /// this row is only tried when that is wanted (see the constructor's <c>wanted</c>).
+    /// The Universal Screen 8.8, the same HID shape as the Curved (read off a unit). The user keeps the glass
+    /// as a Windows display unless they ask for it back as a panel, so this row is only tried when that is
+    /// wanted (see the constructor's <c>wanted</c>).
     /// </summary>
     public static readonly DesktopModeRow Screen88 = new(
         UniversalScreen88Driver.Id,
         DesktopVendorId: UniversalScreen88Protocol.DesktopVendorId, DesktopProductId: UniversalScreen88Protocol.DesktopProductId,
         NormalVendorId: UniversalScreen88Protocol.VendorId, NormalProductId: UniversalScreen88Protocol.ProductId,
         CompanionVendorId: UniversalScreen88Protocol.LedBoardVendorId, CompanionProductId: UniversalScreen88Protocol.LedBoardProductId,
-        InterfaceNumber: AnyInterface, UsagePage: AnyUsagePage, ReportLength: UniversalScreen88Protocol.DesktopReportLength);
-
-    /// <summary>A row that does not name its HID interface number.</summary>
-    public const int AnyInterface = -1;
-
-    /// <summary>A row that does not name its usage page; only the output report length is then matched.</summary>
-    public const int AnyUsagePage = 0;
+        InterfaceNumber: UniversalScreen88Protocol.DesktopInterface, UsagePage: UniversalScreen88Protocol.DesktopUsagePage,
+        ReportLength: UniversalScreen88Protocol.DesktopReportLength);
 
     public static IReadOnlyList<DesktopModeRow> Rows { get; } = new[] { Curved, Screen88 };
 
     /// <summary>Whether an interface has the row's HID shape.</summary>
     public static bool Fits(DesktopModeRow row, HidDeviceInfo info) =>
-        row.UsagePage == AnyUsagePage
-            ? info.OutputReportByteLength == row.ReportLength
-            : info.UsagePage == row.UsagePage && info.InputReportByteLength == row.ReportLength && info.OutputReportByteLength == row.ReportLength;
+        info.UsagePage == row.UsagePage && info.InputReportByteLength == row.ReportLength && info.OutputReportByteLength == row.ReportLength;
 
     private static readonly byte[] ExitText = "5f3759df"u8.ToArray();
 
@@ -226,7 +218,7 @@ public sealed class DesktopModeExit
         var normal = _presence.UsbPresent(row.NormalVendorId, row.NormalProductId);
         var board = _presence.UsbPresent(row.CompanionVendorId, row.CompanionProductId);
         var onInterface = _hid.Find(row.DesktopVendorId, row.DesktopProductId)
-            .Where(i => row.InterfaceNumber == DesktopModeTable.AnyInterface || InterfaceOf(i.Path) == row.InterfaceNumber).ToList();
+            .Where(i => InterfaceOf(i.Path) == row.InterfaceNumber).ToList();
         var info = onInterface.FirstOrDefault(i => DesktopModeTable.Fits(row, i));
         string? refusal = normal ? "normal-identity-present"
             : !board ? "board-absent"

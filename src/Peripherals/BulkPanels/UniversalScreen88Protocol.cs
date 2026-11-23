@@ -24,8 +24,14 @@ public static class UniversalScreen88Protocol
     public const int DesktopVendorId = 0x1A86;
     public const int DesktopProductId = 0xAD21;
 
-    /// <summary>L-Connect writes the exit as HidReport(64): report id 0 plus 64 bytes.</summary>
-    public const int DesktopReportLength = 65;
+    /// <summary>
+    /// The HID interface the exit goes to, as a unit in its Windows display mode reports it: interface 1,
+    /// usage page FF00, 513-byte reports both ways (id 0 plus 512), the OLED Curved's shape. L-Connect
+    /// builds a 64-byte report, which its HID library pads to the interface's output length.
+    /// </summary>
+    public const int DesktopInterface = 1;
+    public const int DesktopUsagePage = 0xFF00;
+    public const int DesktopReportLength = 513;
 
     /// <summary>The bezel LED board, a USB function of its own beside the glass.</summary>
     public const int LedBoardVendorId = 0x0416;
