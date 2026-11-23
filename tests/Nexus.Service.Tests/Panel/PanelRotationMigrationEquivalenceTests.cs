@@ -356,18 +356,20 @@ public class PanelRotationMigrationEquivalenceTests : IDisposable
         var newPortrait = PanelRotation.IsPortrait(clone.Rotation ?? 0);
         Assert.Equal(wantPortrait, newPortrait);
 
-        var (oldGeometry, oldFlag, oldPayload) = Strip(wantPortrait, hubOrientation: null, frameFlip: flip == true, frameMirror: mirror == true);
-        var (newGeometry, newFlag, newPayload) = Strip(newPortrait, hubOrientation: Source(clone), frameFlip: false, frameMirror: false);
+        // The glass turns the half itself (its firmware Rotate), so the old frame flip is now the driver's half turn.
+        var (oldGeometry, oldFlag, oldPayload) = Strip(wantPortrait, hubOrientation: null, halfTurn: flip == true, frameMirror: mirror == true);
+        var (newGeometry, newFlag, newPayload) = Strip(newPortrait, hubOrientation: Source(clone), halfTurn: (clone.Rotation ?? 0) >= 180, frameMirror: false);
 
         Assert.Equal(oldGeometry, newGeometry);
         Assert.Equal(oldFlag, newFlag);
         Assert.Equal(oldPayload, newPayload);
     }
 
-    private static ((int W, int H), byte, byte[]) Strip(bool portrait, Func<(int Rotation, bool Mirror)>? hubOrientation, bool frameFlip, bool frameMirror)
+    private static ((int W, int H), byte, byte[]) Strip(bool portrait, Func<(int Rotation, bool Mirror)>? hubOrientation, bool halfTurn, bool frameMirror)
     {
         var driver = new UniversalScreen88Driver();
         driver.BindPortrait(() => portrait);
+        driver.BindHalfTurn(() => halfTurn);
         var pipe = new UniversalScreen88Tests.GlassPipe();
         using var hub = new BulkPanelHub(driver);
         Assert.True(hub.Attach(pipe, null));
@@ -375,9 +377,9 @@ public class PanelRotationMigrationEquivalenceTests : IDisposable
         using var transport = new BulkPanelStreamTransport(hub, "serial");
         if (hubOrientation is not null) { transport.BindOrientation(hubOrientation); }
         var frame = Asymmetric(hub.Width, hub.Height);
-        if (frameFlip || frameMirror)
+        if (frameMirror)
         {
-            frame = OldApply(frame, hub.Width, hub.Height, frameFlip, frameMirror);
+            frame = OldApply(frame, hub.Width, hub.Height, false, frameMirror);
         }
         pipe.Clear();
         transport.Write(frame);

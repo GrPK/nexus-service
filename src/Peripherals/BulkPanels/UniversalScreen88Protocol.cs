@@ -20,6 +20,23 @@ public static class UniversalScreen88Protocol
     public const int VendorId = 0x1CBE;
     public const int ProductId = 0xA088;
 
+    /// <summary>The glass in its own Windows display mode (lcd207 HIDUsb lcd88Hid), which L-Connect brings back with a HID write.</summary>
+    public const int DesktopVendorId = 0x1A86;
+    public const int DesktopProductId = 0xAD21;
+
+    /// <summary>
+    /// The HID interface the exit goes to, as a unit in its Windows display mode reports it: interface 1,
+    /// usage page FF00, 513-byte reports both ways (id 0 plus 512), the OLED Curved's shape. L-Connect
+    /// builds a 64-byte report, which its HID library pads to the interface's output length.
+    /// </summary>
+    public const int DesktopInterface = 1;
+    public const int DesktopUsagePage = 0xFF00;
+    public const int DesktopReportLength = 513;
+
+    /// <summary>The bezel LED board, a USB function of its own beside the glass.</summary>
+    public const int LedBoardVendorId = 0x0416;
+    public const int LedBoardProductId = 0x8050;
+
     /// <summary>Native framebuffer: the glass shows a landscape frame only once it is turned a quarter clockwise into this.</summary>
     public const int Width = 480;
     public const int Height = 1920;
@@ -43,12 +60,106 @@ public static class UniversalScreen88Protocol
     public const byte CommandPushPng = 0x66;
     public const byte CommandStopPlay = 0x7B;
 
+    /// <summary>Tells the decoder the frame rate of the video that follows (lcd207 SetFrameRate).</summary>
+    public const byte CommandFrameRate = 0x0F;
+
+    /// <summary>One chunk of an H.264 stream for the glass's own decoder; the reply's [8] is the blocks it holds.</summary>
+    public const byte CommandStartPlay = 0x79;
+
+    /// <summary>Asks how many video blocks the decoder still holds, in the reply's [8].</summary>
+    public const byte CommandQueryBlock = 0x7A;
+
+    /// <summary>L-Connect's fixed video chunk size for this glass (lcd207 WinUsb.PlayH264).</summary>
+    public const int H264Block = 202752;
+
+    /// <summary>A video chunk: StartPlay with the chunk length big-endian at params[0..4] and the last-chunk flag at [4], then the chunk, as one transfer.</summary>
+    public static byte[] EncodeVideoChunk(ReadOnlySpan<byte> chunk, bool last, uint timestampMs)
+    {
+        Span<byte> parameters = stackalloc byte[5];
+        parameters[0] = (byte)(chunk.Length >> 24);
+        parameters[1] = (byte)(chunk.Length >> 16);
+        parameters[2] = (byte)(chunk.Length >> 8);
+        parameters[3] = (byte)chunk.Length;
+        parameters[4] = (byte)(last ? 1 : 0);
+        var header = EncodeCommand(CommandStartPlay, parameters, timestampMs);
+        var packet = new byte[header.Length + chunk.Length];
+        header.CopyTo(packet, 0);
+        chunk.CopyTo(packet.AsSpan(header.Length));
+        return packet;
+    }
+
+    /// <summary>
+    /// The ffmpeg filter that lays a clip into the 480x1920 framebuffer for a mount given as the panel
+    /// record's rotation: landscape (0, 180) a quarter turn clockwise like pushed frames, portrait (90, 270)
+    /// untouched. The glass turns the half itself (the driver's Rotate), so the clip never does. Mirror flips
+    /// the clip before it is turned.
+    /// </summary>
+    public static string VideoMountFilter(int rotation, bool mirror) => VideoMount(rotation) == 90
+        ? $"scale={Width}:{Height}:flags=lanczos{(mirror ? ",hflip" : "")}"
+        : $"scale={Height}:{Width}:flags=lanczos,{(mirror ? "hflip," : "")}transpose=1";
+
+    /// <summary>The mount a clip is encoded for: 0 landscape or 90 portrait, as the glass turns the half itself.</summary>
+    public static int VideoMount(int rotation) => (((rotation % 360) + 360) % 360) % 180;
+
+    /// <summary>The blocks the decoder holds, from a StartPlay or QueryBlock reply.</summary>
+    public static int DecodeBufferedBlocks(ReadOnlySpan<byte> reply) => reply.Length > 8 ? reply[8] : 0;
+
+    /// <summary>
+    /// Moves the glass to its own Windows display mode (the "LIANLI USB Secondary Display", 1A86:AD21),
+    /// answered with the command byte; L-Connect reboots the glass right after it.
+    /// </summary>
+    public const byte CommandSwitchToDesktop = 0x96;
+
     /// <summary>Rotate values L-Connect sends on firmware 1.2+. They turn the firmware's own screens only, never a pushed JPEG (camera-checked).</summary>
     public const byte RotatePortrait = 0;
     public const byte RotateLandscape = 1;
 
+    /// <summary>The half-turned values L-Connect adds on firmware 1.2+ (before 1.2 only portrait 0 and 2 exist).</summary>
+    public const byte RotatePortraitHalfTurn = 2;
+    public const byte RotateLandscapeHalfTurn = 3;
+
     /// <summary>SetClock mode that syncs the clock without changing whether the firmware clock face is enabled.</summary>
     private const byte ClockSyncOnly = 2;
+
+    /// <summary>SetClock modes L-Connect's Offline Mode toggle sends: the firmware shows date and time while the PC is off.</summary>
+    public const byte ClockOfflineOn = 1;
+    public const byte ClockOfflineOff = 0;
+
+    /// <summary>The firmware version L-Connect reads from "lianli88_NNNN_BBBB": build BBBB at 18 or more is (BBBB - 8) as major.minor tenths.</summary>
+    public static Version? FirmwareVersion(string? raw)
+    {
+        if (raw is null || raw.Length != 18 || !raw.StartsWith("lianli88_", StringComparison.Ordinal) || raw[13] != '_'
+            || !int.TryParse(raw.AsSpan(9, 4), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _)
+            || !int.TryParse(raw.AsSpan(14, 4), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var build)
+            || build < 18)
+        {
+            return null;
+        }
+        var tenths = build - 8;
+        return new Version(tenths / 10, tenths % 10);
+    }
+
+    /// <summary>
+    /// The Rotate value L-Connect sends for a mounting: on firmware 1.2+ portrait 0/2 and landscape 1/3 (the
+    /// second of each half-turned); before 1.2 only 0 and 2. An unknown firmware is treated as 1.2+.
+    /// </summary>
+    public static byte RotateValue(bool portrait, bool halfTurn, Version? firmware)
+    {
+        if (firmware is not null && firmware < new Version(1, 2))
+        {
+            return halfTurn ? RotatePortraitHalfTurn : RotatePortrait;
+        }
+        return portrait
+            ? (halfTurn ? RotatePortraitHalfTurn : RotatePortrait)
+            : (halfTurn ? RotateLandscapeHalfTurn : RotateLandscape);
+    }
+
+    /// <summary>SetClock with an explicit mode: <see cref="ClockOfflineOn"/> or <see cref="ClockOfflineOff"/>.</summary>
+    public static byte[] EncodeSetClock(DateTime now, uint timestampMs, byte mode) => EncodeCommand(CommandSetClock, new byte[]
+    {
+        (byte)(now.Year >> 8), (byte)now.Year, (byte)now.Month, (byte)now.Day,
+        (byte)now.Hour, (byte)now.Minute, (byte)now.Second, mode,
+    }, timestampMs);
 
     /// <summary>ASCII "slv3tuzx", used as both the DES key and the CBC IV.</summary>
     private static readonly byte[] Key = Encoding.ASCII.GetBytes("slv3tuzx");

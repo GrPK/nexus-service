@@ -37,7 +37,24 @@ public static class DesktopModeTable
         CompanionVendorId: HydroShift2CurveProtocol.BoardVendorId, CompanionProductId: HydroShift2CurveProtocol.BoardProductId,
         InterfaceNumber: 1, UsagePage: 0xFF00, ReportLength: 513);
 
-    public static IReadOnlyList<DesktopModeRow> Rows { get; } = new[] { Curved };
+    /// <summary>
+    /// The Universal Screen 8.8, the same HID shape as the Curved (read off a unit). The user keeps the glass
+    /// as a Windows display unless they ask for it back as a panel, so this row is only tried when that is
+    /// wanted (see the constructor's <c>wanted</c>).
+    /// </summary>
+    public static readonly DesktopModeRow Screen88 = new(
+        UniversalScreen88Driver.Id,
+        DesktopVendorId: UniversalScreen88Protocol.DesktopVendorId, DesktopProductId: UniversalScreen88Protocol.DesktopProductId,
+        NormalVendorId: UniversalScreen88Protocol.VendorId, NormalProductId: UniversalScreen88Protocol.ProductId,
+        CompanionVendorId: UniversalScreen88Protocol.LedBoardVendorId, CompanionProductId: UniversalScreen88Protocol.LedBoardProductId,
+        InterfaceNumber: UniversalScreen88Protocol.DesktopInterface, UsagePage: UniversalScreen88Protocol.DesktopUsagePage,
+        ReportLength: UniversalScreen88Protocol.DesktopReportLength);
+
+    public static IReadOnlyList<DesktopModeRow> Rows { get; } = new[] { Curved, Screen88 };
+
+    /// <summary>Whether an interface has the row's HID shape.</summary>
+    public static bool Fits(DesktopModeRow row, HidDeviceInfo info) =>
+        info.UsagePage == row.UsagePage && info.InputReportByteLength == row.ReportLength && info.OutputReportByteLength == row.ReportLength;
 
     private static readonly byte[] ExitText = "5f3759df"u8.ToArray();
 
@@ -69,8 +86,10 @@ public sealed class DesktopModeExit
     private readonly Func<long> _now;
     private readonly Func<int, CancellationToken, Task> _delay;
     private readonly Action<DesktopModeRow> _exited;
+    private readonly Func<DesktopModeRow, bool> _wanted;
     private readonly Dictionary<string, RowState> _states = new();
 
+    /// <param name="wanted">Whether the user wants a row's display out of desktop mode now; null wants every row. A row not wanted stays due, so a later change acts on the same arrival.</param>
     public DesktopModeExit(
         IHidEnumerator hid,
         HardwarePresence presence,
@@ -79,7 +98,8 @@ public sealed class DesktopModeExit
         Func<DesktopModeRow, string>? parents = null,
         Func<long>? now = null,
         Func<int, CancellationToken, Task>? delay = null,
-        Action<DesktopModeRow>? exited = null)
+        Action<DesktopModeRow>? exited = null,
+        Func<DesktopModeRow, bool>? wanted = null)
     {
         _hid = hid;
         _presence = presence;
@@ -89,6 +109,7 @@ public sealed class DesktopModeExit
         _now = now ?? (() => Environment.TickCount64);
         _delay = delay ?? ((ms, ct) => Task.Delay(ms, ct));
         _exited = exited ?? (_ => { });
+        _wanted = wanted ?? (_ => true);
     }
 
     /// <summary>Attempts made, for tests.</summary>
@@ -101,6 +122,7 @@ public sealed class DesktopModeExit
         public long DueSince;
         public bool VendorAppWasRunning;
         public bool ControlOffLogged;
+        public bool NotWantedLogged;
         public long? LastAttemptAt;
     }
 
@@ -172,6 +194,16 @@ public sealed class DesktopModeExit
     private async Task<bool> AttemptAsync(DesktopModeRow row, RowState state, CancellationToken ct)
     {
         var id = $"{row.DesktopVendorId:X4}:{row.DesktopProductId:X4}";
+        if (!_wanted(row))
+        {
+            if (!state.NotWantedLogged)
+            {
+                state.NotWantedLogged = true;
+                ServiceLog.Info($"[desktop-mode] {id} left as a Windows display: not asked to come back for {row.HandlerId}");
+            }
+            return false;
+        }
+        state.NotWantedLogged = false;
         if (!_nexusControlOn(row.HandlerId))
         {
             if (!state.ControlOffLogged)
@@ -187,8 +219,7 @@ public sealed class DesktopModeExit
         var board = _presence.UsbPresent(row.CompanionVendorId, row.CompanionProductId);
         var onInterface = _hid.Find(row.DesktopVendorId, row.DesktopProductId)
             .Where(i => InterfaceOf(i.Path) == row.InterfaceNumber).ToList();
-        var info = onInterface.FirstOrDefault(i =>
-            i.UsagePage == row.UsagePage && i.InputReportByteLength == row.ReportLength && i.OutputReportByteLength == row.ReportLength);
+        var info = onInterface.FirstOrDefault(i => DesktopModeTable.Fits(row, i));
         string? refusal = normal ? "normal-identity-present"
             : !board ? "board-absent"
             : onInterface.Count == 0 ? "no-hid-interface"

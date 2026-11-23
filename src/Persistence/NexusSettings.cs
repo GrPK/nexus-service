@@ -1710,6 +1710,7 @@ public sealed class DevicesSettings
     public UniversalScreen88LightingSettings UniversalScreen88Lighting { get; set; } = new();
     /// <summary>L-Connect's Quick Sync: one effect on every Lian Li device, each device's own settings kept for when it is off.</summary>
     public LianLiSyncSettings LianLiSync { get; set; } = new();
+    public UniversalScreen88Settings UniversalScreen88 { get; set; } = new();
     public CorsairSettings Corsair { get; set; } = new();
     public NollieSettings Nollie { get; set; } = new();
     /// <summary>
@@ -2429,6 +2430,33 @@ public sealed class UniversalScreen88LightingSettings
     public List<string> Colors { get; set; } = new();
     /// <summary>The OpenRGB ring card's Lighting page state was moved to the native card (once).</summary>
     public bool OpenRgbCardMoved { get; set; }
+}
+
+/// <summary>The Universal Screen 8.8 glass's own settings, as L-Connect's Additional page offers them.</summary>
+public sealed class UniversalScreen88Settings
+{
+    /// <summary>The glass's Offline Mode (date and time shown while the PC is off). Null until set in Nexus, so a flag set in L-Connect is left alone.</summary>
+    public bool? OfflineMode { get; set; }
+
+    /// <summary>
+    /// The glass's own Windows display mode (L-Connect's Secondary Screen): true moves a glass found in panel
+    /// mode into it, false brings one found in it back as a panel. Null, the default, leaves the glass as found:
+    /// Nexus never changes the mode on its own.
+    /// </summary>
+    public bool? WindowsDisplay { get; set; }
+
+    public const string ScreenNexus = "nexus";
+    public const string ScreenVideo = "video";
+
+    /// <summary><see cref="ScreenNexus"/> streams the Nexus panel; <see cref="ScreenVideo"/> loops <see cref="Video"/> on the glass's own decoder, as L-Connect's video backgrounds do.</summary>
+    public string ScreenMode { get; set; } = ScreenNexus;
+    /// <summary>Media library item played in video mode.</summary>
+    public string? Video { get; set; }
+    /// <summary>Minutes between screen-saver plays; 0 is off.</summary>
+    public int ScreenSaverMinutes { get; set; }
+    public string? ScreenSaverVideo { get; set; }
+    /// <summary>Backlight percent while the screen saver plays.</summary>
+    public int ScreenSaverBrightness { get; set; } = 50;
 }
 
 /// <summary>The HydroShift II OLED Curved head position Nexus last drove; the motors have no position readback.</summary>
