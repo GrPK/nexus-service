@@ -1650,6 +1650,15 @@ public static class NexusServiceCollectionExtensions
             {
                 // A panel that changed size gets its stream minted again now, not at the coordinator's next poll.
                 bulkPanelHub.GeometryChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
+                // A turned record reaches a glass that turns in its own handshake (the 8.8) now, not at the
+                // worker's next presence poll; a driver whose session the turn leaves alone is not woken.
+                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>().RotationChanged += _ =>
+                {
+                    if (bulkPanelHub.IsConnected && bulkPanelDriver.GeometryStale)
+                    {
+                        bulkPanelHub.WakeWorker();
+                    }
+                };
                 if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver screen88)
                 {
                     BindScreen88Portrait(sp, screen88);

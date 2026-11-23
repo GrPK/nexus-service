@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 using Nexus.Service.Peripherals.Hid;
 
 namespace Nexus.Service.Peripherals.BulkPanels;
@@ -123,10 +124,35 @@ public sealed class BulkPanelHub : IDisposable
         }
     }
 
-    /// <summary>Re-runs the handshake on the open pipe for new geometry, without the release a detach sends; false detaches.</summary>
+    /// <summary>Released by <see cref="WakeWorker"/>; only the panel's one connection worker waits on it.</summary>
+    private readonly SemaphoreSlim _workerWake = new(0, 1);
+
+    /// <summary>
+    /// Has the connection worker look at the open session now rather than at its next presence poll, for a
+    /// change it acts on (a mounting or setting the driver reports as <see cref="IBulkPanelDriver.GeometryStale"/>).
+    /// </summary>
+    public void WakeWorker()
+    {
+        try
+        {
+            if (_workerWake.CurrentCount == 0)
+            {
+                _workerWake.Release();
+            }
+        }
+        catch (SemaphoreFullException)
+        {
+            // Already woken; the worker looks once for both.
+        }
+    }
+
+    /// <summary>The worker's wait between its session checks: true when <see cref="WakeWorker"/> ended it early.</summary>
+    internal Task<bool> WaitForWorkerWakeAsync(int timeoutMs, CancellationToken ct) => _workerWake.WaitAsync(timeoutMs, ct);
+
     /// <summary>Raised outside the lock after <see cref="Renegotiate"/> moved the panel to another size.</summary>
     public event Action? GeometryChanged;
 
+    /// <summary>Re-runs the handshake on the open pipe for new geometry, without the release a detach sends; false detaches.</summary>
     public bool Renegotiate()
     {
         bool resized;

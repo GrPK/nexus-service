@@ -47,6 +47,29 @@ public sealed class PanelDeviceRegistry
     /// <summary>Raised (record ids) after a record's display fingerprint was first recorded or changed, so profile files can pick up its match key.</summary>
     public event Action<IReadOnlyList<string>>? FingerprintsChanged;
 
+    /// <summary>
+    /// Raised (record id) after a patch or a hardware reset turned the record to another clockwise rotation,
+    /// outside the store lock. A transport whose glass turns in its own handshake acts on it at once instead
+    /// of at its next poll.
+    /// </summary>
+    public event Action<string>? RotationChanged;
+
+    private void RaiseRotationChanged(string id, int? before, int? after)
+    {
+        if (before is null || after is null || before == after)
+        {
+            return;
+        }
+        try
+        {
+            RotationChanged?.Invoke(id);
+        }
+        catch (Exception ex)
+        {
+            Nexus.Service.Platform.ServiceLog.Warn($"[panel] rotation listener failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     /// <summary>The family a record reuses under: a Kraken record stored without one is still the Kraken's.</summary>
     internal static string? ReuseFamily(PanelDeviceCapabilities? caps) =>
         caps?.Family ?? (string.Equals(caps?.Surface, PanelSurfaces.LegacyKraken, StringComparison.Ordinal) ? KrakenHub.DeviceId : null);
@@ -750,6 +773,8 @@ public sealed class PanelDeviceRegistry
             return null;
 
         PanelDeviceRecord? snapshot = null;
+        int? rotationBefore = null;
+        int? rotationAfter = null;
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _store.Update(s =>
         {
@@ -766,9 +791,11 @@ public sealed class PanelDeviceRegistry
             // layout for the new rotation.
             if (PanelRotation.TryResolve(record, patch, out var rotation) && rotation is { } turn)
             {
+                rotationBefore = PanelRotation.Effective(record);
                 record.Rotation = turn == 0 ? null : turn;
                 record.Flip180 = null;
                 record.Portrait = null;
+                rotationAfter = PanelRotation.Effective(record);
             }
             if (patch.Layout is not null)
                 PanelLayoutSlots.SetActiveLayout(record, patch.Layout);
@@ -901,6 +928,7 @@ public sealed class PanelDeviceRegistry
             record.LastSeenAt = now;
             snapshot = Clone(record);
         });
+        RaiseRotationChanged(id, rotationBefore, rotationAfter);
         return snapshot;
     }
 
@@ -1004,11 +1032,13 @@ public sealed class PanelDeviceRegistry
             return null;
 
         PanelDeviceRecord? snapshot = null;
+        int? rotationBefore = null;
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _store.Update(s =>
         {
             if (!s.PanelDevices.TryGetValue(id, out var record))
                 return;
+            rotationBefore = PanelRotation.Effective(record);
             record.ReserveMonitor = null;
             record.AutoOrient = null;
             record.KeepCursorOff = null;
@@ -1028,6 +1058,7 @@ public sealed class PanelDeviceRegistry
             snapshot = Clone(record);
         });
         if (snapshot is not null) _store.FlushNow();
+        RaiseRotationChanged(id, rotationBefore, snapshot is null ? null : PanelRotation.Effective(snapshot));
         return snapshot;
     }
 

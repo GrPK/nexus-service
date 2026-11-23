@@ -86,6 +86,7 @@ public static partial class DevicesRoutes
                 if (body.WindowsDisplay == true && hub.IsConnected)
                 {
                     driver.RequestHandshake();
+                    hub.WakeWorker();
                 }
             }
             services.GetService<UniversalScreen88Player>()?.Wake();
