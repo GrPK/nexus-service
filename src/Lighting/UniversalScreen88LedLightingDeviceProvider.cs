@@ -19,7 +19,7 @@ namespace Nexus.Service.Lighting;
 public sealed class UniversalScreen88LedLightingDeviceProvider :
     ILightingDeviceProvider, ILightingFrameContributor, IDeviceStructureSource, IOpenRgbDeviceOwner
 {
-    public const string HandlerId = "lianli-screen88-led";
+    public const string HandlerId = UniversalScreen88LedProtocol.HandlerId;
     public const string RingZoneId = HandlerId + ":ring";
 
     private static readonly string DeviceKey = DeviceKeyComputer.ForFirstParty(

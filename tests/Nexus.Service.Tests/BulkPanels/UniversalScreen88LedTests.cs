@@ -157,13 +157,13 @@ public class UniversalScreen88LedTests
     }
 
     [Fact]
-    public void The_bundled_OpenRGB_detector_is_held_off_for_the_bezel()
+    public void The_bundled_OpenRGB_detector_is_held_off_for_the_bezel_only_while_the_ring_is_native()
     {
         var claim = NativeDetectorClaims.All.Single(c => c.Key == NativeDetectorClaims.UniversalScreen88);
         Assert.Equal(new[] { "Lian Li Universal Screen" }, claim.Detectors);
-        Assert.Equal(new[] { UniversalScreen88Driver.Id }, claim.Handlers);
+        Assert.Equal(new[] { UniversalScreen88LedProtocol.HandlerId }, claim.Handlers);
         Assert.Contains("Lian Li Universal Screen", NativeDetectorClaims.ResolveDisabled(_ => true, macOS: false));
-        Assert.Contains("Lian Li Universal Screen", NativeDetectorClaims.ResolveDisabled(_ => false, macOS: false));
+        Assert.DoesNotContain("Lian Li Universal Screen", NativeDetectorClaims.ResolveDisabled(_ => false, macOS: false));
     }
 
     [Fact]

@@ -9,6 +9,13 @@ namespace Nexus.Service.Peripherals.BulkPanels;
 /// </summary>
 public static class UniversalScreen88LedProtocol
 {
+    /// <summary>
+    /// The bezel LEDs' own Nexus Control id, apart from the glass's (<see cref="UniversalScreen88Driver.Id"/>):
+    /// the screen also serves as a plain Windows monitor with the glass left to Windows, and the ring is
+    /// lit either way.
+    /// </summary>
+    public const string HandlerId = "lianli-screen88-led";
+
     public const int VendorId = 0x0416;
     public const int ProductId = 0x8050;
 

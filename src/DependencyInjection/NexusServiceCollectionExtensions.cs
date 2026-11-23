@@ -1939,6 +1939,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LianLiWirelessHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LianLiFlexHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.Galahad2Handler>();
+        services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.UniversalScreen88LedHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.RyujinExtremeHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.KrakenHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.NzxtFanControllerHandler>();

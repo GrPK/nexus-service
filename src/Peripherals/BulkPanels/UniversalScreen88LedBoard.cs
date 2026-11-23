@@ -44,6 +44,9 @@ public sealed class UniversalScreen88LedBoard : BackgroundService
 
     public bool IsAvailable => _connected;
 
+    /// <summary>The ring is driven while its own Nexus Control is on, whatever the glass's is.</summary>
+    internal static bool ShouldDrive(DeviceControlGate gate) => gate.IsEnabled(UniversalScreen88LedProtocol.HandlerId);
+
     /// <summary>Raised from the loop when <see cref="IsAvailable"/> flips.</summary>
     public event Action? AvailabilityChanged;
 
@@ -80,7 +83,7 @@ public sealed class UniversalScreen88LedBoard : BackgroundService
                 if (!_connected || now - lastGateAt >= GateCheckMs)
                 {
                     lastGateAt = now;
-                    if (!_gate.IsEnabled(UniversalScreen88Driver.Id)
+                    if (!ShouldDrive(_gate)
                         || !_presence.UsbPresent(UniversalScreen88LedProtocol.VendorId, ProductIds))
                     {
                         Disconnect();

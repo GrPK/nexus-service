@@ -333,7 +333,7 @@ public sealed class CompositeLightingDeviceProvider : ILightingDeviceProvider
         if (screen88Led.Devices.Count > 0)
         {
             rgb.IsInit = rgb.IsInit || screen88Led.IsInit;
-            TagControlHandler(screen88Led.Devices, Peripherals.BulkPanels.UniversalScreen88Driver.Id);
+            TagControlHandler(screen88Led.Devices, Peripherals.BulkPanels.UniversalScreen88LedProtocol.HandlerId);
             rgb.Devices.AddRange(screen88Led.Devices);
         }
         var galahad2Lcd = _galahad2Lcd.GetAll();

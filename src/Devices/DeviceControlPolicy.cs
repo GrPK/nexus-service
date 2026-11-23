@@ -34,6 +34,7 @@ public static class DeviceControlPolicy
         ["lianli-hydroshift-lcd"] = "lian-li-l-connect",
         ["strimer"] = "lian-li-l-connect",
         ["lianli-screen88"] = "lian-li-l-connect",
+        ["lianli-screen88-led"] = "lian-li-l-connect",
         ["lianli-hydroshift2"] = "lian-li-l-connect",
         ["lianli-hydroshift2-curve"] = "lian-li-l-connect",
         ["lianli-galahad2-lcd"] = "lian-li-l-connect",
