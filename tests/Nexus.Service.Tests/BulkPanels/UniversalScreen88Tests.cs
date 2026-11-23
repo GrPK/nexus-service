@@ -210,6 +210,36 @@ public class UniversalScreen88Tests
     }
 
     [Fact]
+    public void A_handshake_that_keeps_the_quarter_pushes_the_last_picture_again()
+    {
+        var portrait = false;
+        var halfTurn = false;
+        var driver = new UniversalScreen88Driver();
+        driver.BindPortrait(() => portrait);
+        driver.BindHalfTurn(() => halfTurn);
+        var pipe = new GlassPipe();
+        using var hub = new BulkPanelHub(driver);
+        Assert.True(hub.Attach(pipe, null));
+        var resized = 0;
+        hub.GeometryChanged += () => resized++;
+        Assert.True(hub.SendFrame(Quadrants(1920, 480)));
+        var picture = pipe.Payloads.Last();
+
+        pipe.Clear();
+        halfTurn = true;
+        Assert.True(hub.Renegotiate());
+        Assert.Equal(picture, pipe.Payloads.Last());
+        Assert.Contains(UniversalScreen88Protocol.CommandPushJpeg, pipe.Commands);
+        Assert.Equal(0, resized);
+
+        pipe.Clear();
+        portrait = true;
+        Assert.True(hub.Renegotiate());
+        Assert.DoesNotContain(UniversalScreen88Protocol.CommandPushJpeg, pipe.Commands);
+        Assert.Equal(1, resized);
+    }
+
+    [Fact]
     public void Every_turn_leaves_the_frame_to_the_glass()
     {
         Assert.Equal(FramePushedWith(0), FramePushedWith(90));

@@ -124,8 +124,12 @@ public sealed class BulkPanelHub : IDisposable
     }
 
     /// <summary>Re-runs the handshake on the open pipe for new geometry, without the release a detach sends; false detaches.</summary>
+    /// <summary>Raised outside the lock after <see cref="Renegotiate"/> moved the panel to another size.</summary>
+    public event Action? GeometryChanged;
+
     public bool Renegotiate()
     {
+        bool resized;
         lock (_lock)
         {
             if (!_attached || _pipe is null)
@@ -138,9 +142,21 @@ public sealed class BulkPanelHub : IDisposable
                 DetachLocked();
                 return false;
             }
+            resized = (_width, _height) != geometry.Value;
             (_width, _height) = geometry.Value;
-            return true;
         }
+        if (resized)
+        {
+            try
+            {
+                GeometryChanged?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Nexus.Service.Platform.ServiceLog.Warn($"[{_driver.HandlerId}] geometry listener failed: {ex.Message}");
+            }
+        }
+        return true;
     }
 
     /// <summary>Pushes a frame rendered at the given size; false once the panel runs another geometry.</summary>

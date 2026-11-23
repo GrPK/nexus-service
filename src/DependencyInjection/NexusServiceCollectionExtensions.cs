@@ -1648,6 +1648,8 @@ public static class NexusServiceCollectionExtensions
             // Same de-duplication as the JPEG panel loop above.
             services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(sp =>
             {
+                // A panel that changed size gets its stream minted again now, not at the coordinator's next poll.
+                bulkPanelHub.GeometryChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
                 if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver screen88)
                 {
                     BindScreen88Portrait(sp, screen88);

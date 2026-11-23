@@ -31,6 +31,9 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDri
     private uint _lastTimestamp;
     private BgraJpegEncoder? _jpeg;
     private byte[] _native = Array.Empty<byte>();
+    /// <summary>The last JPEG pushed, sent again by a handshake that kept the mount's quarter (<see cref="Resend"/>).</summary>
+    private byte[] _lastJpeg = Array.Empty<byte>();
+    private int _lastJpegLength;
     private Func<bool> _wantsPortrait = () => false;
     private Func<bool> _wantsHalfTurn = () => false;
     private volatile bool _portrait;
@@ -173,10 +176,21 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDri
         _jpeg?.Dispose();
         _jpeg = new BgraJpegEncoder(UniversalScreen88Protocol.Width, UniversalScreen88Protocol.Height, JpegQuality);
         _native = portrait ? Array.Empty<byte>() : new byte[UniversalScreen88Protocol.Width * UniversalScreen88Protocol.Height * 4];
+        // The last picture still fits a mount that kept its quarter (a half turn or a changed setting), so the glass
+        // gets it back at once rather than at the stream's next frame, which a still page sends seconds later.
+        var keepPicture = _lastJpegLength > 0 && portrait == _portrait;
         _portrait = portrait;
         _halfTurn = halfTurn;
         ServiceLog.Info($"[{HandlerId}] firmware {Firmware ?? "unknown"}, {(portrait ? "portrait" : "landscape")}");
         _sessionUp = true;
+        if (keepPicture)
+        {
+            Resend(pipe, hid);
+        }
+        else
+        {
+            _lastJpegLength = 0;
+        }
         return portrait
             ? (UniversalScreen88Protocol.Width, UniversalScreen88Protocol.Height)
             : (UniversalScreen88Protocol.Height, UniversalScreen88Protocol.Width);
@@ -198,8 +212,9 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDri
             BgraQuarterTurn.RotateCw(bgra, UniversalScreen88Protocol.Height, UniversalScreen88Protocol.Width, _native);
             native = _native;
         }
-        var packet = UniversalScreen88Protocol.EncodeImage(
-            UniversalScreen88Protocol.CommandPushJpeg, _jpeg.Encode(native), NextTimestamp());
+        var jpeg = _jpeg.Encode(native);
+        KeepLastJpeg(jpeg);
+        var packet = UniversalScreen88Protocol.EncodeImage(UniversalScreen88Protocol.CommandPushJpeg, jpeg, NextTimestamp());
         int written = pipe.WriteCounted(WritePipeId, packet);
         if (written != packet.Length)
         {
@@ -220,6 +235,33 @@ public sealed class UniversalScreen88Driver : IBulkPanelDriver, IDecoderVideoDri
             }
         }
         _writeFailureLogged = false;
+        ReadReply(pipe, UniversalScreen88Protocol.CommandPushJpeg);
+        return true;
+    }
+
+    private void KeepLastJpeg(ReadOnlySpan<byte> jpeg)
+    {
+        if (_lastJpeg.Length < jpeg.Length)
+        {
+            _lastJpeg = new byte[jpeg.Length + jpeg.Length / 4];
+        }
+        jpeg.CopyTo(_lastJpeg);
+        _lastJpegLength = jpeg.Length;
+    }
+
+    /// <summary>Pushes the last picture again; nothing to send before the first one or while a video owns the glass.</summary>
+    public bool Resend(IBulkUsbPipe pipe, IHidDevice? hid)
+    {
+        if (VideoOwnsGlass || _lastJpegLength == 0)
+        {
+            return true;
+        }
+        var packet = UniversalScreen88Protocol.EncodeImage(
+            UniversalScreen88Protocol.CommandPushJpeg, _lastJpeg.AsSpan(0, _lastJpegLength), NextTimestamp());
+        if (pipe.WriteCounted(WritePipeId, packet) != packet.Length)
+        {
+            return false;
+        }
         ReadReply(pipe, UniversalScreen88Protocol.CommandPushJpeg);
         return true;
     }
