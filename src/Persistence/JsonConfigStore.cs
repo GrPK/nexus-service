@@ -151,6 +151,11 @@ public sealed class JsonConfigStore : IConfigStore, IDisposable
         {
             pinsMigrated = true;
         }
+        // Same: the 8.8 bezel's own switch from branch builds folds into the 8.8's.
+        if (Nexus.Service.Devices.UniversalScreen88ControlMigration.Apply(_cached))
+        {
+            pinsMigrated = true;
+        }
         // A file with no schemaVersion key deserializes to the current
         // version and would skip Migrate(), yet it is not a fresh install.
         if (!HasTopLevelSchemaVersion(json))

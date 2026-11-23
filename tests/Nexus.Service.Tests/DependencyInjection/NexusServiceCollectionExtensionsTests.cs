@@ -112,8 +112,7 @@ public class NexusServiceCollectionExtensionsTests
         // bus as a device), Astral (the ROG Astral GPU), plus one JpegPanelHandler per JpegPanelModel (Galahad II LCD,
         // Corsair XC7, Corsair Elite Capellix, ID-Cooling FX-LCD).
         // ... plus one BulkPanelHandler per bulk-pipe driver (Thermalright, Ryujin, Screen 8.8,
-        // ZMatrices Glacier Matrix, ZMatrices MAX E87, HydroShift II, HydroShift II OLED Curved), plus the Glacial LCD and DeepCool Mystique handlers,
-        // plus the Universal Screen 8.8 bezel LEDs, switched apart from the glass.
+        // ZMatrices Glacier Matrix, ZMatrices MAX E87, HydroShift II, HydroShift II OLED Curved), plus the Glacial LCD and DeepCool Mystique handlers.
         // ApexOled registers only where its streamed panel does (Windows and Linux).
 #if WINDOWS || LINUX
         const int platformHandlers = 1;
@@ -121,7 +120,7 @@ public class NexusServiceCollectionExtensionsTests
         const int platformHandlers = 0;
 #endif
         Assert.Equal(
-            28 + Nexus.Service.Peripherals.LianLi.LianLiHubSet.Capacity + Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.All.Length + 10 + platformHandlers,
+            28 + Nexus.Service.Peripherals.LianLi.LianLiHubSet.Capacity + Nexus.Service.Peripherals.JpegPanels.JpegPanelModel.All.Length + 9 + platformHandlers,
             handlers.Length);
     }
 

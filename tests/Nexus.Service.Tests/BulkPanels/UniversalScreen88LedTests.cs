@@ -195,7 +195,7 @@ public class UniversalScreen88LedTests
     {
         var claim = NativeDetectorClaims.All.Single(c => c.Key == NativeDetectorClaims.UniversalScreen88);
         Assert.Equal(new[] { "Lian Li Universal Screen" }, claim.Detectors);
-        Assert.Equal(new[] { UniversalScreen88LedProtocol.HandlerId }, claim.Handlers);
+        Assert.Equal(new[] { UniversalScreen88Driver.Id }, claim.Handlers);
         Assert.Contains("Lian Li Universal Screen", NativeDetectorClaims.ResolveDisabled(_ => true, macOS: false));
         Assert.DoesNotContain("Lian Li Universal Screen", NativeDetectorClaims.ResolveDisabled(_ => false, macOS: false));
     }

@@ -1683,12 +1683,7 @@ public static class NexusServiceCollectionExtensions
             });
             services.AddSingleton<IDeviceHandler>(
                 _ => new Nexus.Service.Devices.Handlers.BulkPanelHandler(
-                    bulkPanelHub,
-                    bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver
-                        ? new[] { new Nexus.Service.Devices.UsbId(
-                            Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveProtocol.BoardVendorId,
-                            Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveProtocol.BoardProductId) }
-                        : null));
+                    bulkPanelHub, Nexus.Service.Devices.Handlers.BulkPanelHandler.CompanionsFor(bulkPanelDriver)));
             if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2LcdDriver hydroShift2)
             {
                 AddHydroShift2Aio(services, bulkPanelHub, hydroShift2);
@@ -1948,7 +1943,6 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LianLiWirelessHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LianLiFlexHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.Galahad2Handler>();
-        services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.UniversalScreen88LedHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.RyujinExtremeHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.KrakenHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.NzxtFanControllerHandler>();

@@ -28,6 +28,23 @@ public sealed class BulkPanelHandler : IDeviceHandler
             .ToArray();
     }
 
+    /// <summary>
+    /// The other USB functions of a panel whose row covers more than its glass: the OLED Curved's LED board,
+    /// and the Universal Screen 8.8's glass in Windows display mode (1A86:AD21) plus its bezel LED board.
+    /// The 8.8's one switch also drives the ring, so its row must be there to turn on while the glass is a
+    /// Windows monitor or not seen at all.
+    /// </summary>
+    public static IReadOnlyList<UsbId>? CompanionsFor(IBulkPanelDriver driver) => driver switch
+    {
+        HydroShift2CurveLcdDriver => new[] { new UsbId(HydroShift2CurveProtocol.BoardVendorId, HydroShift2CurveProtocol.BoardProductId) },
+        UniversalScreen88Driver => new[]
+        {
+            new UsbId(UniversalScreen88Protocol.DesktopVendorId, UniversalScreen88Protocol.DesktopProductId),
+            new UsbId(UniversalScreen88Protocol.LedBoardVendorId, UniversalScreen88Protocol.LedBoardProductId),
+        },
+        _ => null,
+    };
+
     public string Id => _hub.Driver.HandlerId;
     public string Name => _hub.Driver.Name;
     public string Category => _hub.Driver.Category;

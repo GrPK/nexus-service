@@ -9,7 +9,7 @@ using Nexus.Service.Platform;
 namespace Nexus.Service.Peripherals.BulkPanels;
 
 /// <summary>
-/// Drives the Universal Screen 8.8's bezel LEDs (0416:8050) over WinUSB, under the glass's Nexus
+/// Drives the Universal Screen 8.8's bezel LEDs (0416:8050) over WinUSB, under the 8.8's one Nexus
 /// Control toggle. Writes run on this loop only, so a slow write delays this ring and nothing else;
 /// before, the bundled OpenRGB drove it and a stalled write held up every OpenRGB device.
 /// </summary>
@@ -44,8 +44,11 @@ public sealed class UniversalScreen88LedBoard : BackgroundService
 
     public bool IsAvailable => _connected;
 
-    /// <summary>The ring is driven while its own Nexus Control is on, whatever the glass's is.</summary>
-    internal static bool ShouldDrive(DeviceControlGate gate) => gate.IsEnabled(UniversalScreen88LedProtocol.HandlerId);
+    /// <summary>
+    /// The ring is driven while the 8.8's Nexus Control is on, whatever mode the glass is in: a glass left
+    /// to Windows as a monitor (1A86:AD21) keeps the ring lit.
+    /// </summary>
+    internal static bool ShouldDrive(DeviceControlGate gate) => gate.IsEnabled(UniversalScreen88Driver.Id);
 
     /// <summary>Raised from the loop when <see cref="IsAvailable"/> flips.</summary>
     public event Action? AvailabilityChanged;
