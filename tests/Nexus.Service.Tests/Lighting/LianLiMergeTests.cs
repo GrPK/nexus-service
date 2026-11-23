@@ -118,7 +118,7 @@ public class LianLiMergeTests
         Assert.Equal(new[] { LianLiMergeService.CurveId, "AA", "BB", LianLiMergeService.Screen88Id }, grown!.Select(m => m.Id));
 
         // A chain away keeps its slot; nothing new means nothing to store.
-        var away = LianLiMergeService.Order(grown, new[] { tlB, curve }, out var unchanged);
+        var away = LianLiMergeService.Order(grown!, new[] { tlB, curve }, out var unchanged);
         Assert.Equal(new[] { LianLiMergeService.CurveId, "BB" }, away.Select(p => p.Id));
         Assert.Null(unchanged);
     }
