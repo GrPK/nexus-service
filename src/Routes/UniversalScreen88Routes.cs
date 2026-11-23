@@ -26,12 +26,17 @@ public static partial class DevicesRoutes
             var hub = Screen88Hub(services);
             var player = services.GetService<UniversalScreen88Player>();
             var s = store.Load().Devices.UniversalScreen88;
+            var rotation = player?.VideoMount().Rotation ?? 0;
+            var (videoWidth, videoHeight) = UniversalScreen88Protocol.VideoPicture(rotation);
             return Results.Json(
                 new UniversalScreen88SettingsResponse
                 {
                     Connected = hub?.IsConnected == true,
                     Firmware = (hub?.Driver as UniversalScreen88Driver)?.Firmware,
                     InWindowsDisplay = presence.UsbPresent(UniversalScreen88Protocol.DesktopVendorId, UniversalScreen88Protocol.DesktopProductId),
+                    VideoPortrait = UniversalScreen88Media.Profile.IsPortrait(rotation),
+                    VideoWidth = videoWidth,
+                    VideoHeight = videoHeight,
                     OfflineMode = s.OfflineMode,
                     WindowsDisplay = s.WindowsDisplay,
                     ScreenMode = s.ScreenMode,
@@ -93,8 +98,11 @@ public static partial class DevicesRoutes
             return Results.Json(ApiResponse.Ok(), AppJsonContext.Default.ApiResponse);
         });
 
-        app.MapGet("/devices/lianli-screen88/media", (UniversalScreen88Media media) =>
-            Results.Json(new HydroShift2CurveMediaResponse { Media = MediaDtos(media) }, AppJsonContext.Default.HydroShift2CurveMediaResponse));
+        // Thumbnails follow the mount: 320x80 landscape, 80x320 portrait.
+        app.MapGet("/devices/lianli-screen88/media", (UniversalScreen88Player player, UniversalScreen88Media media) =>
+            Results.Json(
+                new HydroShift2CurveMediaResponse { Media = MediaDtos(media, UniversalScreen88Media.Profile.IsPortrait(player.VideoMount().Rotation)) },
+                AppJsonContext.Default.HydroShift2CurveMediaResponse));
 
         app.MapPost("/devices/lianli-screen88/media", async (HttpContext ctx, UniversalScreen88Player player, UniversalScreen88Media media, IHostApplicationLifetime lifetime) =>
         {
@@ -112,11 +120,15 @@ public static partial class DevicesRoutes
             {
                 return UploadResult(null, "Not a video file");
             }
-            var rawCrop = form["crop"].ToString();
-            var crop = new CropRect(0, 0, 1, 1);
-            if (rawCrop.Length > 0 && !CropRect.TryParse(rawCrop, out crop))
+            // "crop" is the 4:1 crop landscape mounts show, "portraitCrop" the 1:4 one portrait mounts show; a mount
+            // without its own shows the centre of the whole clip at its aspect, never a stretched crop.
+            if (!TryCropField(form["crop"].ToString(), out var crop))
             {
                 return UploadResult(null, "Invalid crop");
+            }
+            if (!TryCropField(form["portraitCrop"].ToString(), out var portraitCrop))
+            {
+                return UploadResult(null, "Invalid portraitCrop");
             }
             var label = form["label"].ToString();
             if (string.IsNullOrWhiteSpace(label))
@@ -130,7 +142,7 @@ public static partial class DevicesRoutes
                 {
                     await file.CopyToAsync(stream, ctx.RequestAborted);
                 }
-                var name = await media.ImportAsync(staged, label, crop, ctx.RequestAborted);
+                var name = await media.ImportAsync(staged, label, crop, portraitCrop, ctx.RequestAborted);
                 if (name is null)
                 {
                     return UploadResult(null, "Could not read that video");
@@ -145,9 +157,11 @@ public static partial class DevicesRoutes
             }
         }).DisableAntiforgery();
 
-        app.MapGet("/devices/lianli-screen88/media/{name}/preview", async (string name, HttpContext ctx, UniversalScreen88Media media) =>
+        // The preview follows the mount (960x240 or 240x960); ?portrait=true|false asks for one orientation.
+        app.MapGet("/devices/lianli-screen88/media/{name}/preview", async (string name, bool? portrait, HttpContext ctx, UniversalScreen88Player player, UniversalScreen88Media media) =>
         {
-            if (!media.Exists(name) || await media.EnsurePreviewAsync(name, ctx.RequestAborted) is not { } path)
+            var tall = portrait ?? UniversalScreen88Media.Profile.IsPortrait(player.VideoMount().Rotation);
+            if (!media.Exists(name) || await media.EnsurePreviewAsync(name, tall, ctx.RequestAborted) is not { } path)
             {
                 return Results.NotFound();
             }
@@ -240,7 +254,8 @@ public static partial class DevicesRoutes
                 try
                 {
                     File.Copy(Path.Combine(folder, video.File), staged);
-                    if (await media.ImportAsync(staged, video.Label, new CropRect(0, 0, 1, 1), ctx.RequestAborted) is { } name)
+                    // No crop: each mount shows the centre of the template video at its own aspect (L-Connect's are made either way).
+                    if (await media.ImportAsync(staged, video.Label, crop: null, portraitCrop: null, ctx.RequestAborted) is { } name)
                     {
                         var mount = player.VideoMount();
                         media.EncodeImport(name, mount.Rotation, mount.Mirror, lifetime.ApplicationStopping);
@@ -256,12 +271,28 @@ public static partial class DevicesRoutes
         });
     }
 
-    private static List<HydroShift2CurveMediaDto> MediaDtos(DecoderVideoMedia media)
+    /// <summary>An absent field is no crop; a present one must parse.</summary>
+    internal static bool TryCropField(string raw, out CropRect? crop)
+    {
+        crop = null;
+        if (raw.Length == 0)
+        {
+            return true;
+        }
+        if (!CropRect.TryParse(raw, out var parsed))
+        {
+            return false;
+        }
+        crop = parsed;
+        return true;
+    }
+
+    private static List<HydroShift2CurveMediaDto> MediaDtos(DecoderVideoMedia media, bool portrait)
     {
         var items = new List<HydroShift2CurveMediaDto>();
         foreach (var item in media.List())
         {
-            var thumb = media.Thumbnail(item.Name);
+            var thumb = media.Thumbnail(item.Name, portrait);
             items.Add(new HydroShift2CurveMediaDto
             {
                 Name = item.Name,
@@ -316,6 +347,11 @@ public sealed class UniversalScreen88SettingsResponse
     public string? Firmware { get; set; }
     /// <summary>The glass is in its own Windows display mode now (1A86:AD21 present).</summary>
     public bool InWindowsDisplay { get; set; }
+    /// <summary>The panel record's rotation is 90 or 270: library videos play portrait, cropped 1:4 ("portraitCrop" on upload).</summary>
+    public bool VideoPortrait { get; set; }
+    /// <summary>A library video's picture at the current mount: 1920x480 landscape, 480x1920 portrait. The crop aspect is VideoWidth / VideoHeight.</summary>
+    public int VideoWidth { get; set; }
+    public int VideoHeight { get; set; }
     /// <summary>Null until set in Nexus; the glass's own flag is then left as found.</summary>
     public bool? OfflineMode { get; set; }
     /// <summary>Null leaves the mode as found; true wants the Windows display mode, false the panel.</summary>

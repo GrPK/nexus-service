@@ -92,11 +92,16 @@ public static class UniversalScreen88Protocol
     /// The ffmpeg filter that lays a clip into the 480x1920 framebuffer for a mount given as the panel
     /// record's rotation: landscape (0, 180) a quarter turn clockwise like pushed frames, portrait (90, 270)
     /// untouched. The glass turns the half itself (the driver's Rotate), so the clip never does. Mirror flips
-    /// the clip before it is turned.
+    /// the clip before it is turned. The clip is scaled to cover the mount's picture (1920x480 or 480x1920) and
+    /// trimmed from the centre, so a crop of another aspect, or none, is never stretched.
     /// </summary>
     public static string VideoMountFilter(int rotation, bool mirror) => VideoMount(rotation) == 90
-        ? $"scale={Width}:{Height}:flags=lanczos{(mirror ? ",hflip" : "")}"
-        : $"scale={Height}:{Width}:flags=lanczos,{(mirror ? "hflip," : "")}transpose=1";
+        ? $"{DecoderVideoProfile.CoverScale(Width, Height)}{(mirror ? ",hflip" : "")}"
+        : $"{DecoderVideoProfile.CoverScale(Height, Width)},{(mirror ? "hflip," : "")}transpose=1";
+
+    /// <summary>The picture size a library clip has at a mount: 1920x480 landscape (0, 180), 480x1920 portrait (90, 270).</summary>
+    public static (int Width, int Height) VideoPicture(int rotation) =>
+        VideoMount(rotation) == 90 ? (Width, Height) : (Height, Width);
 
     /// <summary>The mount a clip is encoded for: 0 landscape or 90 portrait, as the glass turns the half itself.</summary>
     public static int VideoMount(int rotation) => (((rotation % 360) + 360) % 360) % 180;

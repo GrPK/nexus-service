@@ -19,7 +19,9 @@ public sealed class HydroShift2CurveMedia : DecoderVideoMedia
 
 /// <summary>
 /// The Universal Screen 8.8's video library. The glass decodes into its 480x1920 portrait framebuffer, so a
-/// landscape mount (rotation 0 or 180) is turned a quarter into it, the way pushed frames are.
+/// landscape mount (rotation 0 or 180) is turned a quarter into it, the way pushed frames are. A clip keeps a
+/// 4:1 crop for landscape mounts and a 1:4 one for portrait mounts (90, 270), and its previews and
+/// thumbnails follow the mount.
 /// </summary>
 public sealed class UniversalScreen88Media : DecoderVideoMedia
 {
@@ -29,7 +31,9 @@ public sealed class UniversalScreen88Media : DecoderVideoMedia
         PreviewHeight: UniversalScreen88Protocol.Width / 2,
         ThumbScale: "320:80",
         MountFilter: UniversalScreen88Protocol.VideoMountFilter,
-        VariantFile: (rotation, mirror) => $"glass-r{UniversalScreen88Protocol.VideoMount(rotation)}{(mirror ? "-mirror" : "")}.h264");
+        // ".v2": encodes from before the crop per orientation could stretch a 4:1 crop into a portrait mount, so none is reused.
+        VariantFile: (rotation, mirror) => $"glass-r{UniversalScreen88Protocol.VideoMount(rotation)}{(mirror ? "-mirror" : "")}.v2.h264",
+        PortraitMount: rotation => UniversalScreen88Protocol.VideoMount(rotation) == 90);
 
     public UniversalScreen88Media(string? root = null)
         : base(Profile, root)
