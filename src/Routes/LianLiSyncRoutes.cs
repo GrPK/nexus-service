@@ -6,8 +6,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Nexus.Service.Lighting;
 using Nexus.Service.Models;
-using Nexus.Service.Peripherals.BulkPanels;
-using Nexus.Service.Peripherals.LianLiWireless;
 using Nexus.Service.Persistence;
 using Nexus.Service.Serialization;
 
@@ -17,6 +15,11 @@ namespace Nexus.Service.Routes;
 public sealed class LianLiSyncEffectDto
 {
     public string Key { get; set; } = "";
+    /// <summary>
+    /// One of Quick Sync's merged ("wireless") effects: drawn once across every device in <c>devices</c>
+    /// order, each reading its stretch in its own direction; false for the six each device plays alone.
+    /// </summary>
+    public bool Merge { get; set; }
     public bool HasSpeed { get; set; }
     public bool HasDirection { get; set; }
     /// <summary>Colour pickers the effect shows; the colours sent must be exactly this many.</summary>
@@ -40,6 +43,17 @@ public sealed class LianLiSyncDeviceDto
     public int FanCount { get; set; }
     /// <summary>The device's own effect key it plays while sync is on.</summary>
     public string Mode { get; set; } = "";
+    /// <summary>Its stretch of a merged effect's line: 13 per TL fan, 14 for the OLED Curved, 31 for the 8.8 bezel.</summary>
+    public int Dots { get; set; }
+    /// <summary>The direction it reads its stretch of a merged effect in: 0 as drawn, 1 reversed.</summary>
+    public int Direction { get; set; }
+}
+
+/// <summary>One device in a new merge order, with its direction (null keeps it).</summary>
+public sealed class LianLiSyncDeviceOrderDto
+{
+    public string Id { get; set; } = "";
+    public int? Direction { get; set; }
 }
 
 public sealed class LianLiSyncResponse
@@ -49,6 +63,7 @@ public sealed class LianLiSyncResponse
     /// <summary>Top of the speed and brightness levels (L-Connect's sliders at 0, 25, 50, 75, 100).</summary>
     public int MaxLevel { get; set; }
     public LianLiSyncEffectDto[] Effects { get; set; } = Array.Empty<LianLiSyncEffectDto>();
+    /// <summary>The devices present, in merge order (L-Connect's: a device joins the end when first seen).</summary>
     public LianLiSyncDeviceDto[] Devices { get; set; } = Array.Empty<LianLiSyncDeviceDto>();
 }
 
@@ -61,6 +76,11 @@ public sealed class LianLiSyncRequest
     public int? Brightness { get; set; }
     public int? Direction { get; set; }
     public string[]? Colors { get; set; }
+    /// <summary>
+    /// A new merge order: these devices first, in this order (each with its direction), then the others
+    /// in their stored order.
+    /// </summary>
+    public LianLiSyncDeviceOrderDto[]? Devices { get; set; }
 }
 
 /// <summary>L-Connect's Quick Sync ("Sync all") over the Lian Li devices this PC drives.</summary>
@@ -71,12 +91,25 @@ public static partial class LianLiSyncRoutes
 
     public static void MapLianLiSyncEndpoints(this WebApplication app)
     {
-        app.MapGet("/devices/lianli/sync", (IConfigStore store, Slv3Hub hub, HydroShift2CurveBoard curve, UniversalScreen88LedBoard screen88) =>
-            Results.Json(BuildResponse(store.Load(), hub.State, curve.IsAvailable, screen88.IsAvailable), AppJsonContext.Default.LianLiSyncResponse));
-
-        app.MapPut("/devices/lianli/sync", (LianLiSyncRequest body, IConfigStore store, Nexus.Service.Sockets.MultiplexHub mux) =>
+        app.MapGet("/devices/lianli/sync", (IConfigStore store, LianLiMergeService merge) =>
         {
-            var error = Validate(body, store.Load().Devices.LianLiSync);
+            var settings = store.Load();
+            return Results.Json(BuildResponse(settings, merge.Devices(settings)), AppJsonContext.Default.LianLiSyncResponse);
+        });
+
+        app.MapPut("/devices/lianli/sync", (LianLiSyncRequest body, IConfigStore store, LianLiMergeService merge, Nexus.Service.Sockets.MultiplexHub mux) =>
+        {
+            var known = new List<string>();
+            foreach (var d in merge.Devices(store.Load()))
+            {
+                known.Add(d.Id);
+            }
+            var current = store.Load().Devices.LianLiSync;
+            foreach (var m in current.MergeDevices)
+            {
+                known.Add(m.Id);
+            }
+            var error = Validate(body, current, known);
             if (error is not null)
             {
                 return Results.BadRequest(ApiResponse.Fail(error));
@@ -88,22 +121,42 @@ public static partial class LianLiSyncRoutes
         });
     }
 
-    internal static string? Validate(LianLiSyncRequest body, LianLiSyncSettings current)
+    internal static string? Validate(LianLiSyncRequest body, LianLiSyncSettings current, IReadOnlyCollection<string>? knownDevices = null)
     {
-        if (body.Effect is not null && LianLiSync.Find(body.Effect) is null)
+        if (body.Effect is not null && !LianLiSync.IsEffect(body.Effect))
         {
             return "unknown effect";
         }
-        var info = LianLiSync.Find(body.Effect ?? current.Effect) ?? LianLiSync.Effects[0];
+        var key = body.Effect ?? (LianLiSync.IsEffect(current.Effect) ? current.Effect : LianLiSync.Rainbow);
+        var colorCount = LianLiSync.Find(key)?.DefaultColors.Count ?? LianLiMerge.Find(key)?.DefaultColors.Count ?? 0;
         if (body.Colors is not null)
         {
-            if (body.Colors.Length != info.DefaultColors.Count)
+            if (body.Colors.Length != colorCount)
             {
-                return $"{info.Key} takes {info.DefaultColors.Count} colors";
+                return $"{key} takes {colorCount} colors";
             }
             if (body.Colors.Any(c => !HexColor().IsMatch(c)))
             {
                 return "invalid color";
+            }
+        }
+        if (body.Devices is not null)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in body.Devices)
+            {
+                if (string.IsNullOrWhiteSpace(d.Id) || !seen.Add(d.Id))
+                {
+                    return "each device once";
+                }
+                if (knownDevices is not null && !knownDevices.Contains(d.Id, StringComparer.OrdinalIgnoreCase))
+                {
+                    return $"unknown device {d.Id}";
+                }
+                if (d.Direction is not (null or 0 or 1))
+                {
+                    return "direction is 0 or 1";
+                }
             }
         }
         return null;
@@ -112,7 +165,7 @@ public static partial class LianLiSyncRoutes
     /// <summary>The sync after a validated patch; the look fields land on the patched effect's own look.</summary>
     internal static LianLiSyncSettings Patch(LianLiSyncSettings old, LianLiSyncRequest body)
     {
-        var effect = body.Effect ?? (LianLiSync.Find(old.Effect) is null ? LianLiSync.Rainbow : old.Effect);
+        var effect = body.Effect ?? (LianLiSync.IsEffect(old.Effect) ? old.Effect : LianLiSync.Rainbow);
         var looks = new Dictionary<string, LianLiSyncLook>(old.Looks, StringComparer.Ordinal);
         if (body.Speed.HasValue || body.Brightness.HasValue || body.Direction.HasValue || body.Colors is not null)
         {
@@ -130,55 +183,92 @@ public static partial class LianLiSyncRoutes
             Enabled = body.Enabled ?? old.Enabled,
             Effect = effect,
             Looks = looks,
+            MergeDevices = body.Devices is not null ? Reorder(old.MergeDevices, body.Devices) : old.MergeDevices,
         };
     }
 
-    internal static LianLiSyncResponse BuildResponse(NexusSettings settings, Slv3State wireless, bool curve, bool screen88)
+    /// <summary>The merge order with <paramref name="order"/>'s devices first, in its order, then the rest as stored.</summary>
+    internal static List<LianLiMergeMember> Reorder(IReadOnlyList<LianLiMergeMember> stored, IReadOnlyList<LianLiSyncDeviceOrderDto> order)
     {
-        var sync = settings.Devices.LianLiSync;
-        var effects = LianLiSync.Effects.Select(e =>
+        var result = new List<LianLiMergeMember>(stored.Count + order.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var o in order)
         {
-            var look = LianLiSync.LookOf(sync, e.Key);
-            return new LianLiSyncEffectDto
-            {
-                Key = e.Key,
-                HasSpeed = e.HasSpeed,
-                HasDirection = e.HasDirection,
-                ColorsMax = e.DefaultColors.Count,
-                DefaultSpeed = e.DefaultSpeed,
-                DefaultColors = e.DefaultColors.ToArray(),
-                Speed = look.Speed,
-                Brightness = look.Brightness,
-                Direction = look.Direction,
-                Colors = look.Colors.ToArray(),
-            };
-        }).ToArray();
-        var effect = LianLiSync.Find(sync.Effect)?.Key ?? LianLiSync.Rainbow;
-        var devices = new List<LianLiSyncDeviceDto>();
-        foreach (var fan in wireless.Fans)
-        {
-            if (!fan.BoundToUs || fan.FanCount <= 0 || Slv3Protocol.IsStrimerDevType((byte)fan.DevType) || Slv3Protocol.IsHydroShiftDevType((byte)fan.DevType)
-                || !Slv3FanEffects.IsTlFamily(Slv3Protocol.ClassifyFanFamily((byte)fan.FanType)))
+            if (!seen.Add(o.Id))
             {
                 continue;
             }
-            devices.Add(new LianLiSyncDeviceDto { Kind = "tlChain", Id = fan.Mac.ToUpperInvariant(), Name = "Lian Li Wireless TL", FanCount = fan.FanCount, Mode = effect });
+            var was = stored.FirstOrDefault(m => string.Equals(m.Id, o.Id, StringComparison.OrdinalIgnoreCase));
+            result.Add(new LianLiMergeMember { Id = was?.Id ?? o.Id, Direction = Math.Clamp(o.Direction ?? was?.Direction ?? 0, 0, 1) });
         }
-        if (curve)
+        foreach (var m in stored)
         {
-            devices.Add(new LianLiSyncDeviceDto { Kind = "hydroShift2Curve", Id = "hydroShift2Curve", Name = "HydroShift II OLED Curved", Mode = effect });
+            if (seen.Add(m.Id))
+            {
+                result.Add(new LianLiMergeMember { Id = m.Id, Direction = m.Direction });
+            }
         }
-        if (screen88)
+        return result;
+    }
+
+    internal static LianLiSyncResponse BuildResponse(NexusSettings settings, IReadOnlyList<LianLiMerge.Participant> devices)
+    {
+        var sync = settings.Devices.LianLiSync;
+        var effects = new List<LianLiSyncEffectDto>(LianLiSync.Effects.Count + LianLiMerge.Effects.Count);
+        foreach (var e in LianLiSync.Effects)
         {
-            devices.Add(new LianLiSyncDeviceDto { Kind = "universalScreen88", Id = "universalScreen88", Name = "Universal Screen 8.8", Mode = effect });
+            effects.Add(EffectDto(sync, e.Key, merge: false, e.HasSpeed, e.HasDirection, e.DefaultSpeed, e.DefaultColors));
+        }
+        foreach (var e in LianLiMerge.Effects)
+        {
+            effects.Add(EffectDto(sync, e.Key, merge: true, e.HasSpeed, e.HasDirection, e.DefaultSpeed, e.DefaultColors));
+        }
+        var effect = LianLiSync.IsEffect(sync.Effect) ? sync.Effect : LianLiSync.Rainbow;
+        var list = new List<LianLiSyncDeviceDto>(devices.Count);
+        foreach (var d in devices)
+        {
+            list.Add(new LianLiSyncDeviceDto
+            {
+                Kind = d.Kind,
+                Id = d.Id,
+                Name = d.Kind switch
+                {
+                    LianLiMerge.KindTl => "Lian Li Wireless TL",
+                    LianLiMerge.KindCurve => "HydroShift II OLED Curved",
+                    _ => "Universal Screen 8.8",
+                },
+                FanCount = d.FanCount,
+                Mode = effect,
+                Dots = d.Dots,
+                Direction = d.Direction,
+            });
         }
         return new LianLiSyncResponse
         {
             Enabled = sync.Enabled,
             Effect = effect,
             MaxLevel = LianLiSync.MaxLevel,
-            Effects = effects,
-            Devices = devices.ToArray(),
+            Effects = effects.ToArray(),
+            Devices = list.ToArray(),
+        };
+    }
+
+    private static LianLiSyncEffectDto EffectDto(LianLiSyncSettings sync, string key, bool merge, bool hasSpeed, bool hasDirection, int defaultSpeed, IReadOnlyList<string> defaultColors)
+    {
+        var look = LianLiSync.LookOf(sync, key);
+        return new LianLiSyncEffectDto
+        {
+            Key = key,
+            Merge = merge,
+            HasSpeed = hasSpeed,
+            HasDirection = hasDirection,
+            ColorsMax = defaultColors.Count,
+            DefaultSpeed = defaultSpeed,
+            DefaultColors = defaultColors.ToArray(),
+            Speed = look.Speed,
+            Brightness = look.Brightness,
+            Direction = look.Direction,
+            Colors = look.Colors.ToArray(),
         };
     }
 }

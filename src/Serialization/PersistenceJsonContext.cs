@@ -40,6 +40,8 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(LianLiSyncSettings))]
 [JsonSerializable(typeof(LianLiSyncLook))]
 [JsonSerializable(typeof(Dictionary<string, LianLiSyncLook>))]
+[JsonSerializable(typeof(LianLiMergeMember))]
+[JsonSerializable(typeof(List<LianLiMergeMember>))]
 [JsonSerializable(typeof(List<LianLiWirelessLane>))]
 [JsonSerializable(typeof(CorsairSettings))]
 [JsonSerializable(typeof(FirmwareManifest))]

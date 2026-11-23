@@ -2107,6 +2107,19 @@ public sealed class LianLiSyncSettings
     public string Effect { get; set; } = "rainbow";
     /// <summary>The look each effect was last given, by effect key, as L-Connect keeps one per effect; missing ones take its defaults.</summary>
     public Dictionary<string, LianLiSyncLook> Looks { get; set; } = new();
+    /// <summary>
+    /// The merged effects' device order, as L-Connect keeps it: a device joins the end when first seen and
+    /// keeps its place (and its direction) while away; the user can reorder.
+    /// </summary>
+    public List<LianLiMergeMember> MergeDevices { get; set; } = new();
+}
+
+/// <summary>A device on the merged line: its Quick Sync id and the direction it reads its stretch in.</summary>
+public sealed class LianLiMergeMember
+{
+    public string Id { get; set; } = "";
+    /// <summary>0 as drawn, 1 reversed.</summary>
+    public int Direction { get; set; }
 }
 
 /// <summary>One Quick Sync effect's look: L-Connect's sliders as levels 0..4 (0, 25, 50, 75, 100).</summary>

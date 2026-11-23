@@ -56,15 +56,22 @@ public static class LianLiSync
         {
             return look;
         }
-        var info = Find(effect);
+        var (speed, colors) = Find(effect) is { } info
+            ? (info.DefaultSpeed, info.DefaultColors)
+            : LianLiMerge.Find(effect) is { } merged
+                ? (merged.DefaultSpeed, merged.DefaultColors)
+                : (3, Array.Empty<string>());
         return new LianLiSyncLook
         {
-            Speed = info?.DefaultSpeed ?? 3,
+            Speed = speed,
             Brightness = MaxLevel,
             Direction = 0,
-            Colors = new List<string>(info?.DefaultColors ?? Array.Empty<string>()),
+            Colors = new List<string>(colors),
         };
     }
+
+    /// <summary>One of the six per-device effects or the 19 merged ones.</summary>
+    public static bool IsEffect(string? key) => Find(key) is not null || LianLiMerge.Find(key) is not null;
 
     /// <summary>
     /// A TL chain's whole-fan look under sync (applyToTLV2Fan / applyToTLFlexFan: scope TLAll, the

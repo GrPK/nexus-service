@@ -2311,6 +2311,8 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Lighting.Zones.IDeviceStructureSource>(
             sp => sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>());
         services.AddHostedService<Nexus.Service.Lighting.UniversalScreen88LedLightingFrameWriter>();
+        // Quick Sync's merged effects: the device order and the shared render the TL, Curve and 8.8 writers play.
+        services.AddSingleton<Nexus.Service.Lighting.LianLiMergeService>();
     }
 
     public static IServiceCollection AddNexusWeather(this IServiceCollection services)

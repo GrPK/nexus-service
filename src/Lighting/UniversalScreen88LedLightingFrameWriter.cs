@@ -33,6 +33,7 @@ public sealed class UniversalScreen88LedLightingFrameWriter : BackgroundService
     private readonly IConfigStore _store;
     private readonly Np50IdentifyTracker _identify;
     private readonly FeatureGates _gates;
+    private readonly LianLiMergeService? _merge;
     private readonly DeviceStructure _structure = UniversalScreen88LedLightingDeviceProvider.BuildStructure();
     private readonly byte[] _rgb = new byte[UniversalScreen88LedProtocol.LedCount * 3];
     private RgbColor[][] _segBuf = Array.Empty<RgbColor[]>();
@@ -44,8 +45,10 @@ public sealed class UniversalScreen88LedLightingFrameWriter : BackgroundService
     private int _frameIndex;
 
     public UniversalScreen88LedLightingFrameWriter(
-        LightingEngine engine, UniversalScreen88LedBoard board, IConfigStore store, Np50IdentifyTracker identify, FeatureGates? gates = null)
+        LightingEngine engine, UniversalScreen88LedBoard board, IConfigStore store, Np50IdentifyTracker identify, FeatureGates? gates = null,
+        LianLiMergeService? merge = null)
     {
+        _merge = merge;
         _engine = engine;
         _board = board;
         _store = store;
@@ -98,6 +101,12 @@ public sealed class UniversalScreen88LedLightingFrameWriter : BackgroundService
             return TickMs;
         }
         var settings = _store.Load();
+        // Quick Sync on a merged effect: the bezel's stretch of the line drawn through every device.
+        if (settings.Devices.LianLiSync.Enabled && _merge?.Current(settings) is { } merged
+            && merged.Outputs.TryGetValue(LianLiMergeService.Screen88Id, out var share) && share.Frames is { Count: > 0 })
+        {
+            return TickMerged(settings, merged, share);
+        }
         // Quick Sync stands in for the bezel's own look while it is on.
         var ls = LianLiSync.Screen88Lighting(settings);
         if (ls.Mode != UniversalScreen88LightingSettings.CanvasMode && UniversalScreen88LedEffects.Modes.Contains(ls.Mode))
@@ -209,6 +218,48 @@ public sealed class UniversalScreen88LedLightingFrameWriter : BackgroundService
             }
         }
         return frames;
+    }
+
+    /// <summary>
+    /// Plays the bezel's stretch of Quick Sync's merged line on the clock every merged USB device shares,
+    /// so they step together.
+    /// </summary>
+    private int TickMerged(NexusSettings settings, LianLiMergeService.Snapshot merged, LianLiMerge.Output share)
+    {
+        var id = UniversalScreen88LedLightingDeviceProvider.RingZoneId;
+        if (settings.Devices.UncontrolledLightingDevices.Contains(id))
+        {
+            DropEffect();
+            return TickMs;
+        }
+        if (_identify.TryGetActive(id, DateTime.UtcNow.Ticks, out _))
+        {
+            DropEffect();
+            Array.Fill(_rgb, (byte)255);
+            _board.SetLeds(_rgb);
+            return TickMs;
+        }
+        if (settings.Devices.DisabledLightingDevices.Contains(id))
+        {
+            DropEffect();
+            Array.Clear(_rgb);
+            _board.SetLeds(_rgb);
+            return TickMs;
+        }
+
+        settings.Devices.LightingDevicePrefs.TryGetValue(id, out var pref);
+        // At full card and master brightness the frames go out as L-Connect draws them.
+        var cap = MasterBrightness.Resolve(settings).Combine(Math.Clamp(pref?.Brightness ?? 100, 0, 100) / 100.0);
+        var signature = "merge|" + merged.Signature + "|" + cap.ToString("R", CultureInfo.InvariantCulture) + "|" + pref?.ColorOrder;
+        if (signature != _effectSignature)
+        {
+            _effectFrames = LianLiMergeService.Adjust(share.Frames!, cap, pref?.ColorOrder);
+            _effectSignature = signature;
+            _effectMode = null;
+        }
+        var (index, waitMs) = LianLiMergeService.FrameAt(merged.EpochMs, _merge!.NowMs, share.PeriodMs, _effectFrames.Count, TickMs);
+        _board.SetLeds(_effectFrames[index]);
+        return waitMs;
     }
 
     private void DropEffect()

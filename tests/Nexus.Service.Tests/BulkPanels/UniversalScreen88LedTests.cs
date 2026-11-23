@@ -157,6 +157,40 @@ public class UniversalScreen88LedTests
     }
 
     [Fact]
+    public void Writer_plays_the_bezel_stretch_of_a_merged_Quick_Sync_effect_on_the_shared_clock()
+    {
+        var pipe = new LedPipe();
+        var store = new MemoryStore();
+        var board = new UniversalScreen88LedBoard(new PipeFactory(pipe), new DeviceControlGate(store), new HardwarePresence(new NoUsb()));
+        Assert.True(board.TryConnect());
+        var curve = new HydroShift2CurveBoard(new PipeFactory(new LedPipe()), new DeviceControlGate(store), new HardwarePresence(new NoUsb()), store);
+        var hub = new Nexus.Service.Peripherals.LianLiWireless.Slv3Hub(new Nexus.Service.Tests.LianLiWireless.Slv3TestHub.FakeDiscovery(), _ => throw new InvalidOperationException());
+        long now = 5000;
+        var merge = new LianLiMergeService(store, hub, curve, board, () => now);
+        store.Update(s => s.Devices.LianLiSync = new LianLiSyncSettings { Enabled = true, Effect = "mergeMeteor" });
+        using var engine = new Nexus.Service.Lighting.Engine.LightingEngine();
+        var writer = new UniversalScreen88LedLightingFrameWriter(engine, board, store, new Np50IdentifyTracker(), merge: merge);
+
+        var wait = writer.Tick();
+        var share = merge.Current(store.Load())!.Outputs[LianLiMergeService.Screen88Id];
+        Assert.Equal(share.PeriodMs, wait);
+        Assert.Equal(share.Frames![0], SentFrame(board, pipe));
+
+        now += (share.PeriodMs * 3) + 1;
+        writer.Tick();
+        Assert.Equal(share.Frames[3], SentFrame(board, pipe));
+        // First seen, so stored at the end of the merge order.
+        Assert.Equal(new[] { LianLiMergeService.Screen88Id }, store.Load().Devices.LianLiSync.MergeDevices.Select(m => m.Id));
+    }
+
+    private static byte[] SentFrame(UniversalScreen88LedBoard board, LedPipe pipe)
+    {
+        board.SendLedsIfDirty();
+        var chunks = pipe.Writes.Where(w => w[0] == UniversalScreen88LedProtocol.LedFrame).TakeLast(3).ToList();
+        return chunks.SelectMany(c => c.Skip(4).Take(60)).ToArray();
+    }
+
+    [Fact]
     public void The_bundled_OpenRGB_detector_is_held_off_for_the_bezel_only_while_the_ring_is_native()
     {
         var claim = NativeDetectorClaims.All.Single(c => c.Key == NativeDetectorClaims.UniversalScreen88);

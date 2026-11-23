@@ -1367,6 +1367,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Routes.UniversalScreen88LightingResponse))]
 [JsonSerializable(typeof(Nexus.Service.Routes.LianLiSyncResponse))]
 [JsonSerializable(typeof(Nexus.Service.Routes.LianLiSyncRequest))]
+[JsonSerializable(typeof(Nexus.Service.Routes.LianLiSyncDeviceOrderDto))]
 [JsonSerializable(typeof(Nexus.Service.Routes.UniversalScreen88LightingRequest))]
 [JsonSerializable(typeof(Nexus.Service.Routes.UniversalScreen88ModeDto[]))]
 [JsonSerializable(typeof(Nexus.Service.Routes.HydroShift2CurveMediaResponse))]

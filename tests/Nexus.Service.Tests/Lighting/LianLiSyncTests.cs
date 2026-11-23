@@ -132,10 +132,11 @@ public class LianLiSyncTests
     [Fact]
     public void The_sync_lists_the_TL_chains_and_USB_devices_it_drives()
     {
-        var response = LianLiSyncRoutes.BuildResponse(Synced("breathing"), new Slv3State(), curve: true, screen88: false);
+        var devices = LianLiMergeService.Present(new Slv3State(), curve: true, screen88: false);
+        var response = LianLiSyncRoutes.BuildResponse(Synced("breathing"), devices);
         Assert.True(response.Enabled);
         Assert.Equal("breathing", response.Effect);
-        Assert.Equal(6, response.Effects.Length);
+        Assert.Equal(6, response.Effects.Count(e => !e.Merge));
         Assert.Equal(4, response.Effects.Single(e => e.Key == "breathing").ColorsMax);
         var device = Assert.Single(response.Devices);
         Assert.Equal("hydroShift2Curve", device.Kind);
