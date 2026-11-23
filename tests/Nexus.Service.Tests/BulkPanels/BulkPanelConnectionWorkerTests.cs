@@ -252,6 +252,8 @@ public class BulkPanelConnectionWorkerTests
         try
         {
             Assert.True(await Eventually(() => hub.IsConnected && driver.Connects == 1));
+            // The hub reads connected before the session loop's first scan; wait for it (the scan before the open, then that one).
+            Assert.True(await Eventually(() => usb.Scans >= 2));
             // One incomplete bus scan must not end a session, and a wake is no scan at all.
             usb.Present = false;
             var scans = usb.Scans;
