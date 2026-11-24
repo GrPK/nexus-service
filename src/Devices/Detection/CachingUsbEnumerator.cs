@@ -43,7 +43,21 @@ internal sealed class CachingUsbEnumerator : IUsbEnumerator
             _version++;
             _cachedAt = DateTime.MinValue;
         }
+        try
+        {
+            Invalidated?.Invoke();
+        }
+        catch
+        {
+            // A listener must never break the PnP callback that invalidates.
+        }
     }
+
+    /// <summary>
+    /// Raised after <see cref="Invalidate"/>, on the caller's thread (the PnP callback on Windows): a device may
+    /// have come or gone. Listeners only note it and read presence later, off that thread.
+    /// </summary>
+    public event Action? Invalidated;
 
     /// <summary>
     /// Fallback TTL while event-driven invalidation is active. Must stay short

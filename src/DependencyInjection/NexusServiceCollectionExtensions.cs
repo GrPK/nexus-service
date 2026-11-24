@@ -2236,6 +2236,30 @@ public static class NexusServiceCollectionExtensions
             return player;
         });
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player>());
+        // The "lianli-screen88" topic: the glass attaching or detaching, its Windows display identity coming or going,
+        // and the clip on its decoder, which the settings route reports and no other push covers in time.
+        services.AddSingleton(sp =>
+        {
+            var presence = sp.GetRequiredService<Nexus.Service.Devices.Detection.HardwarePresence>();
+            var player = sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player>();
+            var broadcaster = new Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Broadcaster(
+                sp.GetRequiredService<Nexus.Service.Sockets.MultiplexHub>(),
+                () => new Nexus.Service.Peripherals.BulkPanels.UniversalScreen88PushState(
+                    hub.IsConnected,
+                    presence.UsbPresent(
+                        Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Protocol.DesktopVendorId,
+                        Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Protocol.DesktopProductId),
+                    player.Playing));
+            hub.ConnectionChanged += broadcaster.Wake;
+            player.GlassOwnerChanged += broadcaster.Wake;
+            // Registered on Windows, where PnP notifications invalidate it; elsewhere the backstop check covers it.
+            if (sp.GetService<Nexus.Service.Devices.Detection.CachingUsbEnumerator>() is { } usb)
+            {
+                usb.Invalidated += broadcaster.Wake;
+            }
+            return broadcaster;
+        });
+        services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Broadcaster>());
     }
 
     /// <summary>The HydroShift II's pump, fans, coolant probe and ring, which ride its LCD's bulk pipe.</summary>

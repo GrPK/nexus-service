@@ -102,25 +102,54 @@ public sealed class BulkPanelHub : IDisposable
     /// </summary>
     public bool Attach(IBulkUsbPipe pipe, IHidDevice? hid)
     {
+        bool was;
+        bool attached;
         lock (_lock)
         {
-            DetachLocked();
-            _pipe = pipe;
-            _hid = hid;
+            was = _attached;
+            attached = AttachLocked(pipe, hid);
+        }
+        RaiseIfConnectionFlipped(was, attached);
+        return attached;
+    }
 
-            var geometry = _driver.Connect(pipe, hid);
-            if (geometry is null)
-            {
-                DetachLocked();
-                return false;
-            }
-            (_width, _height) = geometry.Value;
-            _attached = _width > 0 && _height > 0;
-            if (!_attached)
-            {
-                DetachLocked();
-            }
-            return _attached;
+    private bool AttachLocked(IBulkUsbPipe pipe, IHidDevice? hid)
+    {
+        DetachLocked();
+        _pipe = pipe;
+        _hid = hid;
+
+        var geometry = _driver.Connect(pipe, hid);
+        if (geometry is null)
+        {
+            DetachLocked();
+            return false;
+        }
+        (_width, _height) = geometry.Value;
+        _attached = _width > 0 && _height > 0;
+        if (!_attached)
+        {
+            DetachLocked();
+        }
+        return _attached;
+    }
+
+    /// <summary>Raised outside the lock when <see cref="IsConnected"/> flipped: an attach, a detach, or a failed renegotiation.</summary>
+    public event Action? ConnectionChanged;
+
+    private void RaiseIfConnectionFlipped(bool was, bool now)
+    {
+        if (was == now)
+        {
+            return;
+        }
+        try
+        {
+            ConnectionChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Nexus.Service.Platform.ServiceLog.Warn($"[{_driver.HandlerId}] connection listener failed: {ex.Message}");
         }
     }
 
@@ -155,7 +184,8 @@ public sealed class BulkPanelHub : IDisposable
     /// <summary>Re-runs the handshake on the open pipe for new geometry, without the release a detach sends; false detaches.</summary>
     public bool Renegotiate()
     {
-        bool resized;
+        bool resized = false;
+        bool detached = false;
         lock (_lock)
         {
             if (!_attached || _pipe is null)
@@ -166,10 +196,18 @@ public sealed class BulkPanelHub : IDisposable
             if (geometry is not { Width: > 0, Height: > 0 })
             {
                 DetachLocked();
-                return false;
+                detached = true;
             }
-            resized = (_width, _height) != geometry.Value;
-            (_width, _height) = geometry.Value;
+            else
+            {
+                resized = (_width, _height) != geometry.Value;
+                (_width, _height) = geometry.Value;
+            }
+        }
+        if (detached)
+        {
+            RaiseIfConnectionFlipped(true, false);
+            return false;
         }
         if (resized)
         {
@@ -248,10 +286,13 @@ public sealed class BulkPanelHub : IDisposable
 
     public void Detach()
     {
+        bool was;
         lock (_lock)
         {
+            was = _attached;
             DetachLocked();
         }
+        RaiseIfConnectionFlipped(was, false);
     }
 
     private void DetachLocked()
@@ -273,6 +314,7 @@ public sealed class BulkPanelHub : IDisposable
 
     public void Dispose()
     {
+        bool was;
         lock (_lock)
         {
             if (_disposed)
@@ -280,7 +322,9 @@ public sealed class BulkPanelHub : IDisposable
                 return;
             }
             _disposed = true;
+            was = _attached;
             DetachLocked();
         }
+        RaiseIfConnectionFlipped(was, false);
     }
 }
