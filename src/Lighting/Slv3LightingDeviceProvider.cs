@@ -548,7 +548,7 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
     internal static string StrimerModelNameFor(byte devType) => devType switch
     {
         1 => "Strimer GPU 2x8 / 16-8",
-        2 => "Strimer 24-Pin",
+        2 => "Strimer MB 24-Pin",
         3 => "Strimer GPU 3x8 / 16-12",
         4 => "Strimer CPU 2x8",
         _ => "Strimer",
