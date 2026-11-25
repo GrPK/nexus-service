@@ -1,0 +1,240 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using Nexus.Service.Models.Devices;
+using Nexus.Service.Peripherals.LogitechHidpp;
+using Xunit;
+
+namespace Nexus.Service.Tests.Peripherals.LogitechHidpp;
+
+public class LogitechMouseServiceTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "nexus-mouse-test-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_dir, recursive: true);
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+    }
+
+    [Fact]
+    public void GetState_ReadsDirectoryProfilesAndMode()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+
+        var state = service.GetState();
+
+        Assert.True(state.Present);
+        Assert.Equal("onboard", state.Mode);
+        Assert.Equal(1, state.ActiveProfile);
+        Assert.Equal(11, state.ButtonCount);
+        Assert.Equal(new[] { 1000, 500, 250, 125 }, state.ReportRatesHz);
+        Assert.Equal(2, state.Profiles.Count);
+        Assert.True(state.Profiles[0].Enabled);
+        Assert.False(state.Profiles[1].Enabled);
+        Assert.Equal(new[] { 1000, 1500, 2000, 2500, 3000 }, state.Profiles[0].Dpi);
+        Assert.Equal("special", state.Profiles[0].Buttons[4].Kind);
+        Assert.Equal(7, state.Profiles[0].Buttons[4].Code);
+        Assert.True(state.Profiles[0].CanRestore);
+    }
+
+    [Fact]
+    public void UpdateProfile_WritesTheSector_KeepsBackups_AndReselectsTheActiveProfile()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+        var original = mouse.Sectors[1].ToArray();
+
+        var result = service.UpdateProfile(1, new LogitechMouseProfileRequest { Dpi = new List<int> { 800, 1600, 2400, 3200, 6400 }, ReportRateHz = 500 });
+
+        Assert.True(result.Ok, result.Message);
+        var written = HidppOnboardProfile.Parse(mouse.Sectors[1])!;
+        Assert.True(written.CrcValid);
+        Assert.Equal(new[] { 800, 1600, 2400, 3200, 6400 }, written.Dpi);
+        Assert.Equal(2, written.ReportIntervalMs);
+        Assert.Equal(1, mouse.SelectCount);
+        var deviceDir = Directory.GetDirectories(_dir).Single();
+        Assert.Equal(original, File.ReadAllBytes(Path.Combine(deviceDir, "original-sector-0001.bin")));
+        Assert.Contains(Directory.GetFiles(deviceDir), f => f.EndsWith("-sector-0001.bin") && !f.Contains("original"));
+    }
+
+    [Fact]
+    public void UpdateProfile_PutsThePreviousBytesBack_WhenTheMouseDoesNotKeepTheWrite()
+    {
+        var mouse = new FakeMouse { DropNextWrite = true };
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+        var original = mouse.Sectors[1].ToArray();
+
+        var result = service.UpdateProfile(1, new LogitechMouseProfileRequest { Name = "Lost" });
+
+        Assert.False(result.Ok);
+        Assert.Equal(original, mouse.Sectors[1]);
+        Assert.Equal("PROFILE_NAME_DEFAULT", service.GetState().Profiles[0].Name);
+    }
+
+    [Fact]
+    public void UpdateProfile_RejectsBadValuesWithoutWriting()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+
+        Assert.Equal("invalid", service.UpdateProfile(1, new LogitechMouseProfileRequest { ReportRateHz = 333 }).Status);
+        Assert.Equal("invalid", service.UpdateProfile(9, new LogitechMouseProfileRequest { Name = "x" }).Status);
+        Assert.Equal("invalid", service.UpdateProfile(1, new LogitechMouseProfileRequest
+        {
+            Buttons = new List<LogitechMouseButtonDto> { new() { Slot = 2, Kind = "special", Code = 99 } },
+        }).Status);
+        Assert.Equal(0, mouse.Writes);
+    }
+
+    [Fact]
+    public void RestoreProfile_WritesTheFirstReadCopyBack()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+        var original = mouse.Sectors[1].ToArray();
+        Assert.True(service.UpdateProfile(1, new LogitechMouseProfileRequest { Name = "CS2" }).Ok);
+
+        var result = service.RestoreProfile(1);
+
+        Assert.True(result.Ok, result.Message);
+        Assert.Equal(original, mouse.Sectors[1]);
+    }
+
+    [Fact]
+    public void SetActiveProfile_AndSetMode_GoToTheMouse()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+
+        Assert.True(service.SetActiveProfile(2).Ok);
+        Assert.Equal(2, mouse.Current);
+        Assert.True(service.SetMode("host").Ok);
+        Assert.Equal(2, mouse.Mode);
+        Assert.Equal("invalid", service.SetMode("both").Status);
+    }
+
+    [Fact]
+    public void NotPresent_AnswersWithoutTouchingTheDevice()
+    {
+        var mouse = new FakeMouse { Present = false };
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+
+        Assert.False(service.GetState().Present);
+        Assert.Equal("not-present", service.UpdateProfile(1, new LogitechMouseProfileRequest { Name = "x" }).Status);
+        Assert.Equal(0, mouse.Calls);
+    }
+
+    // An in-memory G502 X PLUS: 0x8100 at index 11, 0x8060 at index 13, two profile sectors.
+    private sealed class FakeMouse : IHidppChannel
+    {
+        private const int Size = 255;
+        public readonly Dictionary<int, byte[]> Sectors = new();
+        public bool Present = true;
+        public bool DropNextWrite;
+        public int Mode = 1;
+        public int Current = 1;
+        public int SelectCount;
+        public int Writes;
+        public int Calls;
+        private int _writeSector;
+        private int _writeOffset;
+        private byte[]? _pending;
+
+        public FakeMouse()
+        {
+            var profile = Convert.FromHexString(
+                "010000e803dc05d007c409b80bffffffff00ffffffffffffffffffff3c002c018001000180010002800100048001000890070000" +
+                "800100109001000090020000900a000090030000900400009010000090110000ffffffffffffffffffffffff80010001800100" +
+                "02800100048001000890070000800100109001000090020000900a000090030000900400009010000090110000ffffffffffff" +
+                "ffffffffffff500052004f00460049004c0045005f004e0041004d0045005f00440045004600410055004c0054000000000000" +
+                "00000000000000000000000000000a9307d91388006400000000000000000000000000000a9307d9138800640000000033c2");
+            Sectors[1] = profile;
+            Sectors[2] = HidppOnboardProfile.Parse(profile)!.With(new HidppOnboardProfileEdit { Name = "Two" }).ToBytes();
+            var dir = Enumerable.Repeat((byte)0xFF, Size).ToArray();
+            new byte[] { 0x00, 0x01, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00 }.CopyTo(dir, 0);
+            Sectors[0] = dir;
+        }
+
+        public int Generation => 1;
+
+        public bool IsPresent() => Present;
+
+        public byte? FeatureIndex(ushort featureId) => featureId switch
+        {
+            HidppOnboardProfiles.FeatureId => 11,
+            0x8060 => 13,
+            _ => null,
+        };
+
+        public byte[]? Call(byte featureIndex, byte function, ReadOnlySpan<byte> p)
+        {
+            Calls++;
+            var reply = new byte[16];
+            if (featureIndex == 13 && function == 0)
+            {
+                reply[0] = 0x8B;
+                return reply;
+            }
+            if (featureIndex != 11)
+            {
+                return null;
+            }
+            switch (function)
+            {
+                case 0:
+                    new byte[] { 1, 5, 1, 5, 2, 11, 16, 0, Size }.CopyTo(reply, 0);
+                    return reply;
+                case 1:
+                    Mode = p[0];
+                    return reply;
+                case 2:
+                    reply[0] = (byte)Mode;
+                    return reply;
+                case 3:
+                    Current = p[0] << 8 | p[1];
+                    SelectCount++;
+                    return reply;
+                case 4:
+                    reply[1] = (byte)Current;
+                    return reply;
+                case 5:
+                    var sector = p[0] << 8 | p[1];
+                    var at = p[2] << 8 | p[3];
+                    if (!Sectors.TryGetValue(sector, out var data))
+                    {
+                        return null;
+                    }
+                    Array.Copy(data, at, reply, 0, 16);
+                    return reply;
+                case 6:
+                    _writeSector = p[0] << 8 | p[1];
+                    _writeOffset = 0;
+                    _pending = new byte[p[4] << 8 | p[5]];
+                    return reply;
+                case 7:
+                    var n = Math.Min(16, _pending!.Length - _writeOffset);
+                    p[..n].CopyTo(_pending.AsSpan(_writeOffset));
+                    _writeOffset += n;
+                    return reply;
+                case 8:
+                    Writes++;
+                    if (DropNextWrite)
+                    {
+                        DropNextWrite = false;
+                        return reply;
+                    }
+                    Sectors[_writeSector] = _pending!;
+                    return reply;
+            }
+            return null;
+        }
+    }
+}
