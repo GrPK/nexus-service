@@ -228,4 +228,16 @@ public sealed class HidppOnboardProfileEdit
     public IReadOnlyDictionary<int, HidppButtonBinding>? Buttons { get; init; }
     public IReadOnlyDictionary<int, HidppButtonBinding>? GShiftButtons { get; init; }
     public string? Name { get; init; }
+
+    /// <summary>The same edit with other button maps.</summary>
+    public HidppOnboardProfileEdit WithButtons(IReadOnlyDictionary<int, HidppButtonBinding>? buttons, IReadOnlyDictionary<int, HidppButtonBinding>? gShiftButtons) => new()
+    {
+        ReportIntervalMs = ReportIntervalMs,
+        Dpi = Dpi,
+        DefaultDpiIndex = DefaultDpiIndex,
+        ShiftDpiIndex = ShiftDpiIndex,
+        Buttons = buttons,
+        GShiftButtons = gShiftButtons,
+        Name = Name,
+    };
 }

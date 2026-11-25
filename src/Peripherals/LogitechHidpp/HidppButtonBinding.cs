@@ -14,14 +14,16 @@ public enum HidppButtonKind
     Consumer,
     /// <summary>A built-in function of the mouse (DPI, profile, tilt, G-Shift, ...).</summary>
     Special,
-    /// <summary>Anything else (macros, a disabled slot): kept byte for byte.</summary>
+    /// <summary>A macro in the onboard memory: Code = sector, Modifiers = byte address in it.</summary>
+    Macro,
+    /// <summary>Anything else (a disabled slot, unknown encodings): kept byte for byte.</summary>
     Raw,
 }
 
 /// <summary>
 /// One 4-byte button binding of an onboard profile: 80 01 mask (mouse buttons), 80 02 mod key
-/// (keyboard), 80 03 usage (consumer), 90 fn (special function). Other encodings, macros among
-/// them, are carried as raw bytes so a round trip never changes them.
+/// (keyboard), 80 03 usage (consumer), 90 fn (special function), 0s ss aa aa (macro at sector
+/// 0x0ss address 0xaaaa). Other encodings are carried as raw bytes so a round trip never changes them.
 /// </summary>
 public sealed record HidppButtonBinding(HidppButtonKind Kind, int Code, int Modifiers, byte[]? RawBytes = null)
 {
@@ -58,6 +60,7 @@ public sealed record HidppButtonBinding(HidppButtonKind Kind, int Code, int Modi
     public static HidppButtonBinding Key(int usage, int modifiers = 0) => new(HidppButtonKind.Key, usage & 0xFF, modifiers & 0xFF);
     public static HidppButtonBinding Consumer(int usage) => new(HidppButtonKind.Consumer, usage & 0xFFFF, 0);
     public static HidppButtonBinding Special(int function) => new(HidppButtonKind.Special, function & 0xFF, 0);
+    public static HidppButtonBinding Macro(int sector, int address) => new(HidppButtonKind.Macro, sector & 0x0FFF, address & 0xFFFF);
 
     public static HidppButtonBinding Decode(ReadOnlySpan<byte> b)
     {
@@ -78,6 +81,11 @@ public sealed record HidppButtonBinding(HidppButtonKind Kind, int Code, int Modi
         {
             return Special(b[1]);
         }
+        // Sector 0 is the profile directory, so a macro never lives there; 00 00 00 00 stays raw.
+        if ((b[0] & 0xF0) == 0 && ((b[0] & 0x0F) << 8 | b[1]) is var sector and > 0)
+        {
+            return Macro(sector, b[2] << 8 | b[3]);
+        }
         return new HidppButtonBinding(HidppButtonKind.Raw, 0, 0, b[..4].ToArray());
     }
 
@@ -87,6 +95,7 @@ public sealed record HidppButtonBinding(HidppButtonKind Kind, int Code, int Modi
         HidppButtonKind.Key => new byte[] { 0x80, 0x02, (byte)Modifiers, (byte)Code },
         HidppButtonKind.Consumer => new byte[] { 0x80, 0x03, (byte)(Code >> 8), (byte)Code },
         HidppButtonKind.Special => new byte[] { 0x90, (byte)Code, 0x00, 0x00 },
+        HidppButtonKind.Macro => new byte[] { (byte)(Code >> 8 & 0x0F), (byte)Code, (byte)(Modifiers >> 8), (byte)Modifiers },
         _ => RawBytes is { Length: 4 } raw ? (byte[])raw.Clone() : throw new InvalidOperationException("raw binding without its 4 bytes"),
     };
 

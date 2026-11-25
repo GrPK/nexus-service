@@ -25,6 +25,9 @@ public sealed class LogitechMouseStateDto
     public List<LogitechMouseProfileDto> Profiles { get; set; } = new();
     /// <summary>Set when the memory could not be read.</summary>
     public string? Error { get; set; }
+    /// <summary>Onboard memory sectors macros can use, and how many of them hold no macro in use.</summary>
+    public int MacroSectors { get; set; }
+    public int MacroSectorsFree { get; set; }
 }
 
 public sealed class LogitechMouseSpecialDto
@@ -50,15 +53,39 @@ public sealed class LogitechMouseProfileDto
     public bool CanRestore { get; set; }
 }
 
-/// <summary>One button binding: kind "mouse" (code = button mask), "key" (code = HID usage, modifiers), "consumer" (code = usage), "special" (code = function), "raw" (kept as is).</summary>
+/// <summary>
+/// One button binding: kind "mouse" (code = button mask), "key" (code = HID usage, modifiers),
+/// "consumer" (code = usage), "special" (code = function), "macro" (code = sector, modifiers =
+/// address; steps in <see cref="Macro"/>), "raw" (kept as is).
+/// </summary>
 public sealed class LogitechMouseButtonDto
 {
     public int Slot { get; set; }
     public string Kind { get; set; } = "";
     public int Code { get; set; }
     public int Modifiers { get; set; }
-    /// <summary>Raw binding bytes in hex, for "raw" (macros and other encodings).</summary>
+    /// <summary>Raw binding bytes in hex, for "raw" (other encodings).</summary>
     public string? Raw { get; set; }
+    /// <summary>
+    /// A macro's steps. Read: the steps the mouse holds (null when it uses commands Nexus does not
+    /// edit). Write: kind "macro" with steps stores them in the onboard memory; without steps the
+    /// binding keeps pointing at the macro at code/modifiers.
+    /// </summary>
+    public List<LogitechMouseMacroStepDto>? Macro { get; set; }
+    /// <summary>For "macro": false when the macro uses commands Nexus keeps but does not edit.</summary>
+    public bool? MacroEditable { get; set; }
+}
+
+/// <summary>
+/// One macro step: type "keyDown"/"keyUp" (code = HID usage, 0xE0-0xE7 for modifier keys;
+/// modifiers = extra mask), "delay" (code = ms), "mouseDown"/"mouseUp" (code = button mask),
+/// "consumerDown"/"consumerUp" (code = consumer usage), "wheel"/"hwheel" (code = signed clicks).
+/// </summary>
+public sealed class LogitechMouseMacroStepDto
+{
+    public string Type { get; set; } = "";
+    public int Code { get; set; }
+    public int Modifiers { get; set; }
 }
 
 /// <summary>PUT /devices/logitech-mouse/profiles/{number}: any subset; omitted fields keep their value.</summary>

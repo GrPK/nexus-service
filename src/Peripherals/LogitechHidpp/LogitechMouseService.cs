@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -55,6 +56,8 @@ public sealed class LogitechMouseService : BackgroundService
     private int? _currentSector;
     private IReadOnlyList<HidppProfileSlot> _slots = Array.Empty<HidppProfileSlot>();
     private readonly Dictionary<int, HidppOnboardProfile> _profiles = new();
+    // Sectors that hold (or may take) macros, as last read or written; null when unreadable.
+    private readonly Dictionary<int, byte[]?> _macroSectors = new();
     private IReadOnlyList<int> _rates = Array.Empty<int>();
     private string? _error;
 
@@ -149,6 +152,10 @@ public sealed class LogitechMouseService : BackgroundService
                     state.Profiles.Add(ToDto(n + 1, slot, profile, state.ButtonCount, File.Exists(OriginalPath(slot.Sector))));
                 }
             }
+            var macroSectors = MacroSectorRange().ToList();
+            var live = LiveMacros().Select(m => m.Sector).ToHashSet();
+            state.MacroSectors = macroSectors.Count;
+            state.MacroSectorsFree = macroSectors.Count(s => !live.Contains(s));
             return state;
         }
     }
@@ -156,9 +163,10 @@ public sealed class LogitechMouseService : BackgroundService
     public MouseResult UpdateProfile(int number, LogitechMouseProfileRequest request)
     {
         HidppOnboardProfileEdit edit;
+        var newMacros = new List<(bool Shift, int Slot, HidppOnboardMacro Macro)>();
         try
         {
-            edit = ToEdit(request);
+            edit = ToEdit(request, newMacros);
         }
         catch (ArgumentException ex)
         {
@@ -173,6 +181,10 @@ public sealed class LogitechMouseService : BackgroundService
             if (!TrySlot(number, out var slot) || !_profiles.TryGetValue(slot.Sector, out var current))
             {
                 return MouseResult.Invalid($"no profile {number}");
+            }
+            if (newMacros.Count > 0 && PlaceMacros(newMacros, ref edit) is { } failed)
+            {
+                return failed;
             }
             HidppOnboardProfile edited;
             try
@@ -343,6 +355,11 @@ public sealed class LogitechMouseService : BackgroundService
                 KeepOriginal(slot.Sector, profile);
             }
         }
+        _macroSectors.Clear();
+        foreach (var sector in LiveMacros().Select(m => m.Sector).Distinct())
+        {
+            _macroSectors[sector] = onboard.ReadSector(sector, info.SectorSize);
+        }
         _rates = ReadReportRates();
         _info = info;
         ServiceLog.Info($"[{Tag}] {_model.Name}: {_profiles.Count} profiles, mode {_mode}, active sector 0x{_currentSector:X4}");
@@ -398,7 +415,7 @@ public sealed class LogitechMouseService : BackgroundService
         File.WriteAllBytes(Path.Combine(DeviceDir(), $"{DateTime.Now:yyyyMMdd-HHmmss-fff}-sector-{sector:X4}.bin"), profile.ToBytes());
     }
 
-    private static LogitechMouseProfileDto ToDto(int number, HidppProfileSlot slot, HidppOnboardProfile p, int buttons, bool canRestore) => new()
+    private LogitechMouseProfileDto ToDto(int number, HidppProfileSlot slot, HidppOnboardProfile p, int buttons, bool canRestore) => new()
     {
         Number = number,
         Sector = slot.Sector,
@@ -414,16 +431,204 @@ public sealed class LogitechMouseService : BackgroundService
         CanRestore = canRestore,
     };
 
-    private static LogitechMouseButtonDto ToDto(int slot, HidppButtonBinding b) => new()
+    private LogitechMouseButtonDto ToDto(int slot, HidppButtonBinding b)
     {
-        Slot = slot,
-        Kind = b.Kind.ToString().ToLowerInvariant(),
-        Code = b.Code,
-        Modifiers = b.Modifiers,
-        Raw = b.Kind == HidppButtonKind.Raw ? Convert.ToHexString(b.Encode()) : null,
+        var dto = new LogitechMouseButtonDto
+        {
+            Slot = slot,
+            Kind = b.Kind.ToString().ToLowerInvariant(),
+            Code = b.Code,
+            Modifiers = b.Modifiers,
+            Raw = b.Kind == HidppButtonKind.Raw ? Convert.ToHexString(b.Encode()) : null,
+        };
+        if (b.Kind == HidppButtonKind.Macro)
+        {
+            var macro = MacroAt(b.Code, b.Modifiers);
+            dto.MacroEditable = macro?.Editable ?? false;
+            dto.Macro = macro is { Editable: true } ? macro.Steps.Select(ToDto).ToList() : null;
+        }
+        return dto;
+    }
+
+    private static readonly IReadOnlyDictionary<HidppMacroStepKind, string> StepNames = new Dictionary<HidppMacroStepKind, string>
+    {
+        [HidppMacroStepKind.KeyDown] = "keyDown",
+        [HidppMacroStepKind.KeyUp] = "keyUp",
+        [HidppMacroStepKind.Delay] = "delay",
+        [HidppMacroStepKind.MouseDown] = "mouseDown",
+        [HidppMacroStepKind.MouseUp] = "mouseUp",
+        [HidppMacroStepKind.ConsumerDown] = "consumerDown",
+        [HidppMacroStepKind.ConsumerUp] = "consumerUp",
+        [HidppMacroStepKind.Wheel] = "wheel",
+        [HidppMacroStepKind.HWheel] = "hwheel",
     };
 
-    private static HidppOnboardProfileEdit ToEdit(LogitechMouseProfileRequest r) => new()
+    private static LogitechMouseMacroStepDto ToDto(HidppMacroStep s) => new() { Type = StepNames[s.Kind], Code = s.Code, Modifiers = s.Modifiers };
+
+    private static HidppMacroStep ToStep(LogitechMouseMacroStepDto s)
+    {
+        foreach (var (kind, name) in StepNames)
+        {
+            if (string.Equals(name, s.Type, StringComparison.Ordinal))
+            {
+                return new HidppMacroStep(kind, s.Code, s.Modifiers);
+            }
+        }
+        throw new ArgumentException($"unknown macro step \"{s.Type}\"");
+    }
+
+    // Caller holds _lock. Every macro binding in the stored profiles, both layers.
+    private IEnumerable<(int Sector, int Address)> LiveMacros()
+    {
+        foreach (var profile in _profiles.Values)
+        {
+            for (var i = 0; i < HidppOnboardProfile.ButtonSlots; i++)
+            {
+                foreach (var b in new[] { profile.Button(i), profile.GShiftButton(i) })
+                {
+                    if (b.Kind == HidppButtonKind.Macro)
+                    {
+                        yield return (b.Code, b.Modifiers);
+                    }
+                }
+            }
+        }
+    }
+
+    // Caller holds _lock.
+    private HidppOnboardMacro? MacroAt(int sector, int address) =>
+        _macroSectors.TryGetValue(sector, out var bytes) && bytes is not null ? HidppOnboardMacro.Parse(bytes, address) : null;
+
+    // Caller holds _lock. User sectors after the profiles' own (sectors 1..profile count), below the factory ones.
+    private IEnumerable<int> MacroSectorRange()
+    {
+        if (_info is not { } info)
+        {
+            yield break;
+        }
+        var profileSectors = _slots.Select(s => s.Sector).ToHashSet();
+        var first = Math.Max(info.ProfileCount, profileSectors.Count > 0 ? profileSectors.Max() : 0) + 1;
+        var last = Math.Min(info.SectorCount, HidppOnboardProfiles.RomSectorBase) - 1;
+        for (var s = first; s <= last; s++)
+        {
+            if (!profileSectors.Contains(s))
+            {
+                yield return s;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Caller holds _lock. Stores each new macro in the onboard memory and points its binding at
+    /// it: a macro the memory already holds is reused; otherwise it goes after the macros in use in
+    /// a macro sector with room (16-byte aligned), or at the start of a sector no binding uses. The
+    /// sector is backed up, written whole with its CRC and read back; one that does not read back
+    /// as written gets its previous bytes again.
+    /// </summary>
+    private MouseResult? PlaceMacros(List<(bool Shift, int Slot, HidppOnboardMacro Macro)> macros, ref HidppOnboardProfileEdit edit)
+    {
+        if (HidppOnboardProfiles.Open(_channel) is not { } onboard || _info is not { } info)
+        {
+            return MouseResult.Failed("the mouse has no onboard memory");
+        }
+        var size = info.SectorSize;
+        var buttons = new Dictionary<int, HidppButtonBinding>(edit.Buttons ?? new Dictionary<int, HidppButtonBinding>());
+        var shifted = new Dictionary<int, HidppButtonBinding>(edit.GShiftButtons ?? new Dictionary<int, HidppButtonBinding>());
+        // Macros written in this request, not yet referenced by a stored profile.
+        var placed = new List<(int Sector, int Address, int Length)>();
+        foreach (var (shift, slot, macro) in macros)
+        {
+            (int Sector, int Address)? at = null;
+            foreach (var (sector, address) in LiveMacros().Concat(placed.Select(p => (p.Sector, p.Address))))
+            {
+                if (MacroAt(sector, address) is { } existing && existing.Bytes.AsSpan().SequenceEqual(macro.Bytes))
+                {
+                    at = (sector, address);
+                    break;
+                }
+            }
+            if (at is null)
+            {
+                foreach (var sector in MacroSectorRange().ToList())
+                {
+                    if (!_macroSectors.TryGetValue(sector, out var bytes))
+                    {
+                        bytes = onboard.ReadSector(sector, size);
+                        _macroSectors[sector] = bytes;
+                    }
+                    if (bytes is null)
+                    {
+                        continue;
+                    }
+                    var inUse = LiveMacros().Where(m => m.Sector == sector)
+                        .Select(m => (m.Address, Length: MacroAt(m.Sector, m.Address)?.Bytes.Length ?? 0))
+                        .Concat(placed.Where(p => p.Sector == sector).Select(p => (p.Address, p.Length)))
+                        .ToList();
+                    if (inUse.Any(m => m.Length == 0))
+                    {
+                        continue; // a binding points into this sector at something unreadable; leave it alone
+                    }
+                    var start = inUse.Count == 0 ? 0 : (inUse.Max(m => m.Address + m.Length) + 15) / 16 * 16;
+                    if (start + macro.Bytes.Length > size - 2)
+                    {
+                        continue;
+                    }
+                    var next = inUse.Count == 0 ? Enumerable.Repeat((byte)0xFF, size).ToArray() : (byte[])bytes.Clone();
+                    macro.Bytes.CopyTo(next, start);
+                    BinaryPrimitives.WriteUInt16BigEndian(next.AsSpan(size - 2), HidppOnboardProfile.Crc16(next.AsSpan(0, size - 2)));
+                    if (WriteMacroSector(onboard, sector, bytes, next) is { } failed)
+                    {
+                        return failed;
+                    }
+                    at = (sector, start);
+                    placed.Add((sector, start, macro.Bytes.Length));
+                    break;
+                }
+            }
+            if (at is not { } where)
+            {
+                return MouseResult.Failed("the onboard memory has no room left for this macro; remove a macro from another button first");
+            }
+            (shift ? shifted : buttons)[slot] = HidppButtonBinding.Macro(where.Sector, where.Address);
+        }
+        edit = edit.WithButtons(buttons.Count > 0 ? buttons : edit.Buttons, shifted.Count > 0 ? shifted : edit.GShiftButtons);
+        return null;
+    }
+
+    // Caller holds _lock.
+    private MouseResult? WriteMacroSector(HidppOnboardProfiles onboard, int sector, byte[] previous, byte[] next)
+    {
+        try
+        {
+            if (previous.Any(b => b != 0xFF))
+            {
+                Directory.CreateDirectory(DeviceDir());
+                File.WriteAllBytes(Path.Combine(DeviceDir(), $"{DateTime.Now:yyyyMMdd-HHmmss-fff}-sector-{sector:X4}.bin"), previous);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return MouseResult.Failed($"backup failed, nothing was written: {ex.Message}");
+        }
+        if (previous.AsSpan().SequenceEqual(next))
+        {
+            return null;
+        }
+        var landed = onboard.WriteSector(sector, next) && onboard.ReadSector(sector, next.Length) is { } back && back.AsSpan().SequenceEqual(next);
+        if (!landed)
+        {
+            var restored = onboard.WriteSector(sector, previous)
+                && onboard.ReadSector(sector, previous.Length) is { } again && again.AsSpan().SequenceEqual(previous);
+            _macroSectors[sector] = restored ? previous : null;
+            ServiceLog.Warn($"[{Tag}] macro sector 0x{sector:X4} did not read back as written; previous contents {(restored ? "restored" : "NOT restored")}");
+            return MouseResult.Failed("the mouse did not keep the macro; nothing changed");
+        }
+        _macroSectors[sector] = next;
+        ServiceLog.Info($"[{Tag}] wrote macro sector 0x{sector:X4}");
+        return null;
+    }
+
+    private static HidppOnboardProfileEdit ToEdit(LogitechMouseProfileRequest r, List<(bool Shift, int Slot, HidppOnboardMacro Macro)> newMacros) => new()
     {
         Name = r.Name,
         ReportIntervalMs = r.ReportRateHz switch
@@ -438,11 +643,11 @@ public sealed class LogitechMouseService : BackgroundService
         Dpi = r.Dpi,
         DefaultDpiIndex = r.DefaultDpiIndex,
         ShiftDpiIndex = r.ShiftDpiIndex,
-        Buttons = ToBindings(r.Buttons),
-        GShiftButtons = ToBindings(r.GShiftButtons),
+        Buttons = ToBindings(r.Buttons, false, newMacros),
+        GShiftButtons = ToBindings(r.GShiftButtons, true, newMacros),
     };
 
-    private static Dictionary<int, HidppButtonBinding>? ToBindings(List<LogitechMouseButtonDto>? list)
+    private static Dictionary<int, HidppButtonBinding>? ToBindings(List<LogitechMouseButtonDto>? list, bool shift, List<(bool Shift, int Slot, HidppOnboardMacro Macro)> newMacros)
     {
         if (list is null)
         {
@@ -454,6 +659,21 @@ public sealed class LogitechMouseService : BackgroundService
             if (b.Slot is < 0 or >= HidppOnboardProfile.ButtonSlots)
             {
                 throw new ArgumentException($"button slot {b.Slot} out of range");
+            }
+            if (b.Kind == "macro")
+            {
+                if (b.Macro is { } steps)
+                {
+                    // Placed, and its binding set, once the memory is locked.
+                    newMacros.Add((shift, b.Slot, HidppOnboardMacro.FromSteps(steps.Select(ToStep).ToList())));
+                    continue;
+                }
+                if (b.Code <= 0)
+                {
+                    throw new ArgumentException($"button slot {b.Slot}: a macro binding needs its steps or its sector");
+                }
+                map[b.Slot] = HidppButtonBinding.Macro(b.Code, b.Modifiers);
+                continue;
             }
             map[b.Slot] = b.Kind switch
             {

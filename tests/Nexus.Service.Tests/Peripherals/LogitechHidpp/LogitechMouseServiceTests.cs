@@ -132,6 +132,76 @@ public class LogitechMouseServiceTests : IDisposable
         Assert.Equal(0, mouse.Calls);
     }
 
+    private static List<LogitechMouseMacroStepDto> Tap(int usage) => new()
+    {
+        new() { Type = "keyDown", Code = usage },
+        new() { Type = "delay", Code = 20 },
+        new() { Type = "keyUp", Code = usage },
+    };
+
+    [Fact]
+    public void UpdateProfile_StoresMacrosInAFreeSector_PacksThem_AndReusesIdenticalOnes()
+    {
+        var mouse = new FakeMouse();
+        mouse.EraseMacroSectors();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+
+        var result = service.UpdateProfile(2, new LogitechMouseProfileRequest
+        {
+            Buttons = new List<LogitechMouseButtonDto>
+            {
+                new() { Slot = 3, Kind = "macro", Macro = Tap(0x04) },
+                new() { Slot = 5, Kind = "macro", Macro = Tap(0x05) },
+            },
+            GShiftButtons = new List<LogitechMouseButtonDto> { new() { Slot = 3, Kind = "macro", Macro = Tap(0x04) } },
+        });
+
+        Assert.True(result.Ok, result.Message);
+        var profile = HidppOnboardProfile.Parse(mouse.Sectors[2])!;
+        Assert.Equal(HidppButtonBinding.Macro(6, 0), profile.Button(3));
+        Assert.Equal(HidppButtonBinding.Macro(6, 16), profile.Button(5));
+        Assert.Equal(HidppButtonBinding.Macro(6, 0), profile.GShiftButton(3));
+        var sector = mouse.Sectors[6];
+        Assert.Equal(HidppOnboardProfile.Crc16(sector.AsSpan(0, 253)), sector[253] << 8 | sector[254]);
+        Assert.Equal(Convert.FromHexString("430004400014440004FF"), sector[..10]);
+        Assert.Equal(Convert.FromHexString("430005400014440005FF"), sector[16..26]);
+        Assert.All(mouse.Sectors.Where(kv => kv.Key > 6).Select(kv => kv.Value), b => Assert.All(b, x => Assert.Equal(0xFF, x)));
+
+        var button = service.GetState().Profiles[1].Buttons[5];
+        Assert.Equal("macro", button.Kind);
+        Assert.True(button.MacroEditable);
+        Assert.Equal(new[] { "keyDown", "delay", "keyUp" }, button.Macro!.Select(m => m.Type));
+        Assert.Equal(0x05, button.Macro![0].Code);
+
+        // A later macro goes after the ones in use.
+        Assert.True(service.UpdateProfile(1, new LogitechMouseProfileRequest
+        {
+            Buttons = new List<LogitechMouseButtonDto> { new() { Slot = 9, Kind = "macro", Macro = Tap(0x06) } },
+        }).Ok);
+        Assert.Equal(HidppButtonBinding.Macro(6, 32), HidppOnboardProfile.Parse(mouse.Sectors[1])!.Button(9));
+    }
+
+    [Fact]
+    public void UpdateProfile_RefusesAMacroWhenNoSectorHasRoom_WithoutTouchingTheProfile()
+    {
+        var mouse = new FakeMouse(); // macro sectors unreadable
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+        var before = mouse.Sectors[1].ToArray();
+
+        var result = service.UpdateProfile(1, new LogitechMouseProfileRequest
+        {
+            Buttons = new List<LogitechMouseButtonDto> { new() { Slot = 3, Kind = "macro", Macro = Tap(0x04) } },
+        });
+
+        Assert.False(result.Ok);
+        Assert.Equal(before, mouse.Sectors[1]);
+        Assert.Equal(0, mouse.Writes);
+        Assert.Equal("invalid", service.UpdateProfile(1, new LogitechMouseProfileRequest
+        {
+            Buttons = new List<LogitechMouseButtonDto> { new() { Slot = 3, Kind = "macro", Macro = new() { new() { Type = "keyDown", Code = 4 } } } },
+        }).Status);
+    }
+
     // An in-memory G502 X PLUS: 0x8100 at index 11, 0x8060 at index 13, two profile sectors.
     private sealed class FakeMouse : IHidppChannel
     {
@@ -161,6 +231,14 @@ public class LogitechMouseServiceTests : IDisposable
             var dir = Enumerable.Repeat((byte)0xFF, Size).ToArray();
             new byte[] { 0x00, 0x01, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00 }.CopyTo(dir, 0);
             Sectors[0] = dir;
+        }
+
+        public void EraseMacroSectors()
+        {
+            for (var sector = 6; sector < 16; sector++)
+            {
+                Sectors[sector] = Enumerable.Repeat((byte)0xFF, Size).ToArray();
+            }
         }
 
         public int Generation => 1;

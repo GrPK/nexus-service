@@ -118,7 +118,7 @@ public class HidppOnboardProfileTests
     [Fact]
     public void ButtonBinding_RawBytesSurviveARoundTrip()
     {
-        var raw = new byte[] { 0x00, 0x05, 0x00, 0x20 };
+        var raw = new byte[] { 0xA0, 0x05, 0x00, 0x20 }; // an encoding the profile format does not define
 
         var binding = HidppButtonBinding.Decode(raw);
 
