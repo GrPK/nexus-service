@@ -49,6 +49,7 @@ public static partial class DevicesRoutes
         MapAsiahorseUmbraEndpoints(app);
         MapLogitechSpeakerEndpoints(app);
         MapLogitechMouseEndpoints(app);
+        MapLogitechKeyboardEndpoints(app);
     }
 
     /// <summary>

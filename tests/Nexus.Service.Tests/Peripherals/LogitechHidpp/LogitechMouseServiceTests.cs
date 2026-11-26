@@ -116,9 +116,29 @@ public class LogitechMouseServiceTests : IDisposable
 
         Assert.True(service.SetActiveProfile(2).Ok);
         Assert.Equal(2, mouse.Current);
+        // Profile 2 was out of the cycle; the mouse only switches to one in it.
+        Assert.Equal(1, mouse.Sectors[0][6]);
+        Assert.True(service.GetState().Profiles[1].Enabled);
         Assert.True(service.SetMode("host").Ok);
         Assert.Equal(2, mouse.Mode);
         Assert.Equal("invalid", service.SetMode("both").Status);
+    }
+
+    [Fact]
+    public void SetProfileEnabled_RewritesTheDirectoryWithItsCrc_AndKeepsOneProfileInTheCycle()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+
+        Assert.True(service.SetProfileEnabled(2, true).Ok);
+        var dir = mouse.Sectors[0];
+        Assert.Equal(1, dir[6]);
+        Assert.Equal(HidppOnboardProfile.Crc16(dir.AsSpan(0, dir.Length - 2)), System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(dir.AsSpan(dir.Length - 2)));
+        Assert.True(File.Exists(Path.Combine(_dir, "g502-x-plus", "original-sector-0000.bin")));
+
+        Assert.True(service.SetProfileEnabled(1, false).Ok);
+        Assert.Equal("invalid", service.SetProfileEnabled(2, false).Status);
+        Assert.False(service.GetState().Profiles[0].Enabled);
     }
 
     [Fact]
@@ -229,7 +249,8 @@ public class LogitechMouseServiceTests : IDisposable
             Sectors[1] = profile;
             Sectors[2] = HidppOnboardProfile.Parse(profile)!.With(new HidppOnboardProfileEdit { Name = "Two" }).ToBytes();
             var dir = Enumerable.Repeat((byte)0xFF, Size).ToArray();
-            new byte[] { 0x00, 0x01, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00 }.CopyTo(dir, 0);
+            new byte[] { 0x00, 0x01, 0x01, 0xFF, 0x00, 0x02, 0x00, 0xFF }.CopyTo(dir, 0);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(dir.AsSpan(Size - 2), HidppOnboardProfile.Crc16(dir.AsSpan(0, Size - 2)));
             Sectors[0] = dir;
         }
 

@@ -1,0 +1,54 @@
+using System;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Nexus.Service.Models;
+using Nexus.Service.Models.Devices;
+using Nexus.Service.Peripherals.LogitechHidpp;
+using Nexus.Service.Serialization;
+
+namespace Nexus.Service.Routes;
+
+public static partial class DevicesRoutes
+{
+    // A Logitech keyboard's key assignments (G915 X): the BASE / FN / G-SHIFT layers of G HUB's
+    // KEYCONTROL, kept by Nexus and written to the keyboard. Every change answers with the state.
+    private static void MapLogitechKeyboardEndpoints(WebApplication app)
+    {
+        app.MapGet("/devices/logitech-keyboard", (IServiceProvider sp) =>
+            Results.Json(Keyboard(sp)?.GetState() ?? new LogitechKeyboardStateDto(), AppJsonContext.Default.LogitechKeyboardStateDto));
+
+        app.MapPut("/devices/logitech-keyboard/layers", (LogitechKeyboardLayersDto body, IServiceProvider sp) =>
+            KeyboardChange(sp, k => k.SetLayers(body)));
+
+        app.MapPost("/devices/logitech-keyboard/rewrite", (IServiceProvider sp) =>
+            KeyboardChange(sp, k => k.Rewrite()));
+
+        app.MapPost("/devices/logitech-keyboard/enabled", (LogitechKeyboardEnabledRequest body, IServiceProvider sp) =>
+            KeyboardChange(sp, k => body.Enabled is { } on ? k.SetEnabled(on) : MouseResult.Invalid("enabled is required")));
+
+        app.MapPost("/devices/logitech-keyboard/layout", (LogitechKeyboardLayoutRequest body, IServiceProvider sp) =>
+            KeyboardChange(sp, k => k.SetLayout(body.Layout)));
+    }
+
+    private static LogitechKeyboardService? Keyboard(IServiceProvider sp) => sp.GetService<LogitechKeyboardService>();
+
+    private static IResult KeyboardChange(IServiceProvider sp, Func<LogitechKeyboardService, MouseResult> change)
+    {
+        if (Keyboard(sp) is not { } keyboard)
+        {
+            return Results.Json(ApiResponse.Fail("no Logitech keyboard support on this platform"), AppJsonContext.Default.ApiResponse, statusCode: StatusCodes.Status404NotFound);
+        }
+        var result = change(keyboard);
+        if (!result.Ok)
+        {
+            var status = result.Status switch
+            {
+                "invalid" => StatusCodes.Status400BadRequest,
+                "not-present" => StatusCodes.Status404NotFound,
+                _ => StatusCodes.Status502BadGateway,
+            };
+            return Results.Json(ApiResponse.Fail(result.Message ?? result.Status), AppJsonContext.Default.ApiResponse, statusCode: status);
+        }
+        return Results.Json(keyboard.GetState(), AppJsonContext.Default.LogitechKeyboardStateDto);
+    }
+}

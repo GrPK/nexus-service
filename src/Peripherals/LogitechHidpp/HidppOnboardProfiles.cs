@@ -86,6 +86,14 @@ public sealed class HidppOnboardProfiles
         {
             throw new ArgumentOutOfRangeException(nameof(sector), sector, "only user profile sectors (1..0xFF) are writable");
         }
+        return Write(sector, data);
+    }
+
+    /// <summary>Writes the profile directory (sector 0), which says which profiles are in the cycle. Same caveats as <see cref="WriteSector"/>.</summary>
+    public bool WriteDirectory(ReadOnlySpan<byte> data) => Write(0, data);
+
+    private bool Write(int sector, ReadOnlySpan<byte> data)
+    {
         var size = data.Length;
         if (_channel.Call(_index, 6, new[] { (byte)(sector >> 8), (byte)sector, (byte)0, (byte)0, (byte)(size >> 8), (byte)size }) is null)
         {
@@ -102,6 +110,24 @@ public sealed class HidppOnboardProfiles
             }
         }
         return _channel.Call(_index, 8, ReadOnlySpan<byte>.Empty) is not null;
+    }
+
+    /// <summary>Offset of <paramref name="sector"/>'s entry in the directory, or -1.</summary>
+    public static int DirectoryEntry(ReadOnlySpan<byte> directory, int sector)
+    {
+        for (var offset = 0; offset + 4 <= directory.Length - 2; offset += 4)
+        {
+            var s = directory[offset] << 8 | directory[offset + 1];
+            if (s == 0xFFFF)
+            {
+                break;
+            }
+            if (s == sector)
+            {
+                return offset;
+            }
+        }
+        return -1;
     }
 
     /// <summary>The profile directory (sector 0): 4-byte entries (sector, enabled, reserved) up to an 0xFFFF sector.</summary>

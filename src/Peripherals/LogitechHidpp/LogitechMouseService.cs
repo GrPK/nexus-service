@@ -234,6 +234,11 @@ public sealed class LogitechMouseService : BackgroundService
             {
                 return MouseResult.Invalid($"no profile {number}");
             }
+            // The mouse will not switch to a profile that is out of the cycle; put it in first.
+            if (!slot.Enabled && SetCycle(number, slot, true) is { Ok: false } refused)
+            {
+                return refused;
+            }
             if (HidppOnboardProfiles.Open(_channel) is not { } onboard || !onboard.SetCurrentSector(slot.Sector))
             {
                 return MouseResult.Failed("the mouse did not switch profiles");
@@ -241,6 +246,78 @@ public sealed class LogitechMouseService : BackgroundService
             _currentSector = onboard.GetCurrentSector() ?? slot.Sector;
             return MouseResult.Done;
         }
+    }
+
+    /// <summary>Puts a profile in the cycle the profile button steps through, or takes it out (the profile directory).</summary>
+    public MouseResult SetProfileEnabled(int number, bool enabled)
+    {
+        lock (_lock)
+        {
+            if (Ready() is { } notReady)
+            {
+                return notReady;
+            }
+            if (!TrySlot(number, out var slot))
+            {
+                return MouseResult.Invalid($"no profile {number}");
+            }
+            return SetCycle(number, slot, enabled);
+        }
+    }
+
+    // Caller holds _lock and has checked Ready(). Backs up the directory, writes it whole, reads it back.
+    private MouseResult SetCycle(int number, HidppProfileSlot slot, bool enabled)
+    {
+        if (slot.Enabled == enabled)
+        {
+            return MouseResult.Done;
+        }
+        if (!enabled && _slots.Count(s => s.Enabled) <= 1)
+        {
+            return MouseResult.Invalid("at least one profile stays in the cycle");
+        }
+        if (HidppOnboardProfiles.Open(_channel) is not { } onboard || _info is null)
+        {
+            return MouseResult.Failed("the mouse has no onboard memory");
+        }
+        var current = onboard.ReadSector(0, _info.SectorSize);
+        var entry = current is null ? -1 : HidppOnboardProfiles.DirectoryEntry(current, slot.Sector);
+        if (current is null || entry < 0)
+        {
+            return MouseResult.Failed("the profile directory could not be read");
+        }
+        var size = current.Length;
+        if (BinaryPrimitives.ReadUInt16BigEndian(current.AsSpan(size - 2)) != HidppOnboardProfile.Crc16(current.AsSpan(0, size - 2)))
+        {
+            return MouseResult.Failed("the profile directory does not check out; it was left alone");
+        }
+        var next = current.ToArray();
+        next[entry + 2] = (byte)(enabled ? 1 : 0);
+        BinaryPrimitives.WriteUInt16BigEndian(next.AsSpan(size - 2), HidppOnboardProfile.Crc16(next.AsSpan(0, size - 2)));
+        try
+        {
+            Directory.CreateDirectory(DeviceDir());
+            var original = Path.Combine(DeviceDir(), "original-sector-0000.bin");
+            if (!File.Exists(original))
+            {
+                File.WriteAllBytes(original, current);
+            }
+            File.WriteAllBytes(Path.Combine(DeviceDir(), $"{DateTime.Now:yyyyMMdd-HHmmss-fff}-sector-0000.bin"), current);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return MouseResult.Failed($"backup failed, nothing was written: {ex.Message}");
+        }
+        var landed = onboard.WriteDirectory(next) && onboard.ReadSector(0, size) is { } back && back.AsSpan().SequenceEqual(next);
+        if (!landed)
+        {
+            var restored = onboard.WriteDirectory(current) && onboard.ReadSector(0, size) is { } again && again.AsSpan().SequenceEqual(current);
+            ServiceLog.Warn($"[{Tag}] directory did not read back as written; previous contents {(restored ? "restored" : "NOT restored")}");
+            return MouseResult.Failed(restored ? "the mouse did not keep the change; the cycle is as it was" : "the directory write failed");
+        }
+        _slots = HidppOnboardProfiles.ParseDirectory(next).Where(s => s.Sector is > 0 and < HidppOnboardProfiles.RomSectorBase).ToList();
+        ServiceLog.Info($"[{Tag}] profile {number} {(enabled ? "added to" : "taken out of")} the cycle");
+        return MouseResult.Done;
     }
 
     public MouseResult SetMode(string? mode)

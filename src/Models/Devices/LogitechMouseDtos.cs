@@ -100,6 +100,12 @@ public sealed class LogitechMouseProfileRequest
     public List<LogitechMouseButtonDto>? GShiftButtons { get; set; }
 }
 
+/// <summary>POST /devices/logitech-mouse/profiles/{number}/cycle: whether the profile button steps through this profile.</summary>
+public sealed class LogitechMouseCycleRequest
+{
+    public bool? Enabled { get; set; }
+}
+
 /// <summary>POST /devices/logitech-mouse/active: the profile number to switch to.</summary>
 public sealed class LogitechMouseActiveRequest
 {

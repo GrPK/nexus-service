@@ -1947,6 +1947,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.TryxHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LogitechSpeakerHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LogitechMouseHandler>();
+        services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LogitechKeyboardHandler>();
         // Registered as itself (not just IDeviceHandler) - StreamDeckRoutes.cs
         // injects the concrete type directly for GetWarning's detectedDevices.
         services.AddSingleton<Nexus.Service.Devices.Handlers.StreamDeckHandler>();
@@ -2798,6 +2799,8 @@ public static class NexusServiceCollectionExtensions
 #endif
         services.AddSingleton<Nexus.Service.Peripherals.LogitechHidpp.LogitechMouseService>();
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.LogitechHidpp.LogitechMouseService>());
+        services.AddSingleton<Nexus.Service.Peripherals.LogitechHidpp.LogitechKeyboardService>();
+        services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.LogitechHidpp.LogitechKeyboardService>());
         services.AddSingleton<Nexus.Service.Widgets.AppDispatchRateLimiter>();
         services.AddSingleton(sp => Nexus.Service.Widgets.AppDataStoreWiring.Create(
             sp.GetRequiredService<ProfileManager>(),
