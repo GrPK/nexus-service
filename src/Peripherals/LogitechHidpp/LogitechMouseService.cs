@@ -153,6 +153,33 @@ public sealed class LogitechMouseService : BackgroundService
 
     private string SettingsPath() => Path.Combine(_backupRoot, "settings.json");
 
+    private static readonly (string Ext, string Type)[] PictureTypes = { ("png", "image/png"), ("webp", "image/webp"), ("jpg", "image/jpeg") };
+
+    /// <summary>
+    /// The picture of the mouse the user keeps in its Nexus folder (picture.png, .webp or .jpg) with picture.json
+    /// (size and button spots); null when either is missing or the JSON does not read.
+    /// </summary>
+    public (string Path, string ContentType, LogitechMousePictureDto Info)? Picture()
+    {
+        var dir = DeviceDir();
+        var json = Path.Combine(dir, "picture.json");
+        var image = PictureTypes.Select(t => (Path: Path.Combine(dir, "picture." + t.Ext), t.Type)).FirstOrDefault(t => File.Exists(t.Path));
+        if (image.Path is null || !File.Exists(json))
+        {
+            return null;
+        }
+        try
+        {
+            var info = JsonSerializer.Deserialize(File.ReadAllText(json), AppJsonContext.Default.LogitechMousePictureDto);
+            return info is { Width: > 0, Height: > 0 } ? (image.Path, image.Type, info) : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            ServiceLog.Warn($"[{Tag}] could not read {json}: {ex.Message}");
+            return null;
+        }
+    }
+
     // Caller holds _lock.
     private LogitechMouseSettings Settings()
     {
@@ -210,6 +237,7 @@ public sealed class LogitechMouseService : BackgroundService
             state.Error = _error;
             state.Mode = _mode switch { HidppOnboardProfiles.ModeOnboard => "onboard", HidppOnboardProfiles.ModeHost => "host", _ => null };
             state.KeepOnboard = Settings().KeepOnboard;
+            state.Picture = Picture()?.Info;
             state.ButtonCount = _info?.ButtonCount ?? 0;
             state.ButtonLabels = Enumerable.Range(0, state.ButtonCount)
                 .Select(i => i < _model.ButtonLabels.Length ? _model.ButtonLabels[i] : $"Button {i + 1}").ToList();

@@ -15,6 +15,8 @@ public sealed class LogitechMouseStateDto
     public string? Mode { get; set; }
     /// <summary>Whether Nexus puts the mouse back on its onboard memory when another app switches it to host mode.</summary>
     public bool KeepOnboard { get; set; }
+    /// <summary>A picture of the mouse the user put in its Nexus folder, with where each button is on it; null when there is none.</summary>
+    public LogitechMousePictureDto? Picture { get; set; }
     /// <summary>Number (1-based, directory order) of the profile the mouse uses now.</summary>
     public int? ActiveProfile { get; set; }
     public int ButtonCount { get; set; }
@@ -106,6 +108,27 @@ public sealed class LogitechMouseProfileRequest
 public sealed class LogitechMouseCycleRequest
 {
     public bool? Enabled { get; set; }
+}
+
+/// <summary>
+/// A picture of the mouse (devices/logitech-mouse/&lt;model&gt;/picture.png|webp|jpg, served at
+/// GET /devices/logitech-mouse/picture) and picture.json beside it: its size and each button's spot.
+/// </summary>
+public sealed class LogitechMousePictureDto
+{
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public List<LogitechMousePictureSpotDto> Spots { get; set; } = new();
+}
+
+/// <summary>Where a button (by profile slot) is on the picture, in its pixels.</summary>
+public sealed class LogitechMousePictureSpotDto
+{
+    public int Slot { get; set; }
+    public int X { get; set; }
+    public int Y { get; set; }
+    /// <summary>"left" or "right": which side its callout goes; null to decide from where the button is.</summary>
+    public string? Side { get; set; }
 }
 
 /// <summary>POST /devices/logitech-mouse/keep-onboard.</summary>

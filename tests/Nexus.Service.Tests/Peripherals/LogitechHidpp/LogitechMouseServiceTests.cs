@@ -168,6 +168,24 @@ public class LogitechMouseServiceTests : IDisposable
     }
 
     [Fact]
+    public void Picture_IsReported_WhenTheImageAndItsSpotsAreThere()
+    {
+        var service = LogitechMouseService.ForTest(new FakeMouse(), _dir);
+        Assert.Null(service.GetState().Picture);
+
+        var dir = Path.Combine(_dir, "g502-x-plus");
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "picture.png"), new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G' });
+        File.WriteAllText(Path.Combine(dir, "picture.json"), "{\"width\":700,\"height\":700,\"spots\":[{\"slot\":0,\"x\":175,\"y\":175}]}");
+
+        var picture = service.GetState().Picture;
+        Assert.NotNull(picture);
+        Assert.Equal(700, picture!.Width);
+        Assert.Equal(175, Assert.Single(picture.Spots).X);
+        Assert.Equal("image/png", service.Picture()!.Value.ContentType);
+    }
+
+    [Fact]
     public void NotPresent_AnswersWithoutTouchingTheDevice()
     {
         var mouse = new FakeMouse { Present = false };

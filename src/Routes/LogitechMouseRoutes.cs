@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Nexus.Service.Models;
@@ -16,6 +17,13 @@ public static partial class DevicesRoutes
     {
         app.MapGet("/devices/logitech-mouse", (IServiceProvider sp) =>
             Results.Json(Mouse(sp)?.GetState() ?? new LogitechMouseStateDto(), AppJsonContext.Default.LogitechMouseStateDto));
+
+        // The picture of the mouse the user keeps in its Nexus folder; 404 without one.
+        app.MapGet("/devices/logitech-mouse/picture", (IServiceProvider sp) =>
+            Mouse(sp)?.Picture() is { } picture && File.Exists(picture.Path)
+                ? Results.File(File.ReadAllBytes(picture.Path), picture.ContentType,
+                    lastModified: File.GetLastWriteTimeUtc(picture.Path))
+                : Results.NotFound());
 
         app.MapPut("/devices/logitech-mouse/profiles/{number:int}", (int number, LogitechMouseProfileRequest body, IServiceProvider sp) =>
             MouseChange(sp, m => m.UpdateProfile(number, body)));

@@ -1456,6 +1456,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(LogitechMouseCycleRequest))]
 [JsonSerializable(typeof(LogitechMouseKeepOnboardRequest))]
 [JsonSerializable(typeof(LogitechMouseSettings))]
+[JsonSerializable(typeof(LogitechMousePictureDto))]
 [JsonSerializable(typeof(LogitechMouseModeRequest))]
 [JsonSerializable(typeof(LogitechKeyboardStateDto))]
 [JsonSerializable(typeof(LogitechKeyboardLayersDto))]
