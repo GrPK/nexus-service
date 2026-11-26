@@ -29,6 +29,9 @@ public static partial class DevicesRoutes
         app.MapPost("/devices/logitech-mouse/active", (LogitechMouseActiveRequest body, IServiceProvider sp) =>
             MouseChange(sp, m => body.Profile is { } n ? m.SetActiveProfile(n) : MouseResult.Invalid("profile is required")));
 
+        app.MapPost("/devices/logitech-mouse/keep-onboard", (LogitechMouseKeepOnboardRequest body, IServiceProvider sp) =>
+            MouseChange(sp, m => body.Enabled is { } on ? m.SetKeepOnboard(on) : MouseResult.Invalid("enabled is required")));
+
         app.MapPost("/devices/logitech-mouse/mode", (LogitechMouseModeRequest body, IServiceProvider sp) =>
             MouseChange(sp, m => m.SetMode(body.Mode)));
     }

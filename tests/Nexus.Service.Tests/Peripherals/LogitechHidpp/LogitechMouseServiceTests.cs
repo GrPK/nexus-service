@@ -142,6 +142,32 @@ public class LogitechMouseServiceTests : IDisposable
     }
 
     [Fact]
+    public void Tick_PutsTheMouseBackOnboard_UnlessGHubRunsOrTheUserChoseHost()
+    {
+        var mouse = new FakeMouse { Mode = 2 };
+        var ghub = false;
+        var service = LogitechMouseService.ForTest(mouse, _dir, () => ghub);
+
+        service.Tick();
+        Assert.Equal(1, mouse.Mode);
+        Assert.True(service.GetState().KeepOnboard);
+
+        mouse.Mode = 2;
+        ghub = true;
+        service.Tick();
+        Assert.Equal(2, mouse.Mode);
+
+        ghub = false;
+        Assert.True(service.SetMode("host").Ok);
+        service.Tick();
+        Assert.Equal(2, mouse.Mode);
+        Assert.False(service.GetState().KeepOnboard);
+
+        Assert.True(service.SetKeepOnboard(true).Ok);
+        Assert.Equal(1, mouse.Mode);
+    }
+
+    [Fact]
     public void NotPresent_AnswersWithoutTouchingTheDevice()
     {
         var mouse = new FakeMouse { Present = false };

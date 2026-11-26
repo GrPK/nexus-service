@@ -13,6 +13,8 @@ public sealed class LogitechMouseStateDto
     public string? Model { get; set; }
     /// <summary>"onboard" (the mouse runs its stored profile) or "host" (software drives it); null when unknown.</summary>
     public string? Mode { get; set; }
+    /// <summary>Whether Nexus puts the mouse back on its onboard memory when another app switches it to host mode.</summary>
+    public bool KeepOnboard { get; set; }
     /// <summary>Number (1-based, directory order) of the profile the mouse uses now.</summary>
     public int? ActiveProfile { get; set; }
     public int ButtonCount { get; set; }
@@ -104,6 +106,18 @@ public sealed class LogitechMouseProfileRequest
 public sealed class LogitechMouseCycleRequest
 {
     public bool? Enabled { get; set; }
+}
+
+/// <summary>POST /devices/logitech-mouse/keep-onboard.</summary>
+public sealed class LogitechMouseKeepOnboardRequest
+{
+    public bool? Enabled { get; set; }
+}
+
+/// <summary>What Nexus keeps for the mouse besides its memory (devices/logitech-mouse/settings.json).</summary>
+public sealed class LogitechMouseSettings
+{
+    public bool KeepOnboard { get; set; } = true;
 }
 
 /// <summary>POST /devices/logitech-mouse/active: the profile number to switch to.</summary>

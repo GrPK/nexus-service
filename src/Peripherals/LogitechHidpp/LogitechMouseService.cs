@@ -3,13 +3,16 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Nexus.Service.Media;
 using Nexus.Service.Models.Devices;
 using Nexus.Service.Peripherals.Hid;
+using Nexus.Service.Persistence;
 using Nexus.Service.Platform;
+using Nexus.Service.Serialization;
 
 namespace Nexus.Service.Peripherals.LogitechHidpp;
 
@@ -60,6 +63,10 @@ public sealed class LogitechMouseService : BackgroundService
     private readonly Dictionary<int, byte[]?> _macroSectors = new();
     private IReadOnlyList<int> _rates = Array.Empty<int>();
     private string? _error;
+    private LogitechMouseSettings? _settings;
+    // Another app (OpenRGB on start, G HUB) can put the mouse in host mode, where it ignores its own
+    // profiles: buttons such as Forward then send nothing. While G HUB runs, its choice stands.
+    private readonly Func<bool> _ghubRunning;
 
     public LogitechMouseService(IHidEnumerator hid)
         : this(new HidppChannel(hid, LogitechVendorId, G502XPlus.ProductId, G502XPlus.UsagePage, G502XPlus.Usage, Tag),
@@ -67,15 +74,17 @@ public sealed class LogitechMouseService : BackgroundService
     {
     }
 
-    private LogitechMouseService(IHidppChannel channel, MouseModel model, string backupRoot)
+    private LogitechMouseService(IHidppChannel channel, MouseModel model, string backupRoot, Func<bool>? ghubRunning = null)
     {
         _channel = channel;
         _model = model;
         _backupRoot = backupRoot;
+        _ghubRunning = ghubRunning ?? (() => System.Diagnostics.Process.GetProcessesByName("lghub_agent").Length > 0);
     }
 
     /// <summary>For tests: a G502 X PLUS behind <paramref name="channel"/>, backups under <paramref name="backupRoot"/>.</summary>
-    internal static LogitechMouseService ForTest(IHidppChannel channel, string backupRoot) => new(channel, G502XPlus, backupRoot);
+    internal static LogitechMouseService ForTest(IHidppChannel channel, string backupRoot, Func<bool>? ghubRunning = null) =>
+        new(channel, G502XPlus, backupRoot, ghubRunning ?? (() => false));
 
     /// <summary>The connected model's name ("G502 X PLUS"), or null.</summary>
     public string? PresentModel()
@@ -103,15 +112,79 @@ public sealed class LogitechMouseService : BackgroundService
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
     }
 
-    /// <summary>Reads the memory once per connection.</summary>
+    /// <summary>Reads the memory once per connection, and puts the mouse back on its onboard memory when asked to keep it there.</summary>
     internal void Tick()
     {
         lock (_lock)
         {
-            if (_channel.IsPresent() && _channel.Generation != _loadedGeneration)
+            if (!_channel.IsPresent())
+            {
+                return;
+            }
+            if (_channel.Generation != _loadedGeneration)
             {
                 Load();
             }
+            if (_info is not null && Settings().KeepOnboard && HidppOnboardProfiles.Open(_channel) is { } onboard
+                && onboard.GetMode() is { } mode && mode == HidppOnboardProfiles.ModeHost && !_ghubRunning())
+            {
+                if (onboard.SetMode(HidppOnboardProfiles.ModeOnboard))
+                {
+                    _mode = onboard.GetMode() ?? HidppOnboardProfiles.ModeOnboard;
+                    _currentSector = onboard.GetCurrentSector();
+                    ServiceLog.Info($"[{Tag}] the mouse was in host mode; back on its onboard memory");
+                }
+            }
+        }
+    }
+
+    /// <summary>Whether Nexus keeps the mouse on its onboard memory (see <see cref="Tick"/>).</summary>
+    public MouseResult SetKeepOnboard(bool keep)
+    {
+        lock (_lock)
+        {
+            var settings = Settings();
+            settings.KeepOnboard = keep;
+            SaveSettings(settings);
+        }
+        Tick();
+        return MouseResult.Done;
+    }
+
+    private string SettingsPath() => Path.Combine(_backupRoot, "settings.json");
+
+    // Caller holds _lock.
+    private LogitechMouseSettings Settings()
+    {
+        if (_settings is not null)
+        {
+            return _settings;
+        }
+        try
+        {
+            if (File.Exists(SettingsPath()))
+            {
+                _settings = JsonSerializer.Deserialize(File.ReadAllText(SettingsPath()), AppJsonContext.Default.LogitechMouseSettings);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            ServiceLog.Warn($"[{Tag}] could not read {SettingsPath()}: {ex.Message}");
+        }
+        return _settings ??= new LogitechMouseSettings();
+    }
+
+    // Caller holds _lock.
+    private void SaveSettings(LogitechMouseSettings settings)
+    {
+        try
+        {
+            Directory.CreateDirectory(_backupRoot);
+            AtomicJsonFile.Write(SettingsPath(), JsonSerializer.Serialize(settings, AppJsonContext.Default.LogitechMouseSettings));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ServiceLog.Warn($"[{Tag}] could not save {SettingsPath()}: {ex.Message}");
         }
     }
 
@@ -136,6 +209,7 @@ public sealed class LogitechMouseService : BackgroundService
             state.Name = $"Logitech {_model.Name}";
             state.Error = _error;
             state.Mode = _mode switch { HidppOnboardProfiles.ModeOnboard => "onboard", HidppOnboardProfiles.ModeHost => "host", _ => null };
+            state.KeepOnboard = Settings().KeepOnboard;
             state.ButtonCount = _info?.ButtonCount ?? 0;
             state.ButtonLabels = Enumerable.Range(0, state.ButtonCount)
                 .Select(i => i < _model.ButtonLabels.Length ? _model.ButtonLabels[i] : $"Button {i + 1}").ToList();
@@ -338,6 +412,14 @@ public sealed class LogitechMouseService : BackgroundService
                 return MouseResult.Failed("the mouse did not change mode");
             }
             _mode = onboard.GetMode() ?? value;
+            _currentSector = onboard.GetCurrentSector();
+            // Choosing host mode by hand means it should stay so.
+            var settings = Settings();
+            if (settings.KeepOnboard != (value == HidppOnboardProfiles.ModeOnboard))
+            {
+                settings.KeepOnboard = value == HidppOnboardProfiles.ModeOnboard;
+                SaveSettings(settings);
+            }
             return MouseResult.Done;
         }
     }
