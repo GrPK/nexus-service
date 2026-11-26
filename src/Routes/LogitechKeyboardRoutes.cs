@@ -17,6 +17,12 @@ public static partial class DevicesRoutes
         app.MapGet("/devices/logitech-keyboard", (IServiceProvider sp) =>
             Results.Json(Keyboard(sp)?.GetState() ?? new LogitechKeyboardStateDto(), AppJsonContext.Default.LogitechKeyboardStateDto));
 
+        // The keyboard's picture from the user's own G HUB install (never shipped with Nexus); 404 without one.
+        app.MapGet("/devices/logitech-keyboard/image", (string? layout) =>
+            LogitechKeyboardService.Photo(layout) is { } photo
+                ? Results.File(photo.Bytes, photo.ContentType, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{photo.Bytes.Length:x}-{layout}\""))
+                : Results.NotFound());
+
         app.MapPut("/devices/logitech-keyboard/layers", (LogitechKeyboardLayersDto body, IServiceProvider sp) =>
             KeyboardChange(sp, k => k.SetLayers(body)));
 

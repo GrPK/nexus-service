@@ -22,6 +22,8 @@ public sealed class LogitechKeyboardStateDto
     public string? LayoutChoice { get; set; }
     /// <summary>The layout known for <see cref="LayoutCode"/>, or null when unknown.</summary>
     public string? LayoutDetected { get; set; }
+    /// <summary>Whether G HUB's picture of this keyboard (for <see cref="Layout"/>) is on this PC (GET /devices/logitech-keyboard/image?layout=).</summary>
+    public bool Photo { get; set; }
     /// <summary>Logitech control id of each key number (the key's position in this list); 0 for an empty slot.</summary>
     public List<int> Controls { get; set; } = new();
     /// <summary>Whether the keyboard applies the assignments now (G HUB's "custom assignments", Fn+F1).</summary>

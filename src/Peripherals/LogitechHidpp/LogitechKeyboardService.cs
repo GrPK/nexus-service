@@ -64,6 +64,13 @@ public sealed class LogitechKeyboardService : BackgroundService
     /// <summary>For tests: a G915 X behind <paramref name="channel"/>, its layers kept under <paramref name="storeDir"/>.</summary>
     internal static LogitechKeyboardService ForTest(IHidppChannel channel, string storeDir) => new(channel, G915X, storeDir);
 
+    /// <summary>
+    /// G HUB's picture of the G915 X for <paramref name="layout"/> ("iso" or "ansi"), from the user's G HUB
+    /// install. The two layouts share a model id; the ISO one has the key left of Enter (control 361).
+    /// </summary>
+    public static (byte[] Bytes, string ContentType)? Photo(string? layout) =>
+        GHubDeviceImages.Get("g915_x", "device_image", layout == "iso" ? "\"cid\":361" : "\"cid\":286");
+
     /// <summary>The connected model's name ("G915 X"), or null.</summary>
     public string? PresentModel()
     {
@@ -125,6 +132,7 @@ public sealed class LogitechKeyboardService : BackgroundService
             state.LayoutChoice = config.Layout;
             state.Layout = config.Layout ?? state.LayoutDetected;
             state.Controls = _controls.ToList();
+            state.Photo = state.Layout is { } shown && Photo(shown) is not null;
             state.Enabled = _enabled;
             state.Written = config.Written;
             return state;
