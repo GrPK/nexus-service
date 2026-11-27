@@ -1946,6 +1946,7 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.AsiahorseUmbraHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.TryxHandler>();
         services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.LogitechSpeakerHandler>();
+        services.AddSingleton<IDeviceHandler, Nexus.Service.Devices.Handlers.SoundBlasterHandler>();
         // Registered as itself (not just IDeviceHandler) - StreamDeckRoutes.cs
         // injects the concrete type directly for GetWarning's detectedDevices.
         services.AddSingleton<Nexus.Service.Devices.Handlers.StreamDeckHandler>();
@@ -2808,6 +2809,8 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Peripherals.LogitechAudio.LogitechSpeakerService>();
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.LogitechAudio.LogitechSpeakerService>());
 #endif
+        // A Creative Sound Blaster (G8, G6) over its vendor HID interface.
+        services.AddSingleton<Nexus.Service.Peripherals.CreativeAudio.SoundBlasterService>();
         services.AddSingleton<Nexus.Service.Widgets.AppDispatchRateLimiter>();
         services.AddSingleton(sp => Nexus.Service.Widgets.AppDataStoreWiring.Create(
             sp.GetRequiredService<ProfileManager>(),
