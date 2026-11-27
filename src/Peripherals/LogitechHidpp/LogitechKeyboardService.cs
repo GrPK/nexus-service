@@ -114,7 +114,7 @@ public sealed class LogitechKeyboardService : BackgroundService
         lock (_lock)
         {
             var config = Config();
-            var state = new LogitechKeyboardStateDto { Layers = Copy(config.Layers), Written = config.Written };
+            var state = new LogitechKeyboardStateDto { Layers = Copy(config.Layers), Written = config.Written, SavedAt = config.SavedAt };
             if (!_channel.IsPresent())
             {
                 return state;
@@ -179,6 +179,40 @@ public sealed class LogitechKeyboardService : BackgroundService
                 return NotPresent;
             }
             return WriteAll(Config());
+        }
+    }
+
+    /// <summary>Saves a copy of the current layers in Nexus, to restore later (the keyboard cannot be read back).</summary>
+    public MouseResult SaveCopy()
+    {
+        lock (_lock)
+        {
+            var config = Config();
+            config.Saved = Copy(config.Layers);
+            config.SavedAt = DateTime.UtcNow;
+            Save(config);
+            return MouseResult.Done;
+        }
+    }
+
+    /// <summary>Makes the saved copy the current layers again and writes it to the keyboard.</summary>
+    public MouseResult RestoreCopy()
+    {
+        lock (_lock)
+        {
+            var config = Config();
+            if (config.Saved is not { } saved)
+            {
+                return MouseResult.Invalid("no saved copy");
+            }
+            config.Layers = Copy(saved);
+            config.Written = false;
+            Save(config);
+            if (!_channel.IsPresent())
+            {
+                return NotPresent;
+            }
+            return WriteAll(config);
         }
     }
 

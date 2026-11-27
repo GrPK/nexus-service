@@ -80,6 +80,30 @@ public class LogitechKeyboardServiceTests : IDisposable
     }
 
     [Fact]
+    public void SaveCopy_ThenRestoreCopy_WritesTheSavedLayersBack()
+    {
+        var keyboard = new FakeKeyboard();
+        var service = LogitechKeyboardService.ForTest(keyboard, _dir);
+        Assert.Equal("invalid", service.RestoreCopy().Status);
+        Assert.Null(service.GetState().SavedAt);
+
+        Assert.True(service.SetLayers(new LogitechKeyboardLayersDto { Base = { Row(G1, "keyboard", 0x0F) } }).Ok);
+        Assert.True(service.SaveCopy().Ok);
+        Assert.NotNull(service.GetState().SavedAt);
+
+        Assert.True(service.SetLayers(new LogitechKeyboardLayersDto { Base = { Row(G3, "mouse", 0x10) } }).Ok);
+        Assert.Equal(G3, Assert.Single(service.GetState().Layers.Base).Key);
+
+        var restored = service.RestoreCopy();
+        Assert.True(restored.Ok, restored.Message);
+        Assert.Equal(G1, Assert.Single(service.GetState().Layers.Base).Key);
+        Assert.Equal(new[] { G1 }, HidppKeyTable.Parse(keyboard.Files[1])!.Select(r => r.Key));
+
+        // The copy is kept across restarts.
+        Assert.NotNull(LogitechKeyboardService.ForTest(new FakeKeyboard(), _dir).GetState().SavedAt);
+    }
+
+    [Fact]
     public void SetLayers_RejectsBadInput_WithoutWriting()
     {
         var keyboard = new FakeKeyboard();

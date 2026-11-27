@@ -29,6 +29,13 @@ public static partial class DevicesRoutes
         app.MapPost("/devices/logitech-keyboard/rewrite", (IServiceProvider sp) =>
             KeyboardChange(sp, k => k.Rewrite()));
 
+        // A copy of the assignments kept in Nexus: save the current ones, or write the saved ones back.
+        app.MapPost("/devices/logitech-keyboard/copy/save", (IServiceProvider sp) =>
+            KeyboardChange(sp, k => k.SaveCopy()));
+
+        app.MapPost("/devices/logitech-keyboard/copy/restore", (IServiceProvider sp) =>
+            KeyboardChange(sp, k => k.RestoreCopy()));
+
         app.MapPost("/devices/logitech-keyboard/enabled", (LogitechKeyboardEnabledRequest body, IServiceProvider sp) =>
             KeyboardChange(sp, k => body.Enabled is { } on ? k.SetEnabled(on) : MouseResult.Invalid("enabled is required")));
 

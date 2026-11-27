@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace Nexus.Service.Models.Devices;
@@ -31,6 +32,8 @@ public sealed class LogitechKeyboardStateDto
     /// <summary>Whether Nexus has written its layers to this keyboard; until then it keeps whatever was written before.</summary>
     public bool Written { get; set; }
     public LogitechKeyboardLayersDto Layers { get; set; } = new();
+    /// <summary>When the user last saved a copy of the assignments to restore later (UTC); null when there is none.</summary>
+    public DateTime? SavedAt { get; set; }
 }
 
 /// <summary>Assignments per layer. A key that is not listed does what it does by default.</summary>
@@ -75,4 +78,8 @@ public sealed class LogitechKeyboardConfig
     public string? Layout { get; set; }
     /// <summary>False until the layers have been written to the keyboard; a later connection retries.</summary>
     public bool Written { get; set; }
+    /// <summary>A copy of the layers the user saved, to restore later; null until the first save.</summary>
+    public LogitechKeyboardLayersDto? Saved { get; set; }
+    /// <summary>When that copy was saved (UTC).</summary>
+    public DateTime? SavedAt { get; set; }
 }
