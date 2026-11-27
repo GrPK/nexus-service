@@ -242,6 +242,7 @@ public sealed class LogitechMouseService : BackgroundService
             state.Error = _error;
             state.Mode = _mode switch { HidppOnboardProfiles.ModeOnboard => "onboard", HidppOnboardProfiles.ModeHost => "host", _ => null };
             state.KeepOnboard = Settings().KeepOnboard;
+            state.SavedAt = Settings().SavedAt;
             state.Picture = Picture()?.Info;
             state.ButtonCount = _info?.ButtonCount ?? 0;
             state.ButtonLabels = Enumerable.Range(0, state.ButtonCount)
@@ -364,6 +365,71 @@ public sealed class LogitechMouseService : BackgroundService
                 return MouseResult.Failed("no usable backup of this profile");
             }
             return Commit(slot.Sector, current, original);
+        }
+    }
+
+    /// <summary>Keeps every profile as the mouse holds it now, for <see cref="RestoreCopy"/>.</summary>
+    public MouseResult SaveCopy()
+    {
+        lock (_lock)
+        {
+            if (Ready() is { } notReady)
+            {
+                return notReady;
+            }
+            try
+            {
+                Directory.CreateDirectory(DeviceDir());
+                foreach (var slot in _slots)
+                {
+                    if (_profiles.TryGetValue(slot.Sector, out var profile) && profile.CrcValid)
+                    {
+                        File.WriteAllBytes(SavedPath(slot.Sector), profile.ToBytes());
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return MouseResult.Failed($"could not save the copy: {ex.Message}");
+            }
+            var settings = Settings();
+            settings.SavedAt = DateTime.UtcNow;
+            SaveSettings(settings);
+            return MouseResult.Done;
+        }
+    }
+
+    /// <summary>Writes the profiles kept by <see cref="SaveCopy"/> back into the mouse.</summary>
+    public MouseResult RestoreCopy()
+    {
+        lock (_lock)
+        {
+            if (Ready() is { } notReady)
+            {
+                return notReady;
+            }
+            if (Settings().SavedAt is null)
+            {
+                return MouseResult.Invalid("no saved copy");
+            }
+            var restored = 0;
+            foreach (var slot in _slots)
+            {
+                var path = SavedPath(slot.Sector);
+                if (!_profiles.TryGetValue(slot.Sector, out var current) || !File.Exists(path)
+                    || HidppOnboardProfile.Parse(File.ReadAllBytes(path)) is not { CrcValid: true } saved
+                    || saved.SectorSize != current.SectorSize)
+                {
+                    continue;
+                }
+                var result = Commit(slot.Sector, current, saved);
+                if (!result.Ok)
+                {
+                    return result;
+                }
+                restored++;
+            }
+            return restored > 0 ? MouseResult.Done : MouseResult.Failed("no usable saved copy");
         }
     }
 
@@ -615,6 +681,8 @@ public sealed class LogitechMouseService : BackgroundService
     private string DeviceDir() => Path.Combine(_backupRoot, _model.Name.Replace(' ', '-').ToLowerInvariant());
 
     private string OriginalPath(int sector) => Path.Combine(DeviceDir(), $"original-sector-{sector:X4}.bin");
+
+    private string SavedPath(int sector) => Path.Combine(DeviceDir(), $"saved-sector-{sector:X4}.bin");
 
     // The first copy of each sector is kept for good; later backups are per write.
     private void KeepOriginal(int sector, HidppOnboardProfile profile)

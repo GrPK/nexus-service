@@ -25,6 +25,8 @@ public sealed class LogitechMouseStateDto
     public string? Mode { get; set; }
     /// <summary>Whether Nexus puts the mouse back on its onboard memory when another app switches it to host mode.</summary>
     public bool KeepOnboard { get; set; }
+    /// <summary>When the user last saved a copy of the profiles in Nexus (UTC); null when there is none.</summary>
+    public DateTime? SavedAt { get; set; }
     /// <summary>A picture of the mouse the user put in its Nexus folder, with where each button is on it; null when there is none.</summary>
     public LogitechMousePictureDto? Picture { get; set; }
     /// <summary>Number (1-based, directory order) of the profile the mouse uses now.</summary>
@@ -151,6 +153,8 @@ public sealed class LogitechMouseKeepOnboardRequest
 public sealed class LogitechMouseSettings
 {
     public bool KeepOnboard { get; set; } = true;
+    /// <summary>When the user last saved a copy of the profiles (UTC); null when there is none.</summary>
+    public DateTime? SavedAt { get; set; }
 }
 
 /// <summary>POST /devices/logitech-mouse/active: the profile number to switch to.</summary>

@@ -89,6 +89,25 @@ public class LogitechMouseServiceTests : IDisposable
     }
 
     [Fact]
+    public void SaveCopy_ThenRestoreCopy_PutsTheSavedProfilesBack()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+        Assert.Equal("invalid", service.RestoreCopy().Status);
+        var before = mouse.Sectors[1].ToArray();
+
+        Assert.True(service.SaveCopy().Ok);
+        Assert.NotNull(service.GetState().SavedAt);
+        Assert.True(service.UpdateProfile(1, new LogitechMouseProfileRequest { Name = "Changed" }).Ok);
+        Assert.NotEqual(before, mouse.Sectors[1]);
+
+        var result = service.RestoreCopy();
+
+        Assert.True(result.Ok, result.Message);
+        Assert.Equal(before, mouse.Sectors[1]);
+    }
+
+    [Fact]
     public void UpdateProfile_PutsThePreviousBytesBack_WhenTheMouseDoesNotKeepTheWrite()
     {
         var mouse = new FakeMouse { DropNextWrite = true };
