@@ -46,6 +46,29 @@ public class LogitechMouseServiceTests : IDisposable
     }
 
     [Fact]
+    public void GetLive_ReadsTheProfileAndDpiLevelFromTheMouse_AndFollowsTheProfileButton()
+    {
+        var mouse = new FakeMouse();
+        var service = LogitechMouseService.ForTest(mouse, _dir);
+
+        var live = service.GetLive();
+        Assert.True(live.Present);
+        Assert.Equal(1, live.ActiveProfile);
+        Assert.Equal(2, live.DpiIndex);
+
+        // DPI up on the mouse, then the profile button.
+        mouse.DpiIndex = 3;
+        mouse.Current = 2;
+        live = service.GetLive();
+        Assert.Equal(2, live.ActiveProfile);
+        Assert.Equal(3, live.DpiIndex);
+        Assert.Equal(2, service.GetState().ActiveProfile);
+
+        mouse.Present = false;
+        Assert.False(service.GetLive().Present);
+    }
+
+    [Fact]
     public void UpdateProfile_WritesTheSector_KeepsBackups_AndReselectsTheActiveProfile()
     {
         var mouse = new FakeMouse();
@@ -275,6 +298,7 @@ public class LogitechMouseServiceTests : IDisposable
         public bool DropNextWrite;
         public int Mode = 1;
         public int Current = 1;
+        public int DpiIndex = 2;
         public int SelectCount;
         public int Writes;
         public int Calls;
@@ -347,6 +371,9 @@ public class LogitechMouseServiceTests : IDisposable
                     return reply;
                 case 4:
                     reply[1] = (byte)Current;
+                    return reply;
+                case 11:
+                    reply[0] = (byte)DpiIndex;
                     return reply;
                 case 5:
                     var sector = p[0] << 8 | p[1];

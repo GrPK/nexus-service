@@ -1451,6 +1451,7 @@ namespace Nexus.Service.Serialization;
 [JsonSerializable(typeof(Nexus.Service.Persistence.LogitechSpeakerSettings))]
 [JsonSerializable(typeof(LogitechSpeakerStateDto))]
 [JsonSerializable(typeof(LogitechMouseStateDto))]
+[JsonSerializable(typeof(LogitechMouseLiveDto))]
 [JsonSerializable(typeof(LogitechMouseProfileRequest))]
 [JsonSerializable(typeof(LogitechMouseActiveRequest))]
 [JsonSerializable(typeof(LogitechMouseCycleRequest))]

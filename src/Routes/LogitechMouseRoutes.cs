@@ -18,6 +18,10 @@ public static partial class DevicesRoutes
         app.MapGet("/devices/logitech-mouse", (IServiceProvider sp) =>
             Results.Json(Mouse(sp)?.GetState() ?? new LogitechMouseStateDto(), AppJsonContext.Default.LogitechMouseStateDto));
 
+        // What the mouse uses right now (profile, DPI level), read from it; polled by the sensitivity page.
+        app.MapGet("/devices/logitech-mouse/live", (IServiceProvider sp) =>
+            Results.Json(Mouse(sp)?.GetLive() ?? new LogitechMouseLiveDto(), AppJsonContext.Default.LogitechMouseLiveDto));
+
         // The picture of the mouse the user keeps in its Nexus folder; 404 without one.
         app.MapGet("/devices/logitech-mouse/picture", (IServiceProvider sp) =>
             Mouse(sp)?.Picture() is { } picture && File.Exists(picture.Path)

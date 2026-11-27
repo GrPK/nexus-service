@@ -6,6 +6,16 @@ namespace Nexus.Service.Models.Devices;
 /// A Logitech mouse's onboard memory (GET /devices/logitech-mouse): the profiles it uses with
 /// no software running, as G HUB's onboard memory mode edits them.
 /// </summary>
+/// <summary>What the mouse uses right now: its profile and DPI level (see LogitechMouseService.GetLive).</summary>
+public sealed class LogitechMouseLiveDto
+{
+    public bool Present { get; set; }
+    /// <summary>Number of the profile the mouse uses (1-based, as in the state); null when unknown.</summary>
+    public int? ActiveProfile { get; set; }
+    /// <summary>Index of the DPI level it uses in that profile's list (0-based); null when unknown.</summary>
+    public int? DpiIndex { get; set; }
+}
+
 public sealed class LogitechMouseStateDto
 {
     public bool Present { get; set; }

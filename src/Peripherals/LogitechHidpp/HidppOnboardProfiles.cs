@@ -19,7 +19,8 @@ public sealed record HidppProfileSlot(int Sector, bool Enabled);
 /// HID++ 2.0 feature 0x8100 Onboard Profiles: the mouse's own memory, where the profiles it
 /// uses without any software live. Function numbers as libratbag and Solaar use them and as
 /// G HUB sends them: 0 info, 1/2 set/get mode (1 onboard, 2 host), 3/4 set/get current
-/// profile, 5 read 16 bytes, 6 start a write, 7 write 16 bytes, 8 end the write.
+/// profile, 5 read 16 bytes, 6 start a write, 7 write 16 bytes, 8 end the write, 11 get the
+/// DPI level the mouse uses now.
 /// </summary>
 public sealed class HidppOnboardProfiles
 {
@@ -52,6 +53,9 @@ public sealed class HidppOnboardProfiles
 
     /// <summary>Sector of the profile the mouse uses now.</summary>
     public int? GetCurrentSector() => _channel.Call(_index, 4, ReadOnlySpan<byte>.Empty) is { } p ? p[0] << 8 | p[1] : null;
+
+    /// <summary>Index of the DPI level the mouse uses now (0-based, in its current profile's list).</summary>
+    public int? GetCurrentDpiIndex() => _channel.Call(_index, 11, ReadOnlySpan<byte>.Empty)?[0];
 
     public bool SetCurrentSector(int sector) => _channel.Call(_index, 3, new[] { (byte)(sector >> 8), (byte)sector }) is not null;
 

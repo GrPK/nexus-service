@@ -232,6 +232,11 @@ public sealed class LogitechMouseService : BackgroundService
                 Load();
             }
             state.Present = true;
+            // The profile button (G9) switches profiles on the mouse itself; follow it.
+            if (_info is not null && HidppOnboardProfiles.Open(_channel) is { } onboard && onboard.GetCurrentSector() is { } sector)
+            {
+                _currentSector = sector;
+            }
             state.Model = _model.Name;
             state.Name = $"Logitech {_model.Name}";
             state.Error = _error;
@@ -259,6 +264,44 @@ public sealed class LogitechMouseService : BackgroundService
             state.MacroSectors = macroSectors.Count;
             state.MacroSectorsFree = macroSectors.Count(s => !live.Contains(s));
             return state;
+        }
+    }
+
+    /// <summary>
+    /// What the mouse uses right now, read from it each call: its profile and the DPI level the
+    /// DPI buttons last picked. Small and quick, so a page can ask several times a second.
+    /// </summary>
+    public LogitechMouseLiveDto GetLive()
+    {
+        lock (_lock)
+        {
+            var live = new LogitechMouseLiveDto();
+            if (!_channel.IsPresent())
+            {
+                return live;
+            }
+            if (_channel.Generation != _loadedGeneration)
+            {
+                Load();
+            }
+            live.Present = true;
+            if (_info is null || HidppOnboardProfiles.Open(_channel) is not { } onboard)
+            {
+                return live;
+            }
+            if (onboard.GetCurrentSector() is { } sector)
+            {
+                _currentSector = sector;
+            }
+            for (var n = 0; n < _slots.Count; n++)
+            {
+                if (_slots[n].Sector == _currentSector)
+                {
+                    live.ActiveProfile = n + 1;
+                }
+            }
+            live.DpiIndex = onboard.GetCurrentDpiIndex();
+            return live;
         }
     }
 
