@@ -82,6 +82,32 @@ public class SoundBlasterTests
     }
 
     [Fact]
+    public void ScoutMode_AndTheSbxMaster_PutTheEffectsBackAsTheyWere()
+    {
+        var device = new FakeG8();
+        var service = new SoundBlasterService(device);
+        Assert.True(service.SetParameter(0x96, 0x00, 1).Ok);
+
+        Assert.True(service.SetScout(true).Ok);
+        Assert.True(service.GetState().Scout);
+        Assert.True(service.SetScout(false).Ok);
+        var after = service.GetState();
+
+        Assert.True(after.Sbx);
+        Assert.Equal(1f, after.Values["96:00"]);
+        Assert.Equal(1f, after.Values["96:07"]);
+        Assert.Equal(0f, after.Values["96:04"]);
+        Assert.Equal(0f, after.Values["96:09"]);
+
+        Assert.True(service.SetSbx(false).Ok);
+        Assert.Equal(0f, service.GetState().Values["96:07"]);
+        Assert.True(service.SetSbx(true).Ok);
+        var on = service.GetState();
+        Assert.Equal(1f, on.Values["96:00"]);
+        Assert.Equal(1f, on.Values["96:07"]);
+    }
+
+    [Fact]
     public void Changes_AreCheckedBeforeAnythingIsSent()
     {
         var device = new FakeG8();
@@ -150,6 +176,32 @@ public class SoundBlasterTests
             return null;
         }
 
+        // As the G8 does it: SBX off clears every switch and SBX on turns on Surround alone; Scout Mode swaps the
+        // switches for Smart Volume and the EQ, and when it goes off only Crystalizer comes back.
+        private void Apply(byte which, bool on)
+        {
+            foreach (var id in new byte[] { 0x00, 0x02, 0x04, 0x07, 0x09, 0x18 })
+            {
+                _values[(0x96, id)] = 0;
+            }
+            if (which == 0x01)
+            {
+                _profile = on ? 0x01 : 0x00;
+                _values[(0x96, 0x00)] = on ? 1 : 0;
+            }
+            else if (on)
+            {
+                _profile = 0x02;
+                _values[(0x96, 0x04)] = 1;
+                _values[(0x96, 0x09)] = 1;
+            }
+            else
+            {
+                _profile = 0x01;
+                _values[(0x96, 0x07)] = 1;
+            }
+        }
+
         private IEnumerable<byte[]> Answer(byte[] r)
         {
             switch (r[2])
@@ -174,10 +226,7 @@ public class SoundBlasterTests
                     yield return Report($"5a 26 0b 08 ff ff {_profile:x2} 00");
                     break;
                 case SoundBlasterProtocol.GlobalProfile:
-                    if (r[5] == 0x02 && r[7] == 1)
-                    {
-                        _profile = 0x02;
-                    }
+                    Apply(r[5], r[7] == 1);
                     yield return Report("5a 02 0a 26 00");
                     yield return Report($"5a 26 0b 08 ff ff {_profile:x2} 00");
                     break;

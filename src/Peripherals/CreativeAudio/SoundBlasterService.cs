@@ -34,12 +34,18 @@ public sealed class SoundBlasterService
     private static readonly byte[] RecordingIds = { 0x00, 0x04, 0x05, 0x2C, 0x2D };
     private static readonly byte[] DecoderIds = { 0x02 };
 
+    // The effect switches and the EQ: the SBX master turns them all off, and Scout Mode swaps them for its own
+    // (Smart Volume and the EQ). The G8 does not put them back as they were (after Scout Mode it leaves Surround
+    // off, after SBX on with nothing remembered it turns on Surround alone), so Nexus keeps them and puts them back.
+    private static readonly byte[] EffectSwitches = { 0x00, 0x02, 0x04, 0x07, 0x09, 0x18 };
+
     private readonly ISoundBlasterChannel _channel;
     private readonly object _lock = new();
     private SoundBlasterStateDto? _state;
     private DateTime _readAt;
     private string? _identityOf;
     private (string? Firmware, string? Serial, List<string> Outputs, List<int> Filters) _identity = (null, null, new(), new());
+    private Dictionary<byte, float>? _effectsBefore;
 
     public SoundBlasterService(IHidEnumerator hid)
         : this(new SoundBlasterChannel(hid))
@@ -85,16 +91,73 @@ public sealed class SoundBlasterService
         return Write(WriteParameter((byte)family, (byte)id, v), state => state.Values[Key((byte)family, (byte)id)] = v);
     }
 
-    public SoundBlasterResult SetSbx(bool on) => Write(WriteProfile(0x01, on), state => state.Sbx = on);
-
-    public SoundBlasterResult SetScout(bool on) => Write(WriteProfile(0x02, on), state =>
+    /// <summary>The SBX master: off turns every effect and the EQ off; on puts back the ones that were on.</summary>
+    public SoundBlasterResult SetSbx(bool on)
     {
-        state.Scout = on;
-        if (on)
+        lock (_lock)
         {
-            state.Sbx = false;
+            return Master(WriteProfile(0x01, on), remember: !on, restore: on);
         }
-    });
+    }
+
+    /// <summary>Scout Mode: it takes the effects over while on; off puts back the ones that were on before it.</summary>
+    public SoundBlasterResult SetScout(bool on)
+    {
+        lock (_lock)
+        {
+            return Master(WriteProfile(0x02, on), remember: on && _state?.Scout != true, restore: !on);
+        }
+    }
+
+    // Caller holds _lock. The device changes many switches at once here, so the copy is read again afterwards.
+    private SoundBlasterResult Master(byte[] request, bool remember, bool restore)
+    {
+        if (remember && ReadSwitches() is { } before && before.Values.Any(v => v >= 0.5f))
+        {
+            _effectsBefore = before;
+        }
+        var result = Write(request, _ => { });
+        if (result.Ok && restore && _effectsBefore is { } wanted)
+        {
+            _effectsBefore = null;
+            if (ReadSwitches() is { } now)
+            {
+                foreach (var (id, value) in wanted)
+                {
+                    if (now.TryGetValue(id, out var current) && (current >= 0.5f) != (value >= 0.5f))
+                    {
+                        Write(WriteParameter(Playback, id, value), _ => { });
+                    }
+                }
+            }
+        }
+        _readAt = DateTime.MinValue;
+        return result;
+    }
+
+    // Caller holds _lock. Null when one of them did not answer.
+    private Dictionary<byte, float>? ReadSwitches()
+    {
+        var values = new Dictionary<byte, float>();
+        foreach (var id in EffectSwitches)
+        {
+            if (ReadOne(Playback, id) is not { } value)
+            {
+                return null;
+            }
+            values[id] = value;
+        }
+        return values;
+    }
+
+    // Caller holds _lock.
+    private float? ReadOne(byte family, byte id)
+    {
+        var reply = _channel.Exchange(ReadParameter(family, id),
+            r => (TryParseParameter(r, out var f, out var i, out _) && f == family && i == id)
+                || (TryParseAck(r, out var c, out _) && c == GetParameter));
+        return reply is not null && TryParseParameter(reply, out _, out _, out var value) ? value : null;
+    }
 
     public SoundBlasterResult SetOutput(string? output)
     {
@@ -155,10 +218,7 @@ public sealed class SoundBlasterService
         {
             foreach (var id in ids)
             {
-                var reply = _channel.Exchange(ReadParameter(family, id),
-                    r => (TryParseParameter(r, out var f, out var i, out _) && f == family && i == id)
-                        || (TryParseAck(r, out var c, out _) && c == GetParameter));
-                if (reply is not null && TryParseParameter(reply, out _, out _, out var value))
+                if (ReadOne(family, id) is { } value)
                 {
                     state.Values[Key(family, id)] = value;
                     answered++;
