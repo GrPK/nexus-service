@@ -94,14 +94,23 @@ public sealed class BulkPanelConnectionWorker : BackgroundService
                     // The hub never detaches on a failed transfer, so presence, or a pipe that knows its
                     // device re-enumerated, is what ends the session after an unplug.
                     int misses = 0;
+                    long scannedAt = 0;
+                    bool woken = false;
                     while (!stoppingToken.IsCancellationRequested
                         && _gate.IsClaimed(driver.HandlerId)
                         && _hub.IsConnected)
                     {
-                        misses = _presence.UsbPresent(driver.VendorId, driver.ProductIds) ? 0 : misses + 1;
-                        if (misses >= MissesToDetach)
+                        // A pass the hub woke early skips the presence scan unless a poll's worth of time passed,
+                        // so two misses in a row still span a poll and wakes cannot hold the scan off.
+                        var now = Environment.TickCount64;
+                        if (!woken || now - scannedAt >= _presencePollMs)
                         {
-                            break;
+                            scannedAt = now;
+                            misses = _presence.UsbPresent(driver.VendorId, driver.ProductIds) ? 0 : misses + 1;
+                            if (misses >= MissesToDetach)
+                            {
+                                break;
+                            }
                         }
                         if (_hub.PipeGone)
                         {
@@ -117,7 +126,8 @@ public sealed class BulkPanelConnectionWorker : BackgroundService
                         {
                             ServiceLog.Info($"[{driver.HandlerId}] renegotiated at {_hub.Width}x{_hub.Height}");
                         }
-                        await Task.Delay(_presencePollMs, stoppingToken).ConfigureAwait(false);
+                        // A mounting or setting change wakes this at once (BulkPanelHub.WakeWorker); presence keeps its poll.
+                        woken = await _hub.WaitForWorkerWakeAsync(_presencePollMs, stoppingToken).ConfigureAwait(false);
                     }
                 }
                 finally

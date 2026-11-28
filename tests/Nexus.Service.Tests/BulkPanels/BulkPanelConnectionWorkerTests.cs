@@ -165,6 +165,114 @@ public class BulkPanelConnectionWorkerTests
         }
     }
 
+    // ── a woken worker: a turn reaches the glass at once, presence keeps its poll ──
+
+    /// <summary>Long enough that only a wake can explain anything the worker does within a test.</summary>
+    private const int NeverPollMs = 600_000;
+
+    [Fact]
+    public async Task A_woken_worker_renegotiates_a_turned_session_without_waiting_for_its_poll()
+    {
+        var usb = new SwitchableUsb { Present = true };
+        var driver = new TurningDriver();
+        var hub = new BulkPanelHub(driver);
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Devices.NexusControlEnabled.Add(driver.HandlerId));
+        var resized = 0;
+        hub.GeometryChanged += () => Interlocked.Increment(ref resized);
+        var worker = new BulkPanelConnectionWorker(
+            new NoHid(), new PipeFactory(), hub, new DeviceControlGate(store), new HardwarePresence(usb),
+            connectPollMs: 50, presencePollMs: NeverPollMs);
+
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.True(await Eventually(() => hub.IsConnected && driver.Connects == 1));
+            Assert.Equal((1920, 480), (hub.Width, hub.Height));
+
+            driver.Portrait = true;
+            hub.WakeWorker();
+
+            Assert.True(await Eventually(() => hub.Width == 480 && hub.Height == 1920, timeoutMs: 3000));
+            Assert.Equal(2, driver.Connects);
+            Assert.True(await Eventually(() => Volatile.Read(ref resized) == 1));
+            Assert.Equal(0, driver.Disconnects);
+        }
+        finally
+        {
+            await worker.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task A_wake_with_nothing_stale_leaves_the_session_alone()
+    {
+        var usb = new SwitchableUsb { Present = true };
+        var driver = new TurningDriver();
+        var hub = new BulkPanelHub(driver);
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Devices.NexusControlEnabled.Add(driver.HandlerId));
+        var worker = new BulkPanelConnectionWorker(
+            new NoHid(), new PipeFactory(), hub, new DeviceControlGate(store), new HardwarePresence(usb),
+            connectPollMs: 50, presencePollMs: NeverPollMs);
+
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.True(await Eventually(() => hub.IsConnected && driver.Connects == 1));
+
+            for (int i = 0; i < 5; i++)
+            {
+                hub.WakeWorker();
+                await Task.Delay(20);
+            }
+
+            Assert.Equal(1, driver.Connects);
+            Assert.True(hub.IsConnected);
+        }
+        finally
+        {
+            await worker.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Wakes_are_not_presence_scans_so_they_never_count_as_misses()
+    {
+        var usb = new SwitchableUsb { Present = true };
+        var driver = new TurningDriver();
+        var hub = new BulkPanelHub(driver);
+        var store = new InMemoryConfigStore();
+        store.Update(s => s.Devices.NexusControlEnabled.Add(driver.HandlerId));
+        var worker = new BulkPanelConnectionWorker(
+            new NoHid(), new PipeFactory(), hub, new DeviceControlGate(store), new HardwarePresence(usb),
+            connectPollMs: 50, presencePollMs: NeverPollMs);
+
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.True(await Eventually(() => hub.IsConnected && driver.Connects == 1));
+            // The hub reads connected before the session loop's first scan; wait for it (the scan before the open, then that one).
+            Assert.True(await Eventually(() => usb.Scans >= 2));
+            // One incomplete bus scan must not end a session, and a wake is no scan at all.
+            usb.Present = false;
+            var scans = usb.Scans;
+            for (int i = 0; i < 5; i++)
+            {
+                hub.WakeWorker();
+                await Task.Delay(20);
+            }
+
+            Assert.Equal(scans, usb.Scans);
+            Assert.True(hub.IsConnected);
+            Assert.Equal(0, driver.Disconnects);
+        }
+        finally
+        {
+            await worker.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static async Task<bool> Eventually(Func<bool> condition, int timeoutMs = 4000)
     {
         var sw = Stopwatch.StartNew();
@@ -182,9 +290,48 @@ public class BulkPanelConnectionWorkerTests
     private sealed class SwitchableUsb : IUsbEnumerator
     {
         public volatile bool Present;
+        private int _scans;
 
-        public List<UsbDeviceEntry> Enumerate() =>
-            Present ? new List<UsbDeviceEntry> { new() { VendorId = FakeDriver.Vid, ProductId = FakeDriver.Pid } } : new();
+        public int Scans => Volatile.Read(ref _scans);
+
+        public List<UsbDeviceEntry> Enumerate()
+        {
+            Interlocked.Increment(ref _scans);
+            return Present ? new List<UsbDeviceEntry> { new() { VendorId = FakeDriver.Vid, ProductId = FakeDriver.Pid } } : new();
+        }
+    }
+
+    /// <summary>A glass that turns in its handshake, like the 8.8: a mounting change leaves its session stale.</summary>
+    private sealed class TurningDriver : IBulkPanelDriver
+    {
+        public int Disconnects;
+        private int _connects;
+        private volatile bool _sessionPortrait;
+
+        public volatile bool Portrait;
+
+        public int Connects => Volatile.Read(ref _connects);
+
+        public string HandlerId => "fake-turning";
+        public string Name => "Fake turning panel";
+        public int VendorId => FakeDriver.Vid;
+        public IReadOnlyList<int> ProductIds { get; } = new[] { FakeDriver.Pid };
+        public string Surface => "monitor";
+        public int Fps => 30;
+        public byte WritePipeId => 0x01;
+        public byte ReadPipeId => 0x81;
+        public bool NeedsHidChannel => false;
+        public bool GeometryStale => Portrait != _sessionPortrait;
+
+        public (int Width, int Height)? Connect(IBulkUsbPipe pipe, IHidDevice? hid)
+        {
+            Interlocked.Increment(ref _connects);
+            _sessionPortrait = Portrait;
+            return _sessionPortrait ? (480, 1920) : (1920, 480);
+        }
+
+        public bool SendFrame(IBulkUsbPipe pipe, IHidDevice? hid, ReadOnlySpan<byte> bgra) => true;
+        public void Disconnect(IBulkUsbPipe pipe, IHidDevice? hid) => Interlocked.Increment(ref Disconnects);
     }
 
     private sealed class FakeDriver : IBulkPanelDriver

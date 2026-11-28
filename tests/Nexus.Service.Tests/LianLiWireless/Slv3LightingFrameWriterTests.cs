@@ -501,6 +501,45 @@ public class Slv3LightingFrameWriterTests
     }
 
     [Fact]
+    public void Tick_uploads_a_TL_chain_s_stretch_of_a_merged_Quick_Sync_effect()
+    {
+        var now = 0L;
+        var (hub, net, tx) = Slv3TestHub.CreateConnected();
+        net.Fans.Add(new Slv3TestHub.SimulatedFan { Mac = FanMac, MasterMac = net.MasterMac, RxType = 1, FanCount = 3, FansType = 28 });
+        Assert.True(hub.DriveTick());
+        var store = new InMemoryConfigStore();
+        var identify = new Np50IdentifyTracker();
+        var provider = new Slv3LightingDeviceProvider(hub, store, identify);
+        var engine = new LightingEngine();
+        engine.UpdateDevices(provider.BuildFrames(0).ToArray());
+        var gate = new Nexus.Service.Devices.DeviceControlGate(store);
+        var presence = new Nexus.Service.Devices.Detection.HardwarePresence(new NoUsb());
+        var merge = new LianLiMergeService(store, hub,
+            new Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveBoard(new NoPipes(), gate, presence, store),
+            new Nexus.Service.Peripherals.BulkPanels.UniversalScreen88LedBoard(new NoPipes(), gate, presence));
+        var writer = new Slv3LightingFrameWriter(engine, hub, store, identify, provider, () => now, merge: merge);
+        store.Update(s => s.Devices.LianLiSync = new LianLiSyncSettings { Enabled = true, Effect = "mergeMeteor" });
+
+        writer.Tick();
+
+        var line = merge.Current(store.Load())!.Outputs[Convert.ToHexString(FanMac)].Tl!;
+        var header = LastRgbHeader(tx);
+        Assert.Equal(line.FrameCount, (header[25] << 8) | header[26]);
+        Assert.Equal(3 * Slv3Protocol.LedsPerFanFor(Slv3FanFamily.Tlv2Led), header[27]);
+        Assert.Equal(3 * 26 * 3 * line.FrameCount, line.Frames.Length);
+    }
+
+    private sealed class NoPipes : Nexus.Service.Peripherals.BulkPanels.IBulkUsbPipeFactory
+    {
+        public Nexus.Service.Peripherals.BulkPanels.IBulkUsbPipe? Open(int vendorId, int productId, byte writePipeId, byte readPipeId) => null;
+    }
+
+    private sealed class NoUsb : Nexus.Service.Devices.Detection.IUsbEnumerator
+    {
+        public List<Nexus.Service.Devices.UsbDeviceEntry> Enumerate() => new();
+    }
+
+    [Fact]
     public void Tick_reuploads_a_fan_chain_preset_when_its_fan_count_changes()
     {
         var now = 0L;

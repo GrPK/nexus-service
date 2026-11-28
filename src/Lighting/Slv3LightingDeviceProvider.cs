@@ -548,7 +548,7 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
     internal static string StrimerModelNameFor(byte devType) => devType switch
     {
         1 => "Strimer GPU 2x8 / 16-8",
-        2 => "Strimer 24-Pin",
+        2 => "Strimer MB 24-Pin",
         3 => "Strimer GPU 3x8 / 16-12",
         4 => "Strimer CPU 2x8",
         _ => "Strimer",
@@ -608,6 +608,15 @@ public sealed class Slv3LightingDeviceProvider : ILightingDeviceProvider, ILight
         Slv3FanFamily.SlInfFlex => FlexFamily.SlInfFlex,
         _ => null,
     };
+
+    /// <summary>
+    /// A TL chain's up/down swap: a TL Flex chain keeps it with its Flex settings, where the Flex LCD
+    /// page sets it too; any other TL chain keeps it with its wireless lighting.
+    /// </summary>
+    internal static bool TlUpDownSwap(NexusSettings settings, Slv3FanInfo fan, LianLiWirelessChainLighting? lighting) =>
+        FlexFamilyOf(fan) == FlexFamily.TlFlex
+            ? settings.Devices.FlexUnits.TryGetValue(fan.Mac.ToUpperInvariant(), out var look) && look.UpDownSwap
+            : lighting?.UpDownSwap ?? false;
 
     /// <summary>Zones of a Flex chain in segment order: the zone id suffix, the wired-Flex zone key and its label. TL keeps the inner and outer ids.</summary>
     internal static (string Suffix, string Key, string Label)[] FlexZonesOf(FlexFamily family)

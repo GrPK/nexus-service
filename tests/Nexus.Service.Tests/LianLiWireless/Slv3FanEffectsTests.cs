@@ -276,8 +276,9 @@ public class Slv3FanEffectsTests
         {
             return;
         }
+        // Every swatch: Stack, like L-Connect's, plays only its last colour.
         var pureRed = new RgbColor(255, 0, 0);
-        var anim = Slv3FanEffects.Render(Slv3FanFamily.Tlv2Led, key, 3, 2, 0, new[] { pureRed });
+        var anim = Slv3FanEffects.Render(Slv3FanFamily.Tlv2Led, key, 3, 2, 0, Enumerable.Repeat(pureRed, info.ColorsMax).ToArray());
         var found = false;
         for (var i = 0; i + 2 < anim.Frames.Length && !found; i += 3)
         {

@@ -1706,6 +1706,11 @@ public sealed class DevicesSettings
     public AsiahorseUmbraSettings AsiahorseUmbra { get; set; } = new();
     public HydroShift2LightingSettings HydroShift2Lighting { get; set; } = new();
     public HydroShift2CurveSettings HydroShift2Curve { get; set; } = new();
+    public HydroShift2CurveLightingSettings HydroShift2CurveLighting { get; set; } = new();
+    public UniversalScreen88LightingSettings UniversalScreen88Lighting { get; set; } = new();
+    /// <summary>L-Connect's Quick Sync: one effect on every Lian Li device, each device's own settings kept for when it is off.</summary>
+    public LianLiSyncSettings LianLiSync { get; set; } = new();
+    public UniversalScreen88Settings UniversalScreen88 { get; set; } = new();
     public CorsairSettings Corsair { get; set; } = new();
     public NollieSettings Nollie { get; set; } = new();
     /// <summary>
@@ -2037,6 +2042,14 @@ public sealed class LianLiWirelessChainLighting
     public List<LianLiWirelessLane> Lanes { get; set; } = new();
     /// <summary>The chain plays the motherboard ARGB header through its sync cable instead of Nexus; null leaves the chain's own state alone.</summary>
     public bool? MotherboardArgb { get; set; }
+    /// <summary>TL chains: a look of its own for LED 0..12 of each fan (L-Connect's Up scope); null plays the chain look there.</summary>
+    public LianLiFlexZoneSettings? Up { get; set; }
+    /// <summary>TL chains: a look of its own for LED 13..25 of each fan (L-Connect's Down scope); null plays the chain look there.</summary>
+    public LianLiFlexZoneSettings? Down { get; set; }
+    /// <summary>TL chains: "up" or "down" when that half was set last, null after a whole-fan look; L-Connect plays both halves at the speed of the last one set.</summary>
+    public string? LastScope { get; set; }
+    /// <summary>TL chains: the two halves of each fan exchanged (L-Connect's Up/Down swap). A TL Flex chain keeps its swap in <see cref="DevicesSettings.FlexUnits"/>.</summary>
+    public bool UpDownSwap { get; set; }
 }
 
 /// <summary>
@@ -2081,6 +2094,43 @@ public sealed class LianLiFlexZoneSettings
     public int Speed { get; set; } = 3;
     public int Direction { get; set; }
     public int Brightness { get; set; } = 4;
+    public List<string> Colors { get; set; } = new();
+}
+
+/// <summary>
+/// L-Connect's Quick Sync ("Sync all"): while on, every Lian Li device plays the chosen effect,
+/// mapped to its own as L-Connect maps it; each device's own settings stay as they were.
+/// </summary>
+public sealed class LianLiSyncSettings
+{
+    public bool Enabled { get; set; }
+    /// <summary>One of <c>LianLiSync.Effects</c>.</summary>
+    public string Effect { get; set; } = "rainbow";
+    /// <summary>The look each effect was last given, by effect key, as L-Connect keeps one per effect; missing ones take its defaults.</summary>
+    public Dictionary<string, LianLiSyncLook> Looks { get; set; } = new();
+    /// <summary>
+    /// The merged effects' device order, as L-Connect keeps it: a device joins the end when first seen and
+    /// keeps its place (and its direction) while away; the user can reorder.
+    /// </summary>
+    public List<LianLiMergeMember> MergeDevices { get; set; } = new();
+}
+
+/// <summary>A device on the merged line: its Quick Sync id and the direction it reads its stretch in.</summary>
+public sealed class LianLiMergeMember
+{
+    public string Id { get; set; } = "";
+    /// <summary>0 as drawn, 1 reversed.</summary>
+    public int Direction { get; set; }
+}
+
+/// <summary>One Quick Sync effect's look: L-Connect's sliders as levels 0..4 (0, 25, 50, 75, 100).</summary>
+public sealed class LianLiSyncLook
+{
+    public int Speed { get; set; } = 3;
+    public int Brightness { get; set; } = 4;
+    /// <summary>0 right (clockwise), 1 left.</summary>
+    public int Direction { get; set; }
+    /// <summary>"#RRGGBB", exactly as many as the effect shows.</summary>
     public List<string> Colors { get; set; } = new();
 }
 
@@ -2334,6 +2384,79 @@ public sealed class HydroShift2LightingSettings
     public int Brightness { get; set; } = 4;
     /// <summary>"#RRGGBB" palette; missing entries fall back to the effect's defaults.</summary>
     public List<string> Colors { get; set; } = new();
+}
+
+/// <summary>
+/// The HydroShift II OLED Curved edge LEDs: "canvas" follows the Lighting page, any other mode is one of
+/// L-Connect's edge effects, which Nexus renders and streams the way L-Connect does.
+/// </summary>
+public sealed class HydroShift2CurveLightingSettings
+{
+    public const string CanvasMode = "canvas";
+
+    /// <summary>Canvas by default, so the edge keeps following the Lighting page until an effect is picked.</summary>
+    public string Mode { get; set; } = CanvasMode;
+    /// <summary>Last mode other than the Lighting page one, restored when Lighting page control is turned off.</summary>
+    public string? EffectMode { get; set; }
+    /// <summary>Level 0..<c>HydroShift2CurveEdgeEffects.MaxLevel</c>: L-Connect's speed slider at 0, 25, 50, 75 or 100.</summary>
+    public int Speed { get; set; } = 3;
+    /// <summary>0 clockwise, 1 counter-clockwise (L-Connect's reverse).</summary>
+    public int Direction { get; set; }
+    /// <summary>Level 0..<c>HydroShift2CurveEdgeEffects.MaxLevel</c>: L-Connect's brightness slider at 0, 25, 50, 75 or 100.</summary>
+    public int Brightness { get; set; } = 4;
+    /// <summary>"#RRGGBB" palette, up to six; empty plays the effect's L-Connect colours.</summary>
+    public List<string> Colors { get; set; } = new();
+}
+
+/// <summary>
+/// The Universal Screen 8.8 bezel LEDs: "canvas" follows the Lighting page, any other mode is one of
+/// L-Connect's bezel effects, which Nexus renders and streams the way L-Connect does.
+/// </summary>
+public sealed class UniversalScreen88LightingSettings
+{
+    public const string CanvasMode = "canvas";
+
+    /// <summary>Canvas by default, so the ring keeps following the Lighting page until an effect is picked.</summary>
+    public string Mode { get; set; } = CanvasMode;
+    /// <summary>Last mode other than the Lighting page one, restored when Lighting page control is turned off.</summary>
+    public string? EffectMode { get; set; }
+    /// <summary>Level 0..<c>UniversalScreen88LedEffects.MaxLevel</c>: L-Connect's speed slider at 0, 25, 50, 75 or 100.</summary>
+    public int Speed { get; set; } = 3;
+    /// <summary>0 clockwise, 1 counter-clockwise (L-Connect's reverse).</summary>
+    public int Direction { get; set; }
+    /// <summary>Level 0..<c>UniversalScreen88LedEffects.MaxLevel</c>: L-Connect's brightness slider at 0, 25, 50, 75 or 100.</summary>
+    public int Brightness { get; set; } = 4;
+    /// <summary>"#RRGGBB" palette, up to six; empty plays the effect's L-Connect colours.</summary>
+    public List<string> Colors { get; set; } = new();
+    /// <summary>The OpenRGB ring card's Lighting page state was moved to the native card (once).</summary>
+    public bool OpenRgbCardMoved { get; set; }
+}
+
+/// <summary>The Universal Screen 8.8 glass's own settings, as L-Connect's Additional page offers them.</summary>
+public sealed class UniversalScreen88Settings
+{
+    /// <summary>The glass's Offline Mode (date and time shown while the PC is off). Null until set in Nexus, so a flag set in L-Connect is left alone.</summary>
+    public bool? OfflineMode { get; set; }
+
+    /// <summary>
+    /// The glass's own Windows display mode (L-Connect's Secondary Screen): true moves a glass found in panel
+    /// mode into it, false brings one found in it back as a panel. Null, the default, leaves the glass as found:
+    /// Nexus never changes the mode on its own.
+    /// </summary>
+    public bool? WindowsDisplay { get; set; }
+
+    public const string ScreenNexus = "nexus";
+    public const string ScreenVideo = "video";
+
+    /// <summary><see cref="ScreenNexus"/> streams the Nexus panel; <see cref="ScreenVideo"/> loops <see cref="Video"/> on the glass's own decoder, as L-Connect's video backgrounds do.</summary>
+    public string ScreenMode { get; set; } = ScreenNexus;
+    /// <summary>Media library item played in video mode.</summary>
+    public string? Video { get; set; }
+    /// <summary>Minutes between screen-saver plays; 0 is off.</summary>
+    public int ScreenSaverMinutes { get; set; }
+    public string? ScreenSaverVideo { get; set; }
+    /// <summary>Backlight percent while the screen saver plays.</summary>
+    public int ScreenSaverBrightness { get; set; } = 50;
 }
 
 /// <summary>The HydroShift II OLED Curved head position Nexus last drove; the motors have no position readback.</summary>

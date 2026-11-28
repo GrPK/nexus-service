@@ -1648,6 +1648,17 @@ public static class NexusServiceCollectionExtensions
             // Same de-duplication as the JPEG panel loop above.
             services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(sp =>
             {
+                // A panel that changed size gets its stream minted again now, not at the coordinator's next poll.
+                bulkPanelHub.GeometryChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
+                // A turned record reaches a glass that turns in its own handshake (the 8.8) now, not at the
+                // worker's next presence poll; a driver whose session the turn leaves alone is not woken.
+                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>().RotationChanged += _ =>
+                {
+                    if (bulkPanelHub.IsConnected && bulkPanelDriver.GeometryStale)
+                    {
+                        bulkPanelHub.WakeWorker();
+                    }
+                };
                 if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver screen88)
                 {
                     BindScreen88Portrait(sp, screen88);
@@ -1670,20 +1681,18 @@ public static class NexusServiceCollectionExtensions
                         () => sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2Aio>()?.ShowsOwnScreen == true,
                     Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver =>
                         () => sp.GetService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurvePlayer>()?.OwnsGlass == true,
+                    Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver =>
+                        () => sp.GetService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player>()?.OwnsGlass == true,
                     _ => null,
                 };
                 return new Nexus.Service.Panel.Streams.BulkPanelDiscovery(
                     bulkPanelHub, sp.GetService<Nexus.Service.Panel.Streams.IVirtualMonitorHost>(), withheld,
-                    listedWhileWithheld: bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver);
+                    listedWhileWithheld: bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver
+                        or Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver);
             });
             services.AddSingleton<IDeviceHandler>(
                 _ => new Nexus.Service.Devices.Handlers.BulkPanelHandler(
-                    bulkPanelHub,
-                    bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver
-                        ? new[] { new Nexus.Service.Devices.UsbId(
-                            Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveProtocol.BoardVendorId,
-                            Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveProtocol.BoardProductId) }
-                        : null));
+                    bulkPanelHub, Nexus.Service.Devices.Handlers.BulkPanelHandler.CompanionsFor(bulkPanelDriver)));
             if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2LcdDriver hydroShift2)
             {
                 AddHydroShift2Aio(services, bulkPanelHub, hydroShift2);
@@ -1691,6 +1700,10 @@ public static class NexusServiceCollectionExtensions
             if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver curve)
             {
                 AddHydroShift2Curve(services, bulkPanelHub, curve);
+            }
+            if (bulkPanelDriver is Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver screen88Videos)
+            {
+                AddUniversalScreen88Videos(services, bulkPanelHub, screen88Videos);
             }
         }
 
@@ -1869,6 +1882,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.KrakenLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2LightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
+                sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
@@ -1900,6 +1914,7 @@ public static class NexusServiceCollectionExtensions
                 sp.GetRequiredService<Nexus.Service.Lighting.KrakenLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2LightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>(),
+                sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.Galahad2LcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.HydroShiftLcdLightingProvider>(),
                 sp.GetRequiredService<Nexus.Service.Lighting.AsiahorseUmbraLightingDeviceProvider>(),
@@ -2172,6 +2187,7 @@ public static class NexusServiceCollectionExtensions
         var streams = sp.GetRequiredService<Nexus.Service.Panel.Streams.StreamedPanelStore>();
         string? recordId = null;
         var portrait = false;
+        var halfTurn = false;
         driver.BindPortrait(() =>
         {
             try
@@ -2185,6 +2201,7 @@ public static class NexusServiceCollectionExtensions
                     recordId = null;
                 }
                 portrait = record is not null && Nexus.Service.Panel.PanelRotation.IsPortrait(record.Rotation ?? 0);
+                halfTurn = record is not null && (record.Rotation ?? 0) is 180 or 270;
             }
             catch (Exception ex)
             {
@@ -2192,6 +2209,57 @@ public static class NexusServiceCollectionExtensions
             }
             return portrait;
         });
+        // The same read fills both answers; the half turn is asked right after the portrait one in each handshake.
+        driver.BindHalfTurn(() => halfTurn);
+        var store = sp.GetRequiredService<IConfigStore>();
+        driver.OfflineModeSource = () => store.Load().Devices.UniversalScreen88.OfflineMode;
+        driver.WindowsDisplaySource = () => store.Load().Devices.UniversalScreen88.WindowsDisplay;
+    }
+
+    /// <summary>The Universal Screen 8.8's video library and the player that loops a video or a screen saver on the glass's own decoder.</summary>
+    private static void AddUniversalScreen88Videos(
+        IServiceCollection services,
+        Nexus.Service.Peripherals.BulkPanels.BulkPanelHub hub,
+        Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver driver)
+    {
+        services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Media>();
+        services.AddSingleton(sp =>
+        {
+            var player = new Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player(
+                hub, driver,
+                sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Media>(),
+                sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>(),
+                sp.GetRequiredService<Nexus.Service.Panel.PanelDeviceRegistry>(),
+                lockSleeping: id => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.IsLockDark(id) == true);
+            sp.GetService<Nexus.Service.Lighting.LcdLockState>()?.Changed += _ => player.Wake();
+            player.GlassOwnerChanged += () => sp.GetService<Nexus.Service.Panel.Streams.StreamedPanelCoordinator>()?.Wake();
+            return player;
+        });
+        services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player>());
+        // The "lianli-screen88" topic: the glass attaching or detaching, its Windows display identity coming or going,
+        // and the clip on its decoder, which the settings route reports and no other push covers in time.
+        services.AddSingleton(sp =>
+        {
+            var presence = sp.GetRequiredService<Nexus.Service.Devices.Detection.HardwarePresence>();
+            var player = sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Player>();
+            var broadcaster = new Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Broadcaster(
+                sp.GetRequiredService<Nexus.Service.Sockets.MultiplexHub>(),
+                () => new Nexus.Service.Peripherals.BulkPanels.UniversalScreen88PushState(
+                    hub.IsConnected,
+                    presence.UsbPresent(
+                        Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Protocol.DesktopVendorId,
+                        Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Protocol.DesktopProductId),
+                    player.Playing));
+            hub.ConnectionChanged += broadcaster.Wake;
+            player.GlassOwnerChanged += broadcaster.Wake;
+            // Registered on Windows, where PnP notifications invalidate it; elsewhere the backstop check covers it.
+            if (sp.GetService<Nexus.Service.Devices.Detection.CachingUsbEnumerator>() is { } usb)
+            {
+                usb.Invalidated += broadcaster.Wake;
+            }
+            return broadcaster;
+        });
+        services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Broadcaster>());
     }
 
     /// <summary>The HydroShift II's pump, fans, coolant probe and ring, which ride its LCD's bulk pipe.</summary>
@@ -2288,7 +2356,16 @@ public static class NexusServiceCollectionExtensions
                 return gate.IsChosenOn(handler) || gate.HeldForMonitor(handler);
             },
             Nexus.Service.Peripherals.BulkPanels.DesktopModeExit.DescribeParents,
-            exited: _ => driver.RequestReboot()));
+            exited: row =>
+            {
+                if (row.HandlerId == Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveLcdDriver.Id)
+                {
+                    driver.RequestReboot();
+                }
+            },
+            // The Curve always comes back; the 8.8 only when its user asked for it as a panel again.
+            wanted: row => row.HandlerId != Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver.Id
+                || sp.GetRequiredService<Nexus.Service.Persistence.IConfigStore>().Load().Devices.UniversalScreen88.WindowsDisplay == false));
         services.AddHostedService<Nexus.Service.Peripherals.BulkPanels.DesktopModeExitWorker>();
         services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveBoard>();
         services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.HydroShift2CurveBoard>());
@@ -2299,6 +2376,17 @@ public static class NexusServiceCollectionExtensions
         services.AddSingleton<Nexus.Service.Lighting.Zones.IDeviceStructureSource>(
             sp => sp.GetRequiredService<Nexus.Service.Lighting.HydroShift2CurveLightingDeviceProvider>());
         services.AddHostedService<Nexus.Service.Lighting.HydroShift2CurveLightingFrameWriter>();
+        // The Universal Screen 8.8's bezel LED board (0416:8050), driven natively instead of by OpenRGB.
+        services.AddSingleton<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88LedBoard>();
+        services.AddHostedService(sp => sp.GetRequiredService<Nexus.Service.Peripherals.BulkPanels.UniversalScreen88LedBoard>());
+        services.AddSingleton<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>();
+        services.AddSingleton<Nexus.Service.Lighting.ILightingFrameContributor>(
+            sp => sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>());
+        services.AddSingleton<Nexus.Service.Lighting.Zones.IDeviceStructureSource>(
+            sp => sp.GetRequiredService<Nexus.Service.Lighting.UniversalScreen88LedLightingDeviceProvider>());
+        services.AddHostedService<Nexus.Service.Lighting.UniversalScreen88LedLightingFrameWriter>();
+        // Quick Sync's merged effects: the device order and the shared render the TL, Curve and 8.8 writers play.
+        services.AddSingleton<Nexus.Service.Lighting.LianLiMergeService>();
     }
 
     public static IServiceCollection AddNexusWeather(this IServiceCollection services)

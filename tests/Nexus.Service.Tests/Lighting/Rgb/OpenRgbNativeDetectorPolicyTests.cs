@@ -28,6 +28,9 @@ public class OpenRgbNativeDetectorPolicyTests : IDisposable
 
     private static readonly string[] AllClaimed = NativeDetectorClaims.All.SelectMany(c => c.Detectors).ToArray();
 
+    // Every claim but the ones OpenRGB keeps while their native driver is off (the 8.8 bezel, which OpenRGB lit before it went native).
+    private static readonly string[] HeldWhileOff = NativeDetectorClaims.All.Where(c => !c.OpenRgbWhileOff).SelectMany(c => c.Detectors).ToArray();
+
     private static List<string> Resolve(Func<string, bool> controlOn, bool macOS = false)
         => NativeDetectorClaims.ResolveDisabled(controlOn, macOS);
 
@@ -37,10 +40,11 @@ public class OpenRgbNativeDetectorPolicyTests : IDisposable
         foreach (var macOS in new[] { false, true })
         {
             var held = Resolve(_ => false, macOS);
-            foreach (var detector in AllClaimed)
+            foreach (var detector in HeldWhileOff)
             {
                 Assert.Contains(detector, held);
             }
+            Assert.DoesNotContain("Lian Li Universal Screen", held);
         }
     }
 
@@ -208,7 +212,7 @@ public class OpenRgbNativeDetectorPolicyTests : IDisposable
     public void Without_a_gate_every_claimed_detector_stays_off()
     {
         var held = new OpenRgbProcessManager("missing-exe").ResolveNativeDisabledDetectors();
-        foreach (var detector in AllClaimed)
+        foreach (var detector in HeldWhileOff)
         {
             Assert.Contains(detector, held);
         }

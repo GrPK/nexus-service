@@ -20,13 +20,18 @@ public static class NativeDetectorClaims
     public const string Kraken = "kraken";
     public const string StreamDeck = "streamdeck";
     public const string HyteNexus = "hyte-nexus";
+    public const string UniversalScreen88 = "screen88-led";
 
     /// <param name="Key">Claim name a lighting provider asks about.</param>
     /// <param name="Detectors">REGISTER_*_DETECTOR names in nexus-rgb/openrgb-headless, verbatim.</param>
     /// <param name="Handlers">Device-control handler ids; the detector is held off unless one is on and no native driver exists on this OS.</param>
     /// <param name="NotOnMac">True where the native stack does not exist on macOS, so the detector is on there while control is on.</param>
     /// <param name="Legacy">Names an older bundle registered. Never held, only released, so a stale false in an old config is cleared.</param>
-    public sealed record Claim(string Key, string[] Detectors, string[] Handlers, bool NotOnMac = false, string[]? Legacy = null);
+    /// <param name="OpenRgbWhileOff">
+    /// The detector runs while no handler is on: OpenRGB drove the device before it went native and keeps
+    /// it while the native driver is off, instead of leaving it dark.
+    /// </param>
+    public sealed record Claim(string Key, string[] Detectors, string[] Handlers, bool NotOnMac = false, string[]? Legacy = null, bool OpenRgbWhileOff = false);
 
     public static readonly IReadOnlyList<Claim> All = new Claim[]
     {
@@ -54,6 +59,9 @@ public static class NativeDetectorClaims
         new(StreamDeck, new[] { "Elgato Stream Deck MK.2" }, new[] { "streamdeck" }),
         // The older single "HYTE Nexus" detector is Legacy: the current daemon drops it as unregistered, so it is only released. macOS has no native discovery for either device.
         new(HyteNexus, new[] { "HYTE THICC Q60", "HYTE Nexus Portal NP50" }, new[] { "np50", "qseries" }, NotOnMac: true, Legacy: new[] { "HYTE Nexus" }),
+        // The Universal Screen 8.8's bezel LED board (0416:8050) is driven by UniversalScreen88LedBoard under the 8.8's toggle,
+        // whatever mode the glass is in; while that is off OpenRGB keeps the ring, as it did before the native driver.
+        new(UniversalScreen88, new[] { "Lian Li Universal Screen" }, new[] { Nexus.Service.Peripherals.BulkPanels.UniversalScreen88Driver.Id }, OpenRgbWhileOff: true),
     };
 
     /// <summary>
@@ -97,7 +105,7 @@ public static class NativeDetectorClaims
             {
                 anyOn |= controlOn(handler);
             }
-            if (!anyOn || !(macOS && claim.NotOnMac))
+            if (claim.OpenRgbWhileOff ? anyOn : !anyOn || !(macOS && claim.NotOnMac))
             {
                 disabled.AddRange(claim.Detectors);
             }

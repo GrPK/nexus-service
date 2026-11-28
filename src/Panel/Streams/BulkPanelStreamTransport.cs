@@ -95,13 +95,14 @@ public sealed class BulkPanelStreamTransport : IStreamedPanelTransport, IOrienta
     {
         if (_hub.Driver.SupportsPortrait)
         {
-            // The quarter turn is the glass's own portrait mode (the driver rotates it); only the
-            // half turn on top of it is left to the frame.
+            // The quarter turn is the glass's own portrait mode (the driver rotates it); the half turn
+            // on top of it is left to the frame, unless the glass turns that itself as well.
             var requested = source;
+            var halfInFrame = !_hub.Driver.TurnsHalfItself;
             source = () =>
             {
                 var (rotation, mirror) = requested();
-                return (rotation >= 180 ? 180 : 0, mirror);
+                return (halfInFrame && rotation >= 180 ? 180 : 0, mirror);
             };
         }
         else if (_renderTurned)

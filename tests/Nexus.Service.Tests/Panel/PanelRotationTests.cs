@@ -89,6 +89,56 @@ public class PanelRotationTests : IDisposable
         Assert.Null(store.Load().PanelDevices[record.Id].Rotation);
     }
 
+    [Fact]
+    public void A_turn_is_announced_once_after_it_is_stored_and_nothing_else_is()
+    {
+        var store = new InMemoryConfigStore();
+        var registry = new PanelDeviceRegistry(store);
+        var record = registry.Allocate("Universal Screen", Caps(PanelSurfaces.Monitor, 1920, 480, portrait: true));
+        var heard = new System.Collections.Generic.List<(string Id, int? Stored)>();
+        // The stored value is read inside the handler: the 8.8's wake reads the record the same way.
+        registry.RotationChanged += id => heard.Add((id, store.Load().PanelDevices[id].Rotation));
+
+        registry.Patch(record.Id, new PanelDevicePatch { Rotation = 270 });
+        registry.Patch(record.Id, new PanelDevicePatch { Rotation = 270 });
+        registry.Patch(record.Id, new PanelDevicePatch { DisplayName = "Strip" });
+        registry.Patch(record.Id, new PanelDevicePatch { Rotation = 45 });
+        registry.Patch(record.Id, new PanelDevicePatch { Rotation = 90 });
+
+        Assert.Equal(new[] { (record.Id, (int?)270), (record.Id, (int?)90) }, heard);
+    }
+
+    [Fact]
+    public void A_hardware_reset_announces_the_turn_back_only_from_a_turned_record()
+    {
+        var store = new InMemoryConfigStore();
+        var registry = new PanelDeviceRegistry(store);
+        var turned = registry.Allocate("Turned", Caps(PanelSurfaces.LcdSquare));
+        var level = registry.Allocate("Level", Caps(PanelSurfaces.LcdSquare), _ => false);
+        registry.Patch(turned.Id, new PanelDevicePatch { Rotation = 180 });
+        var heard = new System.Collections.Generic.List<string>();
+        registry.RotationChanged += heard.Add;
+
+        registry.ResetHardwareSettings(turned.Id);
+        registry.ResetHardwareSettings(level.Id);
+        registry.ResetHardwareSettings("missing");
+
+        Assert.Equal(new[] { turned.Id }, heard);
+    }
+
+    [Fact]
+    public void A_throwing_listener_does_not_fail_the_patch()
+    {
+        var store = new InMemoryConfigStore();
+        var registry = new PanelDeviceRegistry(store);
+        var record = registry.Allocate("Cooler", Caps(PanelSurfaces.LcdSquare));
+        registry.RotationChanged += _ => throw new InvalidOperationException("listener");
+
+        var turned = registry.Patch(record.Id, new PanelDevicePatch { Rotation = 90 });
+
+        Assert.Equal(90, turned!.Rotation);
+    }
+
     [Theory]
     [InlineData(PanelSurfaces.LcdSquare, 640, 480, 135)]
     [InlineData(PanelSurfaces.LcdWide, 1600, 720, 360)]

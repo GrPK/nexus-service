@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 using Nexus.Service.Peripherals.Hid;
 
 namespace Nexus.Service.Peripherals.BulkPanels;
@@ -101,31 +102,90 @@ public sealed class BulkPanelHub : IDisposable
     /// </summary>
     public bool Attach(IBulkUsbPipe pipe, IHidDevice? hid)
     {
+        bool was;
+        bool attached;
         lock (_lock)
         {
-            DetachLocked();
-            _pipe = pipe;
-            _hid = hid;
+            was = _attached;
+            attached = AttachLocked(pipe, hid);
+        }
+        RaiseIfConnectionFlipped(was, attached);
+        return attached;
+    }
 
-            var geometry = _driver.Connect(pipe, hid);
-            if (geometry is null)
-            {
-                DetachLocked();
-                return false;
-            }
-            (_width, _height) = geometry.Value;
-            _attached = _width > 0 && _height > 0;
-            if (!_attached)
-            {
-                DetachLocked();
-            }
-            return _attached;
+    private bool AttachLocked(IBulkUsbPipe pipe, IHidDevice? hid)
+    {
+        DetachLocked();
+        _pipe = pipe;
+        _hid = hid;
+
+        var geometry = _driver.Connect(pipe, hid);
+        if (geometry is null)
+        {
+            DetachLocked();
+            return false;
+        }
+        (_width, _height) = geometry.Value;
+        _attached = _width > 0 && _height > 0;
+        if (!_attached)
+        {
+            DetachLocked();
+        }
+        return _attached;
+    }
+
+    /// <summary>Raised outside the lock when <see cref="IsConnected"/> flipped: an attach, a detach, or a failed renegotiation.</summary>
+    public event Action? ConnectionChanged;
+
+    private void RaiseIfConnectionFlipped(bool was, bool now)
+    {
+        if (was == now)
+        {
+            return;
+        }
+        try
+        {
+            ConnectionChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Nexus.Service.Platform.ServiceLog.Warn($"[{_driver.HandlerId}] connection listener failed: {ex.Message}");
         }
     }
+
+    /// <summary>Released by <see cref="WakeWorker"/>; only the panel's one connection worker waits on it.</summary>
+    private readonly SemaphoreSlim _workerWake = new(0, 1);
+
+    /// <summary>
+    /// Has the connection worker look at the open session now rather than at its next presence poll, for a
+    /// change it acts on (a mounting or setting the driver reports as <see cref="IBulkPanelDriver.GeometryStale"/>).
+    /// </summary>
+    public void WakeWorker()
+    {
+        try
+        {
+            if (_workerWake.CurrentCount == 0)
+            {
+                _workerWake.Release();
+            }
+        }
+        catch (SemaphoreFullException)
+        {
+            // Already woken; the worker looks once for both.
+        }
+    }
+
+    /// <summary>The worker's wait between its session checks: true when <see cref="WakeWorker"/> ended it early.</summary>
+    internal Task<bool> WaitForWorkerWakeAsync(int timeoutMs, CancellationToken ct) => _workerWake.WaitAsync(timeoutMs, ct);
+
+    /// <summary>Raised outside the lock after <see cref="Renegotiate"/> moved the panel to another size.</summary>
+    public event Action? GeometryChanged;
 
     /// <summary>Re-runs the handshake on the open pipe for new geometry, without the release a detach sends; false detaches.</summary>
     public bool Renegotiate()
     {
+        bool resized = false;
+        bool detached = false;
         lock (_lock)
         {
             if (!_attached || _pipe is null)
@@ -136,11 +196,31 @@ public sealed class BulkPanelHub : IDisposable
             if (geometry is not { Width: > 0, Height: > 0 })
             {
                 DetachLocked();
-                return false;
+                detached = true;
             }
-            (_width, _height) = geometry.Value;
-            return true;
+            else
+            {
+                resized = (_width, _height) != geometry.Value;
+                (_width, _height) = geometry.Value;
+            }
         }
+        if (detached)
+        {
+            RaiseIfConnectionFlipped(true, false);
+            return false;
+        }
+        if (resized)
+        {
+            try
+            {
+                GeometryChanged?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Nexus.Service.Platform.ServiceLog.Warn($"[{_driver.HandlerId}] geometry listener failed: {ex.Message}");
+            }
+        }
+        return true;
     }
 
     /// <summary>Pushes a frame rendered at the given size; false once the panel runs another geometry.</summary>
@@ -206,10 +286,13 @@ public sealed class BulkPanelHub : IDisposable
 
     public void Detach()
     {
+        bool was;
         lock (_lock)
         {
+            was = _attached;
             DetachLocked();
         }
+        RaiseIfConnectionFlipped(was, false);
     }
 
     private void DetachLocked()
@@ -231,6 +314,7 @@ public sealed class BulkPanelHub : IDisposable
 
     public void Dispose()
     {
+        bool was;
         lock (_lock)
         {
             if (_disposed)
@@ -238,7 +322,9 @@ public sealed class BulkPanelHub : IDisposable
                 return;
             }
             _disposed = true;
+            was = _attached;
             DetachLocked();
         }
+        RaiseIfConnectionFlipped(was, false);
     }
 }

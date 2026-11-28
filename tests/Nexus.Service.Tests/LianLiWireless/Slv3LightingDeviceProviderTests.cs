@@ -140,7 +140,7 @@ public class Slv3LightingDeviceProviderTests
         Assert.False(segment.Resizable);
         var zone = Assert.Single(structure.DefaultZones);
         Assert.Equal($"{structure.DeviceId}:strimer", zone.Id);
-        Assert.Equal("Lian Li Wireless - Strimer 24-Pin", zone.Name);
+        Assert.Equal("Lian Li Wireless - Strimer MB 24-Pin", zone.Name);
     }
 
     /// <summary>First sight wires the catalog product, as the Nollie 32 does for its Strimer ports: one card, the cable's LED map applied.</summary>

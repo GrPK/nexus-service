@@ -3348,10 +3348,13 @@ public sealed partial class Slv3Hub : IDisposable
     /// the chain plays on its own at <paramref name="intervalMs"/> per frame;
     /// each data packet goes out twice.
     /// </summary>
+    /// <param name="asIs">The frames already hold their brightness: sent unscaled and uncapped, <paramref name="brightnessPercent"/> unused.</param>
     public bool SendRgbAnimation(
         string macHex, ReadOnlySpan<byte> frames, int ledCount, int frameCount, double intervalMs,
-        int brightnessPercent, out string effectIndexHex) =>
-        SendRgbData(macHex, Slv3RgbFrame.BuildFrameBuffer(frames, brightnessPercent), ledCount, frameCount, intervalMs, dataPasses: WindowDataPasses, out effectIndexHex, Slv3UploadKind.Animation);
+        int brightnessPercent, out string effectIndexHex, bool asIs = false) =>
+        SendRgbData(
+            macHex, asIs ? frames.ToArray() : Slv3RgbFrame.BuildFrameBuffer(frames, brightnessPercent), ledCount, frameCount, intervalMs,
+            dataPasses: WindowDataPasses, out effectIndexHex, Slv3UploadKind.Animation);
 
     /// <summary>
     /// <see cref="SendRgbAnimation"/> for one rolling playback window, re-sent
