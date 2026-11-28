@@ -53,6 +53,9 @@ public static partial class DevicesRoutes
         app.MapPost("/devices/soundblaster/modes/apply", (SoundBlasterModeRequest body, IServiceProvider sp) =>
             SoundBlasterChange(sp, s => s.ApplyMode(body.Name)));
 
+        app.MapPost("/devices/soundblaster/modes/rename", (SoundBlasterModeRequest body, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.RenameMode(body.Name, body.To)));
+
         app.MapDelete("/devices/soundblaster/modes/{name}", (string name, IServiceProvider sp) =>
             SoundBlasterChange(sp, s => s.DeleteMode(name)));
     }

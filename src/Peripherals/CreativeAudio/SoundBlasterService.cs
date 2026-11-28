@@ -337,6 +337,29 @@ public sealed class SoundBlasterService
         }
     }
 
+    public SoundBlasterResult RenameMode(string? name, string? to)
+    {
+        var trimmed = to?.Trim() ?? "";
+        if (trimmed.Length is 0 or > ModeNameMax)
+        {
+            return SoundBlasterResult.Invalid($"a mode name of 1-{ModeNameMax} characters is required");
+        }
+        lock (_lock)
+        {
+            var modes = Modes();
+            if (modes.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) is not { } mode)
+            {
+                return SoundBlasterResult.Invalid("no such mode");
+            }
+            if (modes.Any(m => m != mode && string.Equals(m.Name, trimmed, StringComparison.OrdinalIgnoreCase)))
+            {
+                return SoundBlasterResult.Invalid("a mode with that name exists");
+            }
+            mode.Name = trimmed;
+            return SaveModes(modes);
+        }
+    }
+
     public SoundBlasterResult DeleteMode(string? name)
     {
         lock (_lock)
@@ -483,6 +506,7 @@ public sealed class SoundBlasterService
         {
             _state.Modes = modes.Select(m => m.Name).ToList();
         }
+        _readAt = DateTime.MinValue;
         return SoundBlasterResult.Done;
     }
 
@@ -578,6 +602,7 @@ public sealed class SoundBlasterService
         state.MicEqBandHz = SoundBlasterPresets.MicEqBandHz.ToList();
         state.Mixer = ReadMixer(model);
         state.Modes = Modes().Select(m => m.Name).ToList();
+        state.ActiveMode = Modes().FirstOrDefault(m => m.Values.All(kv => state.Values.TryGetValue(kv.Key, out var v) && Math.Abs(v - kv.Value) <= 0.0005f))?.Name;
         if (answered == 0)
         {
             state.Error = "no answer";
@@ -680,5 +705,6 @@ public sealed class SoundBlasterService
         MicEqBandHz = s.MicEqBandHz.ToList(),
         Mixer = s.Mixer.Select(c => new SoundBlasterMixerChannelDto { Id = c.Id, Name = c.Name, Direction = c.Direction, Volume = c.Volume, Muted = c.Muted }).ToList(),
         Modes = s.Modes.ToList(),
+        ActiveMode = s.ActiveMode,
     };
 }

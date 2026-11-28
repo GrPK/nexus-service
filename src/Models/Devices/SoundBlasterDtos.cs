@@ -52,6 +52,8 @@ public sealed class SoundBlasterStateDto
     public List<SoundBlasterMixerChannelDto> Mixer { get; set; } = new();
     /// <summary>The modes saved in Nexus, by name.</summary>
     public List<string> Modes { get; set; } = new();
+    /// <summary>The saved mode whose values all match the device now; null when none does.</summary>
+    public string? ActiveMode { get; set; }
 }
 
 public sealed class SoundBlasterPresetDto
@@ -109,6 +111,8 @@ public sealed class SoundBlasterMixerRequest
 public sealed class SoundBlasterModeRequest
 {
     public string? Name { get; set; }
+    /// <summary>The new name, when renaming.</summary>
+    public string? To { get; set; }
 }
 
 public sealed class SoundBlasterParameterRequest

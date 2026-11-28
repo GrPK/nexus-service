@@ -186,6 +186,7 @@ public class SoundBlasterTests
 
         Assert.True(service.SaveMode("Music").Ok);
         Assert.Equal(new[] { "Music" }, service.GetState().Modes);
+        Assert.Equal("Music", service.GetState().ActiveMode);
         Assert.True(service.SetParameter(0x96, 0x08, 0.9f).Ok);
         Assert.True(service.SetParameter(0x96, 0x0B, 6f).Ok);
 
@@ -194,7 +195,10 @@ public class SoundBlasterTests
 
         Assert.Equal(0.5f, state.Values["96:08"]);
         Assert.Equal(0f, state.Values["96:0b"]);
-        Assert.True(service.DeleteMode("music").Ok);
+        Assert.Equal("Music", state.ActiveMode);
+        Assert.True(service.RenameMode("Music", "Albums").Ok);
+        Assert.Equal(new[] { "Albums" }, service.GetState().Modes);
+        Assert.True(service.DeleteMode("albums").Ok);
         Assert.Empty(service.GetState().Modes);
         Assert.False(service.ApplyMode("Music").Ok);
     }
