@@ -502,10 +502,7 @@ public sealed class SoundBlasterService
                 return SoundBlasterResult.Failed($"could not save the modes: {ex.Message}");
             }
         }
-        if (_state is not null)
-        {
-            _state.Modes = modes.Select(m => m.Name).ToList();
-        }
+        _state?.Modes = modes.Select(m => m.Name).ToList();
         _readAt = DateTime.MinValue;
         return SoundBlasterResult.Done;
     }
