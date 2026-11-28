@@ -34,6 +34,27 @@ public static partial class DevicesRoutes
 
         app.MapPost("/devices/soundblaster/mic-boost", (SoundBlasterValueRequest body, IServiceProvider sp) =>
             SoundBlasterChange(sp, s => s.SetMicBoost(body.Value)));
+
+        app.MapPost("/devices/soundblaster/feature", (SoundBlasterFeatureRequest body, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.SetFeature(body.Name, body.Enabled)));
+
+        app.MapPost("/devices/soundblaster/voice-morph", (SoundBlasterPresetRequest body, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.SetVoiceMorph(body.Preset)));
+
+        app.MapPost("/devices/soundblaster/mic-eq", (SoundBlasterPresetRequest body, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.SetMicEq(body.Preset)));
+
+        app.MapPost("/devices/soundblaster/mixer", (SoundBlasterMixerRequest body, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.SetMixer(body.Id, body.Volume, body.Muted)));
+
+        app.MapPost("/devices/soundblaster/modes", (SoundBlasterModeRequest body, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.SaveMode(body.Name)));
+
+        app.MapPost("/devices/soundblaster/modes/apply", (SoundBlasterModeRequest body, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.ApplyMode(body.Name)));
+
+        app.MapDelete("/devices/soundblaster/modes/{name}", (string name, IServiceProvider sp) =>
+            SoundBlasterChange(sp, s => s.DeleteMode(name)));
     }
 
     private static SoundBlasterService? SoundBlaster(IServiceProvider sp) => sp.GetService<SoundBlasterService>();

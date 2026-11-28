@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace Nexus.Service.Models.Devices;
@@ -35,6 +36,79 @@ public sealed class SoundBlasterStateDto
     public List<int> DacFilters { get; set; } = new();
     /// <summary>Microphone boost in dB (0, 10, 20 or 30).</summary>
     public int? MicBoost { get; set; }
+    /// <summary>
+    /// Device features the device has, on or off: "directMode", "spdifDirect", "speakerVirtualization",
+    /// "logoLed", "energySaving", "volumeSync".
+    /// </summary>
+    public Dictionary<string, bool> Features { get; set; } = new();
+    /// <summary>The Voice Morph character the voice FX parameters match; null when none does.</summary>
+    public string? VoiceMorph { get; set; }
+    /// <summary>The microphone EQ preset the band gains match; null when none does.</summary>
+    public string? MicEq { get; set; }
+    public List<SoundBlasterPresetDto> VoicePresets { get; set; } = new();
+    public List<SoundBlasterPresetDto> MicEqPresets { get; set; } = new();
+    public List<int> MicEqBandHz { get; set; } = new();
+    /// <summary>Windows' volume and mute of the card's own endpoints (playback first).</summary>
+    public List<SoundBlasterMixerChannelDto> Mixer { get; set; } = new();
+    /// <summary>The modes saved in Nexus, by name.</summary>
+    public List<string> Modes { get; set; } = new();
+}
+
+public sealed class SoundBlasterPresetDto
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    /// <summary>For a mic EQ preset, its band gains in dB.</summary>
+    public List<float>? Values { get; set; }
+}
+
+public sealed class SoundBlasterMixerChannelDto
+{
+    /// <summary>The Windows endpoint id.</summary>
+    public string Id { get; set; } = "";
+    /// <summary>"Speakers", "Microphone", "Line", "SPDIF Interface", "Digital Audio Interface".</summary>
+    public string Name { get; set; } = "";
+    /// <summary>"playback" or "recording".</summary>
+    public string Direction { get; set; } = "playback";
+    /// <summary>0 to 1.</summary>
+    public double Volume { get; set; }
+    public bool Muted { get; set; }
+}
+
+/// <summary>A mode saved in Nexus: the playback values (family 0x96) and the decoder's (0x97) by "family:id".</summary>
+public sealed class SoundBlasterMode
+{
+    public string Name { get; set; } = "";
+    public Dictionary<string, float> Values { get; set; } = new();
+    public DateTime SavedAt { get; set; }
+}
+
+public sealed class SoundBlasterModesFile
+{
+    public List<SoundBlasterMode> Modes { get; set; } = new();
+}
+
+public sealed class SoundBlasterFeatureRequest
+{
+    public string? Name { get; set; }
+    public bool? Enabled { get; set; }
+}
+
+public sealed class SoundBlasterPresetRequest
+{
+    public string? Preset { get; set; }
+}
+
+public sealed class SoundBlasterMixerRequest
+{
+    public string? Id { get; set; }
+    public double? Volume { get; set; }
+    public bool? Muted { get; set; }
+}
+
+public sealed class SoundBlasterModeRequest
+{
+    public string? Name { get; set; }
 }
 
 public sealed class SoundBlasterParameterRequest

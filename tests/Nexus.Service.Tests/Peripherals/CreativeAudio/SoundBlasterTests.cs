@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Nexus.Service.Activity;
+using Nexus.Service.Models.Activity;
 using Nexus.Service.Peripherals.CreativeAudio;
 using Xunit;
 
@@ -139,6 +141,115 @@ public class SoundBlasterTests
         Assert.Equal("not-present", service.SetSbx(true).Status);
     }
 
+    [Fact]
+    public void Features_AreReadFromTheMasks_AndWrittenByBit()
+    {
+        var device = new FakeG8();
+        var service = new SoundBlasterService(device);
+
+        var state = service.GetState();
+
+        Assert.True(state.Features["logoLed"]);
+        Assert.False(state.Features["spdifDirect"]);
+        Assert.False(state.Features.ContainsKey("bogus"));
+        Assert.True(service.SetFeature("spdifDirect", true).Ok);
+        Assert.Equal("5a 39 03 00 0d 01", Hex(device.Writes[^1], 6));
+        Assert.True(service.GetState().Features["spdifDirect"]);
+        Assert.False(service.SetFeature("nope", true).Ok);
+    }
+
+    [Fact]
+    public void VoiceMorph_AndMicEq_WriteTheirPresets_AndAreRecognised()
+    {
+        var device = new FakeG8();
+        var service = new SoundBlasterService(device);
+        Assert.Null(service.GetState().VoiceMorph);
+
+        Assert.True(service.SetVoiceMorph("Robot").Ok);
+        Assert.True(service.SetMicEq("Preset6").Ok);
+        var state = service.GetState();
+
+        Assert.Equal("Robot", state.VoiceMorph);
+        Assert.Equal("Preset6", state.MicEq);
+        Assert.Equal(1.394f, state.Values["95:0e"], 3);
+        Assert.Equal(-5f, state.Values["95:14"]);
+        Assert.Equal(18, state.VoicePresets.Count);
+        Assert.Equal(11, state.MicEqPresets.Count);
+        Assert.False(service.SetVoiceMorph("Nobody").Ok);
+    }
+
+    [Fact]
+    public void Modes_KeepThePlaybackSettings_AndPutThemBack()
+    {
+        var device = new FakeG8();
+        var service = new SoundBlasterService(device);
+
+        Assert.True(service.SaveMode("Music").Ok);
+        Assert.Equal(new[] { "Music" }, service.GetState().Modes);
+        Assert.True(service.SetParameter(0x96, 0x08, 0.9f).Ok);
+        Assert.True(service.SetParameter(0x96, 0x0B, 6f).Ok);
+
+        Assert.True(service.ApplyMode("Music").Ok);
+        var state = service.GetState();
+
+        Assert.Equal(0.5f, state.Values["96:08"]);
+        Assert.Equal(0f, state.Values["96:0b"]);
+        Assert.True(service.DeleteMode("music").Ok);
+        Assert.Empty(service.GetState().Modes);
+        Assert.False(service.ApplyMode("Music").Ok);
+    }
+
+    [Fact]
+    public void Mixer_ShowsTheCardsOwnEndpoints_AndSetsTheirVolume()
+    {
+        var audio = new FakeAudio();
+        var volume = new FakeVolume();
+        var service = new SoundBlasterService(new FakeG8(), audio, volume);
+
+        var mixer = service.GetState().Mixer;
+
+        Assert.Equal(new[] { "Speakers", "Line" }, mixer.Select(c => c.Name));
+        Assert.Equal("playback", mixer[0].Direction);
+        Assert.Equal(0.24, mixer[0].Volume, 2);
+        Assert.True(service.SetMixer("line-1", 0.5, true).Ok);
+        Assert.Equal((0.5, true), volume.Levels["line-1"]);
+        Assert.False(service.SetMixer("realtek", 0.5, null).Ok);
+        Assert.False(service.SetMixer("line-1", 2, null).Ok);
+    }
+
+    private sealed class FakeAudio : IAudioDeviceProvider
+    {
+        public AudioDeviceList ListDevices() => new()
+        {
+            Outputs =
+            {
+                new AudioDevice { Id = "spk-1", Name = "Speakers (2- Sound Blaster G8 USB-1)" },
+                new AudioDevice { Id = "spk-2", Name = "Speakers (Sound Blaster G8 USB-2)" },
+                new AudioDevice { Id = "realtek", Name = "Speakers (Realtek(R) Audio)" },
+            },
+            Inputs = { new AudioDevice { Id = "line-1", Name = "Line (2- Sound Blaster G8 USB-1)", Direction = "input" } },
+        };
+
+        public bool SetDefaultOutput(string deviceId) => false;
+        public bool SetDefaultInput(string deviceId) => false;
+        public bool SetSpatial(string deviceId, string formatId) => false;
+    }
+
+    private sealed class FakeVolume : IVolumeProvider
+    {
+        public Dictionary<string, (double Volume, bool Muted)> Levels { get; } = new() { ["spk-1"] = (0.24, false), ["line-1"] = (0.68, false) };
+
+        public VolumeState GetState() => new();
+        public void SetVolume(double volume) { }
+        public void SetMuted(bool muted) { }
+
+        public VolumeState GetState(string deviceId) =>
+            Levels.TryGetValue(deviceId, out var l) ? new VolumeState { Supported = true, Volume = l.Volume, Muted = l.Muted } : new VolumeState();
+
+        public void SetVolume(string deviceId, double volume) => Levels[deviceId] = (volume, Levels.GetValueOrDefault(deviceId).Muted);
+        public void SetMuted(string deviceId, bool muted) => Levels[deviceId] = (Levels.GetValueOrDefault(deviceId).Volume, muted);
+    }
+
     /// <summary>A G8 answering as the real one did, holding the values it was read with.</summary>
     private sealed class FakeG8 : ISoundBlasterChannel
     {
@@ -148,6 +259,7 @@ public class SoundBlasterTests
             [(0x96, 0x17)] = 80f, [(0x96, 0x19)] = 0.5f, [(0x95, 0x2D)] = 0.74f, [(0x97, 0x02)] = 2f,
         };
         private int _profile = 0x01;
+        private uint _features = 0x4000;
 
         public bool Connected { get; init; } = true;
         public bool RefuseWrites { get; init; }
@@ -160,6 +272,7 @@ public class SoundBlasterTests
             var command = request[2];
             var isWrite = command == SoundBlasterProtocol.SetParameter
                 || (command == SoundBlasterProtocol.GlobalProfile && request[4] == 0x07)
+                || (command == SoundBlasterProtocol.FeatureControl && request[4] == 0x00)
                 || (command is SoundBlasterProtocol.OutputSelect or SoundBlasterProtocol.DacFilter or SoundBlasterProtocol.MicGain && request[4] == 0x00);
             if (isWrite)
             {
@@ -244,6 +357,17 @@ public class SoundBlasterTests
                     break;
                 case SoundBlasterProtocol.MicGain when r[4] == 0x01:
                     yield return Report("5a 3c 04 01 00 02 00");
+                    break;
+                case SoundBlasterProtocol.FeatureControl when r[4] == 0x01:
+                    var on = BitConverter.GetBytes(_features);
+                    yield return Report($"5a 39 05 01 {on[0]:x2} {on[1]:x2} {on[2]:x2} {on[3]:x2}");
+                    break;
+                case SoundBlasterProtocol.FeatureControl when r[4] == 0x02:
+                    yield return Report("5a 39 09 02 20 64 02 14 00 00 00 00");
+                    break;
+                case SoundBlasterProtocol.FeatureControl:
+                    _features = r[6] == 1 ? _features | (1u << r[5]) : _features & ~(1u << r[5]);
+                    yield return Report($"5a 02 0a 39 00 {r[5]:x2} {r[6]:x2}");
                     break;
                 case SoundBlasterProtocol.FirmwareString:
                     yield return Report("5a 07 0f 31 2e 30 2e 32 34 30 39 31 31 2e 31 30 31 30");

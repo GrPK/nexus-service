@@ -1,8 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using Nexus.Service.Activity;
+using Nexus.Service.Media;
 using Nexus.Service.Models.Devices;
 using Nexus.Service.Peripherals.Hid;
+using Nexus.Service.Persistence;
+using Nexus.Service.Platform;
+using Nexus.Service.Serialization;
 using static Nexus.Service.Peripherals.CreativeAudio.SoundBlasterProtocol;
 
 namespace Nexus.Service.Peripherals.CreativeAudio;
@@ -18,8 +26,10 @@ public sealed record SoundBlasterResult(bool Ok, string Status, string? Message 
 
 /// <summary>
 /// A Creative Sound Blaster G8 / G6 the way Creative App drives it (see <see cref="SoundBlasterProtocol"/>):
-/// reads the SBX effects, EQ, Scout Mode, mic processing, output and DAC filter, and changes them.
-/// The settings live in the device, so nothing is kept here but a short-lived copy of the last read.
+/// reads the SBX effects, EQ, Scout Mode, mic processing (with Voice Morph and the mic EQ), output, DAC filter
+/// and device features (Direct Mode, S/PDIF-Out Direct Mode, logo LED, energy saving, volume sync), and changes
+/// them. The settings live in the device; Nexus keeps only the user's saved modes. The mixer is Windows' own
+/// volume of the card's endpoints (the G8's mixer is USB Audio Class, not this HID protocol).
 /// </summary>
 public sealed class SoundBlasterService
 {
@@ -31,7 +41,21 @@ public sealed class SoundBlasterService
     // mic Smart Volume (MalcolmVoiceInputManagerCommand); the decoder dynamic range.
     private static readonly byte[] PlaybackIds =
         Enumerable.Range(0x00, 0x15).Select(i => (byte)i).Concat(new byte[] { 0x17, 0x18, 0x19 }).ToArray();
-    private static readonly byte[] RecordingIds = { 0x00, 0x04, 0x05, 0x2C, 0x2D };
+    private static readonly byte[] RecordingIds =
+        new byte[] { 0x00, 0x04, 0x05 }.Concat(Enumerable.Range(0x0A, 0x12).Select(i => (byte)i)).Concat(new byte[] { 0x2C, 0x2D }).ToArray();
+
+    private static readonly (string Name, byte Bit)[] FeatureBits =
+    {
+        ("directMode", FeatureDirectMode),
+        ("speakerVirtualization", FeatureSpeakerVirtualization),
+        ("spdifDirect", FeatureSpdifDirect),
+        ("logoLed", FeatureLogoLed),
+        ("energySaving", FeatureEnergySaving),
+        ("volumeSync", FeatureVolumeSync),
+    };
+
+    private static readonly TimeSpan EndpointsFresh = TimeSpan.FromSeconds(30);
+    private const int ModeNameMax = 40;
     private static readonly byte[] DecoderIds = { 0x02 };
 
     // The effect switches and the EQ: the SBX master turns them all off, and Scout Mode swaps them for its own
@@ -44,17 +68,27 @@ public sealed class SoundBlasterService
     private SoundBlasterStateDto? _state;
     private DateTime _readAt;
     private string? _identityOf;
-    private (string? Firmware, string? Serial, List<string> Outputs, List<int> Filters) _identity = (null, null, new(), new());
+    private (string? Firmware, string? Serial, List<string> Outputs, List<int> Filters, uint Features) _identity = (null, null, new(), new(), 0);
     private Dictionary<byte, float>? _effectsBefore;
+    private readonly IAudioDeviceProvider? _audio;
+    private readonly IVolumeProvider? _volume;
+    private readonly string? _modesPath;
+    private List<SoundBlasterMode>? _modes;
+    private List<(string Id, string Name, string Direction)> _endpoints = new();
+    private DateTime _endpointsAt;
 
-    public SoundBlasterService(IHidEnumerator hid)
-        : this(new SoundBlasterChannel(hid))
+    public SoundBlasterService(IHidEnumerator hid, IAudioDeviceProvider? audio = null, IVolumeProvider? volume = null)
+        : this(new SoundBlasterChannel(hid), audio, volume, MediaLibrary.DeviceStoreDir("creative-soundblaster"))
     {
     }
 
-    internal SoundBlasterService(ISoundBlasterChannel channel)
+    /// <summary>For tests: modes are kept in memory when <paramref name="storeDir"/> is null.</summary>
+    internal SoundBlasterService(ISoundBlasterChannel channel, IAudioDeviceProvider? audio = null, IVolumeProvider? volume = null, string? storeDir = null)
     {
         _channel = channel;
+        _audio = audio;
+        _volume = volume;
+        _modesPath = storeDir is null ? null : Path.Combine(storeDir, "modes.json");
     }
 
     /// <summary>The connected model's name ("Sound Blaster G8"), or null.</summary>
@@ -175,7 +209,282 @@ public sealed class SoundBlasterService
             ? Write(WriteMicBoost((byte)db), state => state.MicBoost = db)
             : SoundBlasterResult.Invalid("mic boost is 0, 10, 20 or 30 dB");
 
+    /// <summary>Turns a device feature on or off by its name in <see cref="SoundBlasterStateDto.Features"/>.</summary>
+    public SoundBlasterResult SetFeature(string? name, bool? on)
+    {
+        var entry = FeatureBits.FirstOrDefault(f => f.Name == name);
+        if (entry.Name is null || on is not { } value)
+        {
+            return SoundBlasterResult.Invalid("a known feature name and enabled are required");
+        }
+        lock (_lock)
+        {
+            var result = Write(WriteFeature(entry.Bit, value), _ => { });
+            // Direct Mode on makes the G8 drop off USB and come back (it changes its audio interfaces).
+            if (result.Ok && entry.Bit == FeatureDirectMode && value)
+            {
+                WaitForReturn();
+            }
+            _readAt = DateTime.MinValue;
+            return result;
+        }
+    }
+
+    /// <summary>Writes a Voice Morph character's parameters (the switch is recording 0x0A).</summary>
+    public SoundBlasterResult SetVoiceMorph(string? id) =>
+        SoundBlasterPresets.Voices.FirstOrDefault(v => v.Id == id) is { } voice
+            ? WriteRecordingBlock(SoundBlasterPresets.VoiceFxFirst, voice.Values)
+            : SoundBlasterResult.Invalid("unknown Voice Morph character");
+
+    /// <summary>Writes a microphone EQ preset's band gains (the switch is recording 0x13).</summary>
+    public SoundBlasterResult SetMicEq(string? id) =>
+        SoundBlasterPresets.MicEq.FirstOrDefault(p => p.Id == id) is { } preset
+            ? WriteRecordingBlock(SoundBlasterPresets.MicEqFirst, preset.Bands)
+            : SoundBlasterResult.Invalid("unknown microphone EQ preset");
+
+    /// <summary>Sets the Windows volume or mute of one of the card's endpoints (ids from <see cref="SoundBlasterStateDto.Mixer"/>).</summary>
+    public SoundBlasterResult SetMixer(string? id, double? volume, bool? muted)
+    {
+        if (_volume is null)
+        {
+            return SoundBlasterResult.Failed("no mixer on this platform");
+        }
+        lock (_lock)
+        {
+            if (_channel.Present() is not { } model)
+            {
+                return SoundBlasterResult.NotPresent;
+            }
+            if (id is null || Endpoints(model).All(e => e.Id != id) || (volume is null && muted is null)
+                || volume is { } v && (!double.IsFinite(v) || v < 0 || v > 1))
+            {
+                return SoundBlasterResult.Invalid("one of the Sound Blaster's endpoints, with a volume 0-1 or muted");
+            }
+            if (volume is { } level)
+            {
+                _volume.SetVolume(id, level);
+            }
+            if (muted is { } mute)
+            {
+                _volume.SetMuted(id, mute);
+            }
+            _readAt = DateTime.MinValue;
+            return SoundBlasterResult.Done;
+        }
+    }
+
+    /// <summary>Keeps the current playback settings (effects, EQ, decoder) under <paramref name="name"/>; the same name replaces it.</summary>
+    public SoundBlasterResult SaveMode(string? name)
+    {
+        var trimmed = name?.Trim() ?? "";
+        if (trimmed.Length is 0 or > ModeNameMax)
+        {
+            return SoundBlasterResult.Invalid($"a mode name of 1-{ModeNameMax} characters is required");
+        }
+        lock (_lock)
+        {
+            if (_channel.Present() is not { } model)
+            {
+                return SoundBlasterResult.NotPresent;
+            }
+            _readAt = DateTime.MinValue;
+            var state = Read(model);
+            var values = state.Values.Where(kv => kv.Key.StartsWith("96:") || kv.Key.StartsWith("97:"))
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+            if (values.Count == 0)
+            {
+                return SoundBlasterResult.Failed("the Sound Blaster did not answer");
+            }
+            var modes = Modes();
+            modes.RemoveAll(m => string.Equals(m.Name, trimmed, StringComparison.OrdinalIgnoreCase));
+            modes.Add(new SoundBlasterMode { Name = trimmed, Values = values, SavedAt = DateTime.UtcNow });
+            return SaveModes(modes);
+        }
+    }
+
+    /// <summary>Writes a saved mode back: only the values that differ, the effect switches last.</summary>
+    public SoundBlasterResult ApplyMode(string? name)
+    {
+        lock (_lock)
+        {
+            if (_channel.Present() is not { } model)
+            {
+                return SoundBlasterResult.NotPresent;
+            }
+            if (Modes().FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) is not { } mode)
+            {
+                return SoundBlasterResult.Invalid("no such mode");
+            }
+            var now = Read(model).Values;
+            var changes = mode.Values
+                .Where(kv => !now.TryGetValue(kv.Key, out var current) || Math.Abs(current - kv.Value) > 0.0005f)
+                .Select(kv => (Key: kv.Key, Value: kv.Value, Parsed: ParseKey(kv.Key)))
+                .Where(c => c.Parsed is not null)
+                .OrderBy(c => c.Parsed!.Value.Family == Playback && EffectSwitches.Contains(c.Parsed.Value.Id))
+                .ToList();
+            foreach (var change in changes)
+            {
+                var (family, id) = change.Parsed!.Value;
+                var result = Write(WriteParameter(family, id, change.Value), _ => { });
+                if (!result.Ok)
+                {
+                    _readAt = DateTime.MinValue;
+                    return result;
+                }
+            }
+            _readAt = DateTime.MinValue;
+            return SoundBlasterResult.Done;
+        }
+    }
+
+    public SoundBlasterResult DeleteMode(string? name)
+    {
+        lock (_lock)
+        {
+            var modes = Modes();
+            if (modes.RemoveAll(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) == 0)
+            {
+                return SoundBlasterResult.Invalid("no such mode");
+            }
+            return SaveModes(modes);
+        }
+    }
+
     internal static string Key(byte family, byte id) => $"{family:x2}:{id:x2}";
+
+    private static (byte Family, byte Id)? ParseKey(string key) =>
+        key.Length == 5 && key[2] == ':'
+        && byte.TryParse(key.AsSpan(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var family)
+        && byte.TryParse(key.AsSpan(3, 2), System.Globalization.NumberStyles.HexNumber, null, out var id)
+        && family is Recording or Playback or Decoder
+            ? (family, id)
+            : null;
+
+    private SoundBlasterResult WriteRecordingBlock(byte first, IReadOnlyList<float> values)
+    {
+        lock (_lock)
+        {
+            for (var i = 0; i < values.Count; i++)
+            {
+                var id = (byte)(first + i);
+                var result = Write(WriteParameter(Recording, id, values[i]), state => state.Values[Key(Recording, id)] = values[i]);
+                if (!result.Ok)
+                {
+                    return result;
+                }
+            }
+            _readAt = DateTime.MinValue;
+            return SoundBlasterResult.Done;
+        }
+    }
+
+    // Caller holds _lock.
+    private void WaitForReturn()
+    {
+        Thread.Sleep(1500);
+        var until = Environment.TickCount64 + 8000;
+        while (Environment.TickCount64 < until)
+        {
+            if (_channel.Present() is not null && _channel.Exchange(ReadFeatures(), r => ParseFeatureMask(r) is not null) is not null)
+            {
+                return;
+            }
+            Thread.Sleep(500);
+        }
+        ServiceLog.Warn("[creative-soundblaster] the Sound Blaster did not come back after Direct Mode turned on");
+    }
+
+    // Caller holds _lock. The card's own Windows endpoints (not the second port's, USB-2), cached for a while.
+    private List<(string Id, string Name, string Direction)> Endpoints(SoundBlasterModel model)
+    {
+        if (_audio is null)
+        {
+            return new();
+        }
+        if (DateTime.UtcNow - _endpointsAt < EndpointsFresh && _endpoints.Count > 0)
+        {
+            return _endpoints;
+        }
+        static string Squash(string s) => s.Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant();
+        var wanted = Squash(model.Name);
+        var list = _audio.ListDevices();
+        _endpoints = list.Outputs.Select(d => (d, "playback")).Concat(list.Inputs.Select(d => (d, "recording")))
+            .Where(x => Squash(x.d.Name).Contains(wanted) && !x.d.Name.Contains("USB-2", StringComparison.OrdinalIgnoreCase))
+            .Select(x => (x.d.Id, Label(x.d.Name), x.Item2))
+            .ToList();
+        _endpointsAt = DateTime.UtcNow;
+        return _endpoints;
+    }
+
+    // "Line (2- Sound Blaster G8 USB-1)" -> "Line".
+    private static string Label(string name)
+    {
+        var cut = name.IndexOf(" (", StringComparison.Ordinal);
+        return cut > 0 ? name[..cut] : name;
+    }
+
+    private List<SoundBlasterMixerChannelDto> ReadMixer(SoundBlasterModel model)
+    {
+        var channels = new List<SoundBlasterMixerChannelDto>();
+        if (_volume is null)
+        {
+            return channels;
+        }
+        foreach (var (id, name, direction) in Endpoints(model))
+        {
+            var v = _volume.GetState(id);
+            if (v.Supported)
+            {
+                channels.Add(new SoundBlasterMixerChannelDto { Id = id, Name = name, Direction = direction, Volume = v.Volume, Muted = v.Muted });
+            }
+        }
+        return channels;
+    }
+
+    // Caller holds _lock.
+    private List<SoundBlasterMode> Modes()
+    {
+        if (_modes is not null)
+        {
+            return _modes;
+        }
+        _modes = new();
+        if (_modesPath is not null && File.Exists(_modesPath))
+        {
+            try
+            {
+                _modes = JsonSerializer.Deserialize(File.ReadAllText(_modesPath), AppJsonContext.Default.SoundBlasterModesFile)?.Modes ?? new();
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+            {
+                ServiceLog.Warn($"[creative-soundblaster] could not read {_modesPath}: {ex.Message}");
+            }
+        }
+        return _modes;
+    }
+
+    // Caller holds _lock.
+    private SoundBlasterResult SaveModes(List<SoundBlasterMode> modes)
+    {
+        _modes = modes;
+        if (_modesPath is not null)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(_modesPath)!);
+                AtomicJsonFile.Write(_modesPath, JsonSerializer.Serialize(new SoundBlasterModesFile { Modes = modes }, AppJsonContext.Default.SoundBlasterModesFile));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return SoundBlasterResult.Failed($"could not save the modes: {ex.Message}");
+            }
+        }
+        if (_state is not null)
+        {
+            _state.Modes = modes.Select(m => m.Name).ToList();
+        }
+        return SoundBlasterResult.Done;
+    }
 
     private SoundBlasterResult Write(byte[] request, Action<SoundBlasterStateDto> apply)
     {
@@ -252,11 +561,42 @@ public sealed class SoundBlasterService
         state.Serial = _identity.Serial;
         state.Outputs = _identity.Outputs.ToList();
         state.DacFilters = _identity.Filters.ToList();
+        if (Ask(ReadFeatures(), r => ParseFeatureMask(r) is not null) is { } features && ParseFeatureMask(features) is { } on)
+        {
+            foreach (var (name, bit) in FeatureBits)
+            {
+                if ((_identity.Features & (1u << bit)) != 0)
+                {
+                    state.Features[name] = (on & (1u << bit)) != 0;
+                }
+            }
+        }
+        state.VoiceMorph = Block(state, SoundBlasterPresets.VoiceFxFirst) is { } voice ? SoundBlasterPresets.MatchVoice(voice) : null;
+        state.MicEq = Block(state, SoundBlasterPresets.MicEqFirst) is { } bands ? SoundBlasterPresets.MatchMicEq(bands) : null;
+        state.VoicePresets = SoundBlasterPresets.Voices.Select(v => new SoundBlasterPresetDto { Id = v.Id, Name = v.Name }).ToList();
+        state.MicEqPresets = SoundBlasterPresets.MicEq.Select(p => new SoundBlasterPresetDto { Id = p.Id, Name = p.Name, Values = p.Bands.ToList() }).ToList();
+        state.MicEqBandHz = SoundBlasterPresets.MicEqBandHz.ToList();
+        state.Mixer = ReadMixer(model);
+        state.Modes = Modes().Select(m => m.Name).ToList();
         if (answered == 0)
         {
             state.Error = "no answer";
         }
         return state;
+    }
+
+    // The eight recording values from <paramref name="first"/>, or null when one is missing.
+    private static float[]? Block(SoundBlasterStateDto state, byte first)
+    {
+        var values = new float[SoundBlasterPresets.Count];
+        for (var i = 0; i < values.Length; i++)
+        {
+            if (!state.Values.TryGetValue(Key(Recording, (byte)(first + i)), out values[i]))
+            {
+                return null;
+            }
+        }
+        return values;
     }
 
     // What does not change while the device stays connected: read once per connection.
@@ -274,7 +614,10 @@ public sealed class SoundBlasterService
         var filters = Ask(ListFilters(), r => CommandOf(r) == DacFilter && r.Length > 4 && r[4] == 0x02) is { } l
             ? ParseFilterList(l).Select(b => (int)b).ToList()
             : new List<int>();
-        _identity = (firmware, serial, outputs, filters);
+        var supported = Ask(ListFeatures(), r => ParseFeatureMask(r, supported: true) is not null) is { } m
+            ? ParseFeatureMask(m, supported: true) ?? 0
+            : 0;
+        _identity = (firmware, serial, outputs, filters, supported);
         _identityOf = model.Name;
     }
 
@@ -329,5 +672,13 @@ public sealed class SoundBlasterService
         DacFilter = s.DacFilter,
         DacFilters = s.DacFilters.ToList(),
         MicBoost = s.MicBoost,
+        Features = new Dictionary<string, bool>(s.Features),
+        VoiceMorph = s.VoiceMorph,
+        MicEq = s.MicEq,
+        VoicePresets = s.VoicePresets.ToList(),
+        MicEqPresets = s.MicEqPresets.ToList(),
+        MicEqBandHz = s.MicEqBandHz.ToList(),
+        Mixer = s.Mixer.Select(c => new SoundBlasterMixerChannelDto { Id = c.Id, Name = c.Name, Direction = c.Direction, Volume = c.Volume, Muted = c.Muted }).ToList(),
+        Modes = s.Modes.ToList(),
     };
 }

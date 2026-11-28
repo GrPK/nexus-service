@@ -29,6 +29,8 @@ public static class SoundBlasterProtocol
     public const byte SetParameter = 0x12;
     public const byte GlobalProfile = 0x26;
     public const byte OutputSelect = 0x2C;
+    /// <summary>Device features switched on or off by bit number (Creative's FeatureControl and FeatureMask).</summary>
+    public const byte FeatureControl = 0x39;
     public const byte MicGain = 0x3C;
     public const byte DacFilter = 0x6C;
 
@@ -45,6 +47,15 @@ public static class SoundBlasterProtocol
     // Output targets (MultiplexOutput).
     public const byte OutputSpeakers = 0x02;
     public const byte OutputHeadphones = 0x04;
+
+    // FeatureControl bits (FeatureMask), each confirmed on a G8 (firmware 1.2.250819.0903) by writing it and
+    // reading the state mask back, except Volume Sync, which was left alone because it can make the volume jump.
+    public const byte FeatureDirectMode = 5;
+    public const byte FeatureSpeakerVirtualization = 10;
+    public const byte FeatureSpdifDirect = 13;
+    public const byte FeatureLogoLed = 14;
+    public const byte FeatureEnergySaving = 17;
+    public const byte FeatureVolumeSync = 28;
 
     /// <summary>The mic gain control id the device lists (the only one).</summary>
     public const byte MicBoostControl = 0x02;
@@ -92,6 +103,11 @@ public static class SoundBlasterProtocol
     public static byte[] ReadMicBoost() => Frame(MicGain, 0x01, 0x00);
     public static byte[] WriteMicBoost(byte db) => Frame(MicGain, 0x00, 0x00, MicBoostControl, db);
 
+    public static byte[] ReadFeatures() => Frame(FeatureControl, 0x01);
+    public static byte[] ListFeatures() => Frame(FeatureControl, 0x02);
+    /// <summary>Turns feature <paramref name="bit"/> on or off: <c>5A 39 03 00 [bit] [0|1]</c>, acknowledged as <c>5A 02 0A 39 00 [bit] [state]</c>.</summary>
+    public static byte[] WriteFeature(byte bit, bool on) => Frame(FeatureControl, 0x00, bit, (byte)(on ? 1 : 0));
+
     public static byte[] ReadFirmware() => Frame(FirmwareString, 0x02);
     public static byte[] ReadSerial() => Frame(DeviceInformation, 0x03);
 
@@ -132,6 +148,15 @@ public static class SoundBlasterProtocol
     /// <summary>The global profile bits from a <c>5A 26 0B 08 FF FF [bits]</c> reply or push.</summary>
     public static int? ParseProfile(ReadOnlySpan<byte> report) =>
         CommandOf(report) == GlobalProfile && report.Length > 7 && report[4] == 0x08 ? report[7] : null;
+
+    /// <summary>
+    /// A FeatureControl mask: the features that are on (<c>5A 39 05 01 [u32 LE]</c>) or, with
+    /// <paramref name="supported"/>, the ones the device has (<c>5A 39 09 02 [u32 LE] ...</c>).
+    /// </summary>
+    public static uint? ParseFeatureMask(ReadOnlySpan<byte> report, bool supported = false) =>
+        CommandOf(report) == FeatureControl && report.Length > 8 && report[4] == (supported ? 0x02 : 0x01)
+            ? BinaryPrimitives.ReadUInt32LittleEndian(report.Slice(5, 4))
+            : null;
 
     /// <summary>The selected output from <c>5A 2C 05 01 [output]</c>.</summary>
     public static byte? ParseOutput(ReadOnlySpan<byte> report) =>
